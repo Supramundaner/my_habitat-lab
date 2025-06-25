@@ -1,6 +1,24 @@
 # Enhanced Terminal Interface for Habitat Lab Navigation
 
-An advanced, feature-rich terminal interface for the Habitat Lab Coordinate Navigation System with modern UI elements, interactive features, and comprehensive command support.
+An advanced, feature-rich terminal interface for the Habitat Lab Coordinate Navigation System with modern UI elements, interactive features, comprehensive command support, and enhanced coordinate system visualization.
+
+## 🌟 New Features in v2.0
+
+### 🗺️ Enhanced Coordinate System
+- **Grid Overlay**: Visual coordinate grid on all maps with major/minor grid lines
+- **Coordinate Mapping**: Clear mapping between map coordinates [0-1024] and world coordinates
+- **User Position Selection**: Interactive map display for choosing initial starting position
+- **Enhanced Visualization**: Improved coordinate system overlay with comprehensive information
+
+### 🏠 HM3D Dataset Priority
+- **HM3D First**: Prioritized support for HM3D dataset from https://aihabitat.org/datasets/hm3d/
+- **Dataset Auto-Detection**: Automatic detection and prioritization of available datasets
+- **Improved Download**: Enhanced dataset download script with HM3D as primary option
+
+### 🎯 Interactive Initialization
+- **Position Selection Map**: Display coordinate grid map before initialization
+- **User Choice**: Let users select their preferred starting coordinates
+- **Validation**: Check position navigability with fallback to nearest navigable point
 
 ## 🌟 Features
 
@@ -48,6 +66,13 @@ python src/enhanced_terminal_interface.py
 
 ## 🎯 Command Guide
 
+### Coordinate System Understanding
+The enhanced system uses a comprehensive coordinate mapping:
+- **Map Coordinates**: [0-1024] x [0-1024] pixel-based system with visual grid
+- **World Coordinates**: Real-world 3D coordinates in meters
+- **Grid Overlay**: Visual grid with major lines every 100 units, minor every 50
+- **Interactive Selection**: Choose starting position from coordinate-mapped visualization
+
 ### Basic Navigation
 ```bash
 # Move to specific coordinates
@@ -71,7 +96,7 @@ rotate 90 15
 # Simple turn
 turn 45
 
-# Show current view
+# Show current view with enhanced coordinate overlay
 view
 ```
 
@@ -92,13 +117,13 @@ stats
 
 ### Scene Management
 ```bash
-# List available scenes
+# List available scenes (HM3D prioritized)
 scenes
 
-# Switch to different scene
-switch habitat-test-scenes/van-gogh-room
+# Switch to HM3D scene
+switch hm3d/00800-TEEsavR23oF
 
-# Reload current scene
+# Reload current scene (will show position selection map)
 reload
 ```
 
@@ -229,6 +254,21 @@ self.session_stats = {
 ## 🐛 Troubleshooting
 
 ### Common Issues
+
+**HM3D dataset not found**
+- Run: `python download_datasets.py` and select option 1
+- Or manually: `python -m habitat_sim.utils.datasets_download --uids hm3d_minival --data-path ./data`
+- Check that the data directory contains `scene_datasets/hm3d/`
+
+**Position selection map not displaying**
+- Ensure matplotlib is installed: `pip install matplotlib`
+- Check that you have a display environment (for remote servers, use X11 forwarding)
+- The map is also saved as an image file in the images/ directory
+
+**Coordinate grid not showing**
+- Ensure terminal supports Unicode characters for grid symbols
+- Update terminal to support ANSI colors
+- Grid overlay is also saved in image files
 
 **Colors not showing**
 - Ensure terminal supports ANSI colors

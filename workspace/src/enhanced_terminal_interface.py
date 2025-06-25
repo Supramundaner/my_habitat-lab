@@ -37,6 +37,7 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+    INFO = '\033[96m'  # Same as CYAN for info messages
 
 
 class ProgressBar:
@@ -119,10 +120,14 @@ class EnhancedTerminalInterface:
         print(f"{Colors.CYAN}🚀 Features:{Colors.ENDC}")
         print("  • Advanced command completion and history")
         print("  • Colored output and progress indicators")
+        print("  • Enhanced coordinate system with grid overlay")
+        print("  • User-selectable starting positions")
+        print("  • Prioritized HM3D dataset support")
         print("  • Session statistics and exploration tools")
         print("  • Interactive demos and guided exploration")
         print()
         print(f"{Colors.WARNING}💡 Type 'help' for commands or 'demo' for a guided tour{Colors.ENDC}")
+        print(f"{Colors.INFO}🗺️  Maps now include coordinate grids and enhanced navigation info{Colors.ENDC}")
         print()
     
     def print_colored(self, text: str, color: str = Colors.ENDC):
@@ -183,24 +188,24 @@ class EnhancedTerminalInterface:
         
         sections = [
             ("📍 NAVIGATION", [
-                ("move <x> <y>", "Move to map coordinates (e.g., move 512 256)"),
+                ("move <x> <y>", "Move to map coordinates with enhanced grid system"),
                 ("goto <x> <y>", "Same as move command"),
                 ("position", "Show current position in both coordinate systems"),
-                ("bounds", "Display map coordinate bounds and limits"),
-                ("center", "Move to center of the map"),
+                ("bounds", "Display map coordinate bounds and world mappings"),
+                ("center", "Move to center of the map (512, 512)"),
                 ("random", "Move to a random navigable position")
             ]),
             ("👁️  VIEW CONTROL", [
                 ("rotate <yaw> [pitch]", "Rotate view by degrees (e.g., rotate 90 15)"),
                 ("turn <angle>", "Quick turn by specified angle"),
-                ("view", "Display current views and observations"),
+                ("view", "Display current views with coordinate grid overlay"),
                 ("show", "Same as view command")
             ]),
             ("🗺️  SCENE MANAGEMENT", [
-                ("scenes", "List all available scenes with details"),
+                ("scenes", "List all available scenes (prioritizing HM3D)"),
                 ("switch <scene_id>", "Switch to different scene"),
-                ("reload", "Reload current scene"),
-                ("info", "Show detailed system information")
+                ("reload", "Reload current scene with new position selection"),
+                ("info", "Show detailed system and coordinate information")
             ]),
             ("💾 DATA & EXPORT", [
                 ("save [prefix]", "Save current images with optional prefix"),
@@ -223,11 +228,12 @@ class EnhancedTerminalInterface:
         
         print(f"\n{Colors.WARNING}📋 EXAMPLES:{Colors.ENDC}")
         examples = [
-            "move 512 256                    # Move to center-left of map",
+            "move 512 400                   # Move to center-bottom with grid reference",
             "rotate 90                      # Turn right 90 degrees",
-            "switch habitat-test-scenes/van-gogh-room  # Change scene",
-            "save exploration_              # Save with custom prefix",
-            "demo                           # Start interactive demo"
+            "switch hm3d/00800-TEEsavR23oF  # Change to HM3D scene",
+            "save exploration_              # Save with enhanced coordinate overlay",
+            "demo                           # Start interactive demo",
+            "bounds                         # Show coordinate system mappings"
         ]
         
         for example in examples:

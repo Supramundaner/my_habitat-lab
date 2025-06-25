@@ -130,9 +130,9 @@ def interactive_download(data_path: str):
         print()
     
     print("Available datasets to download:")
-    print("1. Habitat Test Scenes (recommended for development)")
-    print("2. Matterport3D (requires academic license)")
-    print("3. HM3D Minival")
+    print("1. HM3D Minival (recommended for navigation research)")
+    print("2. Habitat Test Scenes (good for development)")
+    print("3. Matterport3D (requires academic license)")
     print("4. Replica CAD")
     print("5. Download all available")
     print("6. Exit")
@@ -141,21 +141,21 @@ def interactive_download(data_path: str):
         choice = input("\nSelect option (1-6): ").strip()
         
         if choice == '1':
-            download_habitat_test_scenes(data_path)
+            download_hm3d_minival(data_path)
             break
         elif choice == '2':
-            download_matterport3d(data_path)
+            download_habitat_test_scenes(data_path)
             break
         elif choice == '3':
-            download_hm3d_minival(data_path)
+            download_matterport3d(data_path)
             break
         elif choice == '4':
             download_replica_cad(data_path)
             break
         elif choice == '5':
             print("🔄 Downloading all available datasets...")
-            download_habitat_test_scenes(data_path)
             download_hm3d_minival(data_path)
+            download_habitat_test_scenes(data_path)
             download_replica_cad(data_path)
             # Note: Matterport3D usually requires manual setup
             print("ℹ️  Skipping Matterport3D (requires manual setup)")

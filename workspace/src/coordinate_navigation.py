@@ -102,24 +102,32 @@ class CoordinateNavigationSystem:
             self.sim = habitat_sim.Simulator(config)
             print(f"Successfully loaded scene: {self.scene_id}")
             
-            # Initialize map bounds and position
+            # Initialize map bounds
             self._initialize_map_system()
-            self._initialize_random_position()
+            
+            # Show initial map and get user's position choice
+            user_x, user_y = self.show_initial_map_and_get_position()
+            if user_x is not None and user_y is not None:
+                self.initialize_user_position(user_x, user_y)
+            else:
+                print("❌ Failed to get user position, using random position")
+                self._initialize_random_position()
             
         except Exception as e:
             print(f"Error initializing simulator: {e}")
             return
     
     def _get_available_scenes(self) -> List[str]:
-        """Get list of available scenes from multiple datasets"""
+        """Get list of available scenes from multiple datasets, prioritizing HM3D"""
         scenes = []
         scene_datasets_path = os.path.join(self.data_path, "scene_datasets")
         
+        # Prioritize HM3D dataset as requested
         dataset_paths = [
-            ("mp3d", "mp3d"),
-            ("habitat-test-scenes", "habitat-test-scenes"),
-            ("replica_cad", "replica_cad"),
             ("hm3d", "hm3d"),
+            ("mp3d", "mp3d"),
+            ("replica_cad", "replica_cad"),
+            ("habitat-test-scenes", "habitat-test-scenes"),
         ]
         
         for dataset_name, dataset_dir in dataset_paths:
@@ -144,14 +152,15 @@ class CoordinateNavigationSystem:
         return scenes
     
     def _suggest_dataset_download(self):
-        """Suggest how to download datasets"""
+        """Suggest how to download datasets, prioritizing HM3D"""
         print("\nTo use this system, you need to download datasets first:")
-        print("1. For test scenes (recommended for development):")
-        print("   python -m habitat_sim.utils.datasets_download --uids habitat_test_scenes --data-path ./data")
-        print("\n2. For Matterport3D (requires academic license):")
-        print("   python -m habitat_sim.utils.datasets_download --uids mp3d --data-path ./data")
-        print("\n3. For HM3D minival:")
+        print("1. For HM3D dataset (recommended for navigation research):")
         print("   python -m habitat_sim.utils.datasets_download --uids hm3d_minival --data-path ./data")
+        print("\n2. For test scenes (good for development):")
+        print("   python -m habitat_sim.utils.datasets_download --uids habitat_test_scenes --data-path ./data")
+        print("\n3. For Matterport3D (requires academic license):")
+        print("   python -m habitat_sim.utils.datasets_download --uids mp3d --data-path ./data")
+        print("\nNote: You can also use the download_datasets.py script in the workspace directory.")
     
     def _create_config(self) -> habitat_sim.Configuration:
         """Create Habitat-Sim configuration"""
@@ -429,9 +438,12 @@ class CoordinateNavigationSystem:
         return yaw
     
     def create_coordinate_system_overlay(self, image: np.ndarray) -> np.ndarray:
-        """Add coordinate system overlay to image"""
+        """Add enhanced coordinate system overlay to image with grid and axes"""
         img_with_overlay = image.copy()
         height, width = img_with_overlay.shape[:2]
+        
+        # Add coordinate grid
+        img_with_overlay = self._add_coordinate_grid(img_with_overlay)
         
         # Add coordinate system text
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -441,11 +453,18 @@ class CoordinateNavigationSystem:
         
         # Add map bounds information
         text_lines = [
-            f"Map Bounds:",
-            f"X: [{self.map_bounds['min_x']:.1f}, {self.map_bounds['max_x']:.1f}]",
-            f"Z: [{self.map_bounds['min_z']:.1f}, {self.map_bounds['max_z']:.1f}]",
-            f"Current Map Pos: [{self.current_map_position[0]:.1f}, {self.current_map_position[1]:.1f}]"
+            f"Map Coordinate System:",
+            f"X: [0, {self.map_resolution}] -> World X: [{self.map_bounds['min_x']:.1f}, {self.map_bounds['max_x']:.1f}]",
+            f"Y: [0, {self.map_resolution}] -> World Z: [{self.map_bounds['min_z']:.1f}, {self.map_bounds['max_z']:.1f}]",
+            f"Current Map Pos: [{self.current_map_position[0]:.1f}, {self.current_map_position[1]:.1f}]",
+            f"Current World Pos: [{self.current_position[0]:.1f}, {self.current_position[2]:.1f}]"
         ]
+        
+        # Draw background rectangle for text
+        max_text_width = max([cv2.getTextSize(line, font, font_scale, thickness)[0][0] for line in text_lines])
+        text_height = len(text_lines) * 25 + 10
+        cv2.rectangle(img_with_overlay, (5, 5), (max_text_width + 20, text_height), (0, 0, 0), -1)
+        cv2.rectangle(img_with_overlay, (5, 5), (max_text_width + 20, text_height), (255, 255, 255), 2)
         
         for i, line in enumerate(text_lines):
             y_pos = 30 + i * 25
@@ -453,6 +472,51 @@ class CoordinateNavigationSystem:
                        font, font_scale, color, thickness)
         
         return img_with_overlay
+    
+    def _add_coordinate_grid(self, image: np.ndarray) -> np.ndarray:
+        """Add coordinate grid to map image"""
+        img_with_grid = image.copy()
+        height, width = img_with_grid.shape[:2]
+        
+        # Grid parameters
+        grid_color = (100, 100, 100)  # Gray color for grid lines
+        major_grid_color = (150, 150, 150)  # Lighter gray for major grid lines
+        text_color = (200, 200, 200)  # Light gray for text
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.4
+        thickness = 1
+        
+        # Draw grid lines every 100 pixels (major) and every 50 pixels (minor)
+        major_step = 100
+        minor_step = 50
+        
+        # Vertical lines
+        for x in range(0, width, minor_step):
+            color = major_grid_color if x % major_step == 0 else grid_color
+            cv2.line(img_with_grid, (x, 0), (x, height), color, 1)
+            
+            # Add coordinate labels for major grid lines
+            if x % major_step == 0 and x > 0:
+                cv2.putText(img_with_grid, str(x), (x + 2, 20), 
+                           font, font_scale, text_color, thickness)
+        
+        # Horizontal lines
+        for y in range(0, height, minor_step):
+            color = major_grid_color if y % major_step == 0 else grid_color
+            cv2.line(img_with_grid, (0, y), (width, y), color, 1)
+            
+            # Add coordinate labels for major grid lines
+            if y % major_step == 0 and y > 0:
+                cv2.putText(img_with_grid, str(y), (5, y - 5), 
+                           font, font_scale, text_color, thickness)
+        
+        # Add axes labels
+        cv2.putText(img_with_grid, "X", (width - 30, 20), 
+                   font, 0.8, (255, 255, 255), 2)
+        cv2.putText(img_with_grid, "Y", (10, height - 10), 
+                   font, 0.8, (255, 255, 255), 2)
+        
+        return img_with_grid
     
     def save_current_views(self, prefix: str = "") -> Dict[str, str]:
         """Save current observations to files"""
@@ -574,7 +638,173 @@ class CoordinateNavigationSystem:
         """Clean up resources"""
         if self.sim:
             self.sim.close()
-
+    
+    def show_initial_map_and_get_position(self) -> Tuple[float, float]:
+        """Show map with coordinate system and get user's initial position choice"""
+        print("🗺️  Generating initial map with coordinate system...")
+        
+        # Generate initial topdown map without agent position
+        top_down_map = maps.get_topdown_map_from_sim(
+            self.sim, 
+            map_resolution=self.map_resolution, 
+            draw_border=True
+        )
+        
+        # Color the map
+        recolor_map = np.array(
+            [[255, 255, 255], [128, 128, 128], [0, 0, 0]], dtype=np.uint8
+        )
+        colored_map = recolor_map[top_down_map]
+        
+        # Add coordinate system overlay
+        map_with_coords = self._add_coordinate_grid(colored_map)
+        
+        # Add title and instructions
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
+        
+        # Add title
+        title_text = "INITIAL POSITION SELECTION MAP"
+        text_size = cv2.getTextSize(title_text, font, font_scale, thickness)[0]
+        title_x = (map_with_coords.shape[1] - text_size[0]) // 2
+        cv2.putText(map_with_coords, title_text, (title_x, 30), 
+                   font, font_scale, (255, 255, 0), thickness)
+        
+        # Add instructions
+        instructions = [
+            "Gray areas: Navigable",
+            "White areas: Obstacles", 
+            "Black areas: Void",
+            "Choose your starting coordinates below"
+        ]
+        
+        start_y = map_with_coords.shape[0] - 120
+        for i, instruction in enumerate(instructions):
+            cv2.putText(map_with_coords, instruction, (10, start_y + i * 25), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Save the initial map
+        timestamp = int(time.time())
+        initial_map_file = os.path.join(self.images_path, f"initial_map_selection_{timestamp}.png")
+        cv2.imwrite(initial_map_file, cv2.cvtColor(map_with_coords, cv2.COLOR_RGB2BGR))
+        
+        print(f"📍 Initial map saved to: {initial_map_file}")
+        print(f"📏 Map coordinate system: X[0-{self.map_resolution}], Y[0-{self.map_resolution}]")
+        print(f"🌍 World bounds: X[{self.map_bounds['min_x']:.1f}-{self.map_bounds['max_x']:.1f}], Z[{self.map_bounds['min_z']:.1f}-{self.map_bounds['max_z']:.1f}]")
+        print("📖 Gray areas are navigable. Choose coordinates in these areas for best results.")
+        
+        # Display the map using matplotlib for better visualization
+        plt.figure(figsize=(12, 12))
+        plt.imshow(map_with_coords)
+        plt.title("Initial Position Selection Map\nChoose coordinates from navigable (gray) areas", 
+                 fontsize=14, fontweight='bold')
+        plt.xlabel("X Coordinate (Map units)", fontsize=12)
+        plt.ylabel("Y Coordinate (Map units)", fontsize=12)
+        
+        # Add grid for better readability
+        plt.grid(True, alpha=0.3)
+        
+        # Set axis limits and ticks
+        plt.xlim(0, self.map_resolution)
+        plt.ylim(self.map_resolution, 0)  # Flip Y axis for consistency
+        
+        # Add major ticks every 100 units
+        major_ticks = np.arange(0, self.map_resolution + 1, 100)
+        plt.xticks(major_ticks)
+        plt.yticks(major_ticks)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Get user input for starting position
+        while True:
+            try:
+                print(f"\n🎯 Please choose your starting position:")
+                print(f"   Enter coordinates as: X Y (e.g., 512 400)")
+                print(f"   Valid range: X[0-{self.map_resolution}], Y[0-{self.map_resolution}]")
+                print(f"   Tip: Choose coordinates in gray (navigable) areas")
+                
+                user_input = input("Starting position (X Y): ").strip()
+                
+                if not user_input:
+                    print("❌ Please enter coordinates")
+                    continue
+                
+                coords = user_input.split()
+                if len(coords) != 2:
+                    print("❌ Please enter exactly two coordinates (X Y)")
+                    continue
+                
+                x, y = float(coords[0]), float(coords[1])
+                
+                # Validate coordinates
+                if not (0 <= x <= self.map_resolution and 0 <= y <= self.map_resolution):
+                    print(f"❌ Coordinates must be within [0-{self.map_resolution}]")
+                    continue
+                
+                # Check if position is navigable
+                world_pos = self._map_to_world_coords([x, y])
+                test_point = np.array([world_pos[0], world_pos[1], world_pos[2]])
+                
+                if self.sim.pathfinder.is_navigable(test_point):
+                    print(f"✅ Selected position ({x:.1f}, {y:.1f}) is navigable!")
+                    return x, y
+                else:
+                    print(f"⚠️  Position ({x:.1f}, {y:.1f}) may not be navigable.")
+                    print("   Try a position in a gray area, or continue anyway?")
+                    choice = input("   Continue with this position? (y/n): ").strip().lower()
+                    if choice == 'y':
+                        return x, y
+                    else:
+                        continue
+                        
+            except ValueError:
+                print("❌ Please enter valid numeric coordinates")
+            except KeyboardInterrupt:
+                print("\n❌ Initialization cancelled")
+                return None, None
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                continue
+    
+    def initialize_user_position(self, map_x: float, map_y: float):
+        """Initialize agent at user-specified map coordinates"""
+        if self.sim is None:
+            return False
+        
+        # Convert map coordinates to world coordinates
+        world_pos = self._map_to_world_coords([map_x, map_y])
+        
+        # Try to find the nearest navigable point
+        target_point = np.array([world_pos[0], world_pos[1], world_pos[2]])
+        
+        if self.sim.pathfinder.is_navigable(target_point):
+            self.current_position = world_pos
+        else:
+            # Find nearest navigable point
+            nearest_point = self.sim.pathfinder.get_random_navigable_point()
+            self.current_position = [nearest_point[0], self.camera_height, nearest_point[2]]
+            print(f"⚠️  Adjusted to nearest navigable position: {self.current_position}")
+        
+        # Update map position
+        self.current_map_position = [map_x, map_y]
+        
+        # Random rotation for variety
+        yaw = random.uniform(0, 2*np.pi)
+        self.current_rotation = [0.0, np.sin(yaw/2), 0.0, np.cos(yaw/2)]
+        
+        # Set agent state
+        agent_state = habitat_sim.AgentState()
+        agent_state.position = np.array(self.current_position)
+        agent_state.rotation = np.array(self.current_rotation)
+        self.sim.get_agent(0).set_state(agent_state)
+        
+        print(f"🎯 Initialized at user-selected position:")
+        print(f"   Map coordinates: ({map_x:.1f}, {map_y:.1f})")
+        print(f"   World coordinates: ({self.current_position[0]:.2f}, {self.current_position[2]:.2f})")
+        
+        return True
 
 def main():
     """Main function for testing the system"""
