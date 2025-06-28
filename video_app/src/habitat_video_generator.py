@@ -50,6 +50,9 @@ class HabitatVideoGenerator:
         self.current_frames = []
         self._initialize_simulator()
         
+        # 验证坐标转换精度
+        self._verify_coordinate_accuracy()
+        
         print(f"Video generator initialized with {fps} FPS")
         print(f"Animation steps: {self.rotation_step}°/frame, {self.movement_step}m/frame")
     
@@ -171,13 +174,18 @@ class HabitatVideoGenerator:
             return False
     
     def _execute_movement(self, target_x: float, target_z: float) -> bool:
-        """执行移动指令（完全复刻interactive_app的实现）"""
+        """执行移动指令（完全复刻interactive_app的实现，使用修复后的坐标转换）"""
         try:
             # 检查目标位置是否可导航
             target_pos = self.simulator.snap_to_navigable(target_x, target_z)
             if target_pos is None:
                 print(f"    ERROR: Target position ({target_x:.2f}, {target_z:.2f}) is not navigable")
                 return False
+            
+            # 验证目标位置的坐标转换精度
+            coord_check = self.simulator.verify_coordinate_conversion(target_pos)
+            if not coord_check['error_acceptable']:
+                print(f"    Warning: Target position coordinate conversion error {coord_check['position_error']:.3f}m")
             
             # 获取当前位置
             current_state = self.simulator.get_agent_state()
@@ -494,12 +502,17 @@ class HabitatVideoGenerator:
     
     def _draw_agent_on_original_map(self, image: Image.Image, agent_pos: np.ndarray, 
                                    agent_rotation: Optional[np.ndarray] = None):
-        """在原始地图上绘制代理位置和朝向（使用正确的坐标系）"""
+        """在原始地图上绘制代理位置和朝向（使用修复后的坐标系）"""
         draw = ImageDraw.Draw(image)
         
-        # 直接使用HabitatSimulator的world_to_map_coords方法
-        # 这个方法基于原始地图尺寸进行坐标转换
+        # 使用修复后的HabitatSimulator的world_to_map_coords方法
+        # 该方法已经修复了padding偏移问题，会正确处理坐标转换
         map_x, map_y = self.simulator.world_to_map_coords(agent_pos)
+        
+        # 验证坐标转换精度（用于调试）
+        coord_check = self.simulator.verify_coordinate_conversion(agent_pos)
+        if not coord_check['error_acceptable']:
+            print(f"    Warning: Coordinate conversion error {coord_check['position_error']:.3f}m for agent position")
         
         # 确保坐标在原始地图范围内
         original_width, original_height = image.size
@@ -574,11 +587,16 @@ class HabitatVideoGenerator:
 
     def _draw_agent_on_map(self, image: Image.Image, agent_pos: np.ndarray, 
                           agent_rotation: Optional[np.ndarray] = None):
-        """在地图上绘制代理位置和朝向（修复坐标转换问题）"""
+        """在地图上绘制代理位置和朝向（使用修复后的坐标转换）"""
         draw = ImageDraw.Draw(image)
         
-        # 获取原始地图坐标（基于原始地图尺寸）
+        # 使用修复后的坐标转换方法获取原始地图坐标
         original_map_coords = self.simulator.world_to_map_coords(agent_pos)
+        
+        # 验证坐标转换精度
+        coord_check = self.simulator.verify_coordinate_conversion(agent_pos)
+        if not coord_check['error_acceptable']:
+            print(f"    Warning: Coordinate conversion error {coord_check['position_error']:.3f}m")
         
         # 获取原始地图和当前图像的尺寸
         original_map_width, original_map_height = self.simulator.base_map_image.size
@@ -735,25 +753,106 @@ class HabitatVideoGenerator:
             self.simulator.close()
             self.simulator = None
     
-
+    def _verify_coordinate_accuracy(self):
+        """验证坐标转换精度，确保修复生效"""
+        try:
+            # 测试几个关键点的坐标转换精度
+            test_points = [
+                self.simulator.scene_center,  # 场景中心
+                self.simulator.scene_bounds[0],  # 最小角
+                self.simulator.scene_bounds[1],  # 最大角
+            ]
+            
+            total_error = 0.0
+            max_error = 0.0
+            acceptable_count = 0
+            
+            print("=== 坐标转换精度验证 ===")
+            for i, test_point in enumerate(test_points):
+                result = self.simulator.verify_coordinate_conversion(test_point)
+                total_error += result['position_error']
+                max_error = max(max_error, result['position_error'])
+                if result['error_acceptable']:
+                    acceptable_count += 1
+                
+                print(f"  测试点{i+1}: 误差 {result['position_error']:.6f}m {'✓' if result['error_acceptable'] else '⚠'}")
+            
+            avg_error = total_error / len(test_points)
+            success_rate = acceptable_count / len(test_points) * 100
+            
+            print(f"  平均误差: {avg_error:.6f}m")
+            print(f"  最大误差: {max_error:.6f}m") 
+            print(f"  精度可接受率: {success_rate:.1f}%")
+            
+            if avg_error < 0.1 and success_rate >= 80:
+                print("  ✅ 坐标转换精度验证通过")
+            else:
+                print("  ⚠️ 坐标转换精度可能需要进一步优化")
+                
+        except Exception as e:
+            print(f"  ❌ 坐标转换精度验证失败: {e}")
+    
+    def get_agent_coordinate_info(self) -> dict:
+        """获取代理的详细坐标信息，包括转换精度"""
+        if not self.simulator:
+            return {}
+        
+        try:
+            agent_state = self.simulator.get_agent_state()
+            world_pos = agent_state.position
+            
+            # 获取地图坐标
+            map_coords = self.simulator.world_to_map_coords(world_pos)
+            
+            # 验证坐标转换精度
+            coord_check = self.simulator.verify_coordinate_conversion(world_pos)
+            
+            return {
+                'world_position': {
+                    'x': float(world_pos[0]),
+                    'y': float(world_pos[1]), 
+                    'z': float(world_pos[2])
+                },
+                'map_coordinates': {
+                    'x': int(map_coords[0]),
+                    'y': int(map_coords[1])
+                },
+                'coordinate_accuracy': {
+                    'error': coord_check['position_error'],
+                    'acceptable': coord_check['error_acceptable']
+                },
+                'scene_info': {
+                    'bounds': {
+                        'min': [float(self.simulator.scene_bounds[0][i]) for i in range(3)],
+                        'max': [float(self.simulator.scene_bounds[1][i]) for i in range(3)]
+                    },
+                    'center': [float(self.simulator.scene_center[i]) for i in range(3)]
+                }
+            }
+            
+        except Exception as e:
+            return {'error': str(e)}
 
 
 class CustomHabitatSimulator(HabitatSimulator):
-    """自定义Habitat模拟器，支持指定GPU设备"""
+    """自定义Habitat模拟器，支持指定GPU设备，继承修复后的坐标转换功能"""
     
     def __init__(self, scene_filepath: str, resolution: Tuple[int, int] = (512, 512), 
                  gpu_device_id: int = 0):
         self.gpu_device_id = gpu_device_id
+        # 继承父类的所有修复，包括坐标转换和padding常量
         super().__init__(scene_filepath, resolution)
     
     def _initialize_simulator(self):
-        """重写初始化方法以支持GPU设备选择和人类agent模型"""
+        """重写初始化方法以支持GPU设备选择，保持父类的修复功能"""
         # 配置后端 - 指定GPU设备
         backend_cfg = habitat_sim.SimulatorConfiguration()
         backend_cfg.scene_id = self.scene_filepath
         backend_cfg.enable_physics = True
         backend_cfg.gpu_device_id = self.gpu_device_id  # 指定GPU设备
         backend_cfg.random_seed = 1
+        
+        print(f"Initializing simulator with GPU device {self.gpu_device_id}")
         
         # 配置人类agent模型
         try:
@@ -860,3 +959,17 @@ class CustomHabitatSimulator(HabitatSimulator):
         print(f"Agent height: {agent_cfg.height}m, radius: {agent_cfg.radius}m")
         print(f"Scene bounds: {self.scene_bounds}")
         print(f"Scene center: {self.scene_center}")
+        
+        # 验证坐标转换修复是否生效
+        print("=== 坐标转换修复验证 ===")
+        print(f"MAP_PADDING_LEFT: {self.MAP_PADDING_LEFT}")
+        print(f"MAP_PADDING_TOP: {self.MAP_PADDING_TOP}")
+        print(f"MAP_PADDING_RIGHT: {self.MAP_PADDING_RIGHT}")
+        print(f"MAP_PADDING_BOTTOM: {self.MAP_PADDING_BOTTOM}")
+        
+        # 测试场景中心的坐标转换
+        if hasattr(self, 'verify_coordinate_conversion'):
+            center_check = self.verify_coordinate_conversion(self.scene_center)
+            print(f"场景中心坐标转换误差: {center_check['position_error']:.6f}m {'✓' if center_check['error_acceptable'] else '⚠'}")
+        else:
+            print("⚠️ 坐标转换验证方法不可用")
