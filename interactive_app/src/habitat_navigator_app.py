@@ -75,9 +75,11 @@ class HabitatSimulator:
         temp_agent_cfg.sensor_specifications = [temp_sensor]
         
         temp_sim = habitat_sim.Simulator(habitat_sim.Configuration(backend_cfg, [temp_agent_cfg]))
-        temp_bounds = temp_sim.pathfinder.get_bounds()
-        world_size_x = temp_bounds[1][0] - temp_bounds[0][0]
-        world_size_z = temp_bounds[1][2] - temp_bounds[0][2]
+        
+        # 手动设置场景边界（不使用pathfinder）
+        # 这里使用一个合理的默认范围，您可以根据实际场景调整
+        world_size_x = 20.0  # 假设场景X方向20米
+        world_size_z = 20.0  # 假设场景Z方向20米
         temp_sim.close()
         
         # 计算保持纵横比的地图分辨率
@@ -132,8 +134,12 @@ class HabitatSimulator:
         self.sim = habitat_sim.Simulator(cfg)
         self.agent = self.sim.get_agent(0)
         
-        # 获取场景边界信息
-        self.scene_bounds = self.sim.pathfinder.get_bounds()
+        # 手动设置场景边界信息（不使用pathfinder）
+        # 您可以根据实际场景调整这些值
+        self.scene_bounds = [
+            np.array([-10.0, -5.0, -10.0]),  # 最小边界 [x, y, z]
+            np.array([10.0, 5.0, 10.0])     # 最大边界 [x, y, z]
+        ]
         self.scene_center = (self.scene_bounds[0] + self.scene_bounds[1]) / 2.0
         self.scene_size = self.scene_bounds[1] - self.scene_bounds[0]
         self.ortho_scale = max(self.scene_size[0], self.scene_size[2]) / 2.0
@@ -455,7 +461,7 @@ class HabitatSimulator:
     def map_coords_to_world(self, map_x: int, map_y: int) -> np.ndarray:
         """将2D地图像素坐标转换为3D世界坐标（反向转换）"""
         if self.base_map_image is None:
-            return np.array([0.0, 0.0, 0.0])
+            return np.array([0.0, 1.5, 0.0])
         
         # 获取带padding的地图尺寸
         padded_width, padded_height = self.base_map_image.size
@@ -484,26 +490,17 @@ class HabitatSimulator:
         world_x = world_min_x + (px_in_original / original_width) * (world_max_x - world_min_x)
         world_z = world_min_z + (py_in_original / original_height) * (world_max_z - world_min_z)
         
-        # 使用pathfinder获取对应的Y坐标
-        test_point = mn.Vector3(world_x, 0.0, world_z)
-        snapped_point = self.sim.pathfinder.snap_point(test_point)
-        
-        return np.array([world_x, snapped_point.y, world_z])
+        # 使用固定的Y坐标，不调用pathfinder
+        return np.array([world_x, 1.5, world_z])
     
     def is_navigable(self, x: float, z: float) -> bool:
-        """检查指定的(x,z)位置是否可导航"""
-        # 使用pathfinder的snap_point来找到有效的3D点
-        test_point = mn.Vector3(x, 0.0, z)
-        snapped_point = self.sim.pathfinder.snap_point(test_point)
-        return self.sim.pathfinder.is_navigable(snapped_point)
+        """直接返回True，不进行导航检查"""
+        return True
     
     def snap_to_navigable(self, x: float, z: float) -> Optional[np.ndarray]:
-        """将2D坐标对齐到可导航的3D点"""
-        test_point = mn.Vector3(x, 0.0, z)
-        snapped_point = self.sim.pathfinder.snap_point(test_point)
-        if self.sim.pathfinder.is_navigable(snapped_point):
-            return np.array([snapped_point.x, snapped_point.y, snapped_point.z])
-        return None
+        """直接使用用户输入的坐标，不进行对齐"""
+        # 使用固定的Y坐标（地面高度）
+        return np.array([x, 1.5, z])
     
     def move_agent_to(self, world_pos: np.ndarray, rotation: Optional[np.ndarray] = None):
         """移动智能体到指定位置"""
@@ -555,20 +552,8 @@ class HabitatSimulator:
         return self.agent.get_state()
     
     def find_path(self, start: np.ndarray, end: np.ndarray) -> List[np.ndarray]:
-        """寻找从起点到终点的路径"""
-        start_vec = mn.Vector3(start[0], start[1], start[2])
-        end_vec = mn.Vector3(end[0], end[1], end[2])
-        
-        # 使用ShortestPath对象进行寻路
-        path_obj = habitat_sim.ShortestPath()
-        path_obj.requested_start = start_vec
-        path_obj.requested_end = end_vec
-        
-        found = self.sim.pathfinder.find_path(path_obj)
-        if found and len(path_obj.points) > 0:
-            # 转换为numpy数组列表
-            return [np.array([p.x, p.y, p.z]) for p in path_obj.points]
-        return []
+        """直接返回起点和终点，不进行路径规划"""
+        return [start, end]
     
     def get_fpv_observation(self) -> np.ndarray:
         """获取第一人称视角图像"""
@@ -710,7 +695,7 @@ class HabitatNavigatorApp(QMainWindow):
         
         # 输入框
         self.command_input = QLineEdit()
-        self.command_input.setPlaceholderText("输入坐标 (x, z) 或视角命令 (如: right 30)")
+        self.command_input.setPlaceholderText("输入坐标 (x, z) 直接移动或视角命令 (如: right 30)")
         self.command_input.returnPressed.connect(self.process_command)
         right_layout.addWidget(self.command_input)
         
@@ -753,8 +738,9 @@ class HabitatNavigatorApp(QMainWindow):
             center_z = (bounds[0][2] + bounds[1][2]) / 2
             
             guide_text = (f"初始化完成！\n"
-                         f"请输入坐标开始导航 (格式: x, z)\n"
+                         f"请输入坐标开始移动 (格式: x, z)\n"
                          f"建议起始坐标: {center_x:.1f}, {center_z:.1f}\n"
+                         f"注意：智能体会直接移动到指定坐标，使用直线动画\n"
                          f"场景范围: X({bounds[0][0]:.1f}~{bounds[1][0]:.1f}), "
                          f"Z({bounds[0][2]:.1f}~{bounds[1][2]:.1f})")
             
@@ -952,31 +938,10 @@ class HabitatNavigatorApp(QMainWindow):
             
             self.status_label.setText(f"处理坐标 ({x:.1f}, {z:.1f})...")
             
-            # 检查是否可导航
-            try:
-                is_navigable = self.simulator.is_navigable(x, z)
-                if not is_navigable:
-                    bounds = self.simulator.scene_bounds
-                    center_x = (bounds[0][0] + bounds[1][0]) / 2
-                    center_z = (bounds[0][2] + bounds[1][2]) / 2
-                    self.status_label.setText(f"位置 ({x:.1f}, {z:.1f}) 不可导航。\n建议尝试场景中心附近: ({center_x:.1f}, {center_z:.1f})")
-                    return
-            except Exception as e:
-                self.status_label.setText(f"导航检查失败: {str(e)}")
-                return
+            # 直接创建目标位置，不进行导航检查
+            target_pos = np.array([x, 1.5, z], dtype=np.float32)  # 使用固定的1.5米高度
             
-            # 获取对齐的3D点
-            try:
-                target_pos = self.simulator.snap_to_navigable(x, z)
-                if target_pos is None:
-                    self.status_label.setText("无法找到有效的导航点")
-                    return
-                
-                self.status_label.setText(f"找到有效位置: ({target_pos[0]:.1f}, {target_pos[1]:.1f}, {target_pos[2]:.1f})")
-                
-            except Exception as e:
-                self.status_label.setText(f"位置对齐失败: {str(e)}")
-                return
+            self.status_label.setText(f"目标位置: ({target_pos[0]:.1f}, {target_pos[1]:.1f}, {target_pos[2]:.1f})")
             
             # 获取当前智能体状态
             try:
@@ -991,8 +956,9 @@ class HabitatNavigatorApp(QMainWindow):
                     np.linalg.norm(current_pos) < 0.1  # 接近原点
                 )
                 
-                if is_first_placement:
-                    # 直接瞬移到目标位置
+                # 计算距离，决定是直接瞬移还是动画移动
+                distance = np.linalg.norm(target_pos - current_pos)
+                if distance < 0.1:  # 如果距离很近，直接瞬移
                     self.simulator.move_agent_to(target_pos)
                     self.update_displays()
                     
@@ -1005,32 +971,17 @@ class HabitatNavigatorApp(QMainWindow):
                     
                     self.status_label.setText(f"智能体已移动到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})\n{coord_status}")
                 else:
-                    # 计算距离，如果太远，直接瞬移而不是寻路
-                    distance = np.linalg.norm(target_pos - current_pos)
-                    if distance > 10.0:  # 如果距离超过10米，直接瞬移
-                        self.simulator.move_agent_to(target_pos)
-                        self.update_displays()
-                        
-                        # 验证坐标转换精度
-                        coord_check = self.simulator.verify_coordinate_conversion(target_pos)
-                        if coord_check['error_acceptable']:
-                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ✓"
-                        else:
-                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ⚠"
-                        
-                        self.status_label.setText(f"距离较远({distance:.1f}m)，直接瞬移到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})\n{coord_status}")
+                    # 使用动画移动，但不使用pathfinder路径规划
+                    self.start_direct_animation(current_pos, target_pos)
+                    
+                    # 验证坐标转换精度
+                    coord_check = self.simulator.verify_coordinate_conversion(target_pos)
+                    if coord_check['error_acceptable']:
+                        coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ✓"
                     else:
-                        # 寻路并开始动画移动
-                        self.start_path_animation(current_pos, target_pos)
-                        
-                        # 验证坐标转换精度
-                        coord_check = self.simulator.verify_coordinate_conversion(target_pos)
-                        if coord_check['error_acceptable']:
-                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ✓"
-                        else:
-                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ⚠"
-                        
-                        self.status_label.setText(f"开始导航到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})\n{coord_status}")
+                        coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ⚠"
+                    
+                    self.status_label.setText(f"开始移动到 ({target_pos[0]:.1f}, {target_pos[2]:.1f}) (距离: {distance:.1f}m)\n{coord_status}")
                         
             except Exception as e:
                 self.status_label.setText(f"移动智能体失败: {str(e)}")
@@ -1113,34 +1064,32 @@ class HabitatNavigatorApp(QMainWindow):
             import traceback
             traceback.print_exc()
     
-    def start_path_animation(self, start_pos: np.ndarray, end_pos: np.ndarray):
-        """开始路径动画"""
-        # 寻找路径
+    def start_direct_animation(self, start_pos: np.ndarray, end_pos: np.ndarray):
+        """开始直线动画移动（不使用pathfinder路径规划）"""
         try:
-            path = self.simulator.find_path(start_pos, end_pos)
-            
-            if not path or len(path) < 2:
-                # 如果寻路失败，尝试直接瞬移
-                distance = np.linalg.norm(end_pos - start_pos)
-                self.status_label.setText(f"寻路失败，距离={distance:.1f}m，执行直接瞬移")
-                self.simulator.move_agent_to(end_pos)
-                self.update_displays()
-                return
+            # 直接创建从起点到终点的路径（只有两个点）
+            path = [start_pos.copy(), end_pos.copy()]
             
             self.path_waypoints = path
             self.current_waypoint_index = 0
             self.current_interpolation_step = 0  # 重置插值步数
             self.is_moving = True
             
-            self.status_label.setText(f"找到路径，包含{len(path)}个路径点，开始导航...")
+            distance = np.linalg.norm(end_pos - start_pos)
+            self.status_label.setText(f"开始直线移动，距离: {distance:.1f}m")
             
             # 开始动画定时器 - 更快的更新频率以实现平滑动画
             self.animation_timer.start(50)  # 每50ms更新一次，实现更平滑的动画
             
         except Exception as e:
-            self.status_label.setText(f"路径规划出错: {str(e)[:50]}...，执行直接瞬移")
+            self.status_label.setText(f"动画初始化出错: {str(e)[:50]}...，执行直接瞬移")
             self.simulator.move_agent_to(end_pos)
             self.update_displays()
+
+    def start_path_animation(self, start_pos: np.ndarray, end_pos: np.ndarray):
+        """开始路径动画（保留原函数用于兼容性，但现在也使用直接路径）"""
+        # 直接调用新的直线动画函数
+        self.start_direct_animation(start_pos, end_pos)
     
     def animate_movement(self):
         """平滑动画移动函数"""
@@ -1149,7 +1098,7 @@ class HabitatNavigatorApp(QMainWindow):
             self.animation_timer.stop()
             self.is_moving = False
             self.current_interpolation_step = 0
-            self.status_label.setText("导航完成")
+            self.status_label.setText("移动完成")
             return
         
         # 如果是新的路径段，初始化插值
@@ -1233,7 +1182,10 @@ class HabitatNavigatorApp(QMainWindow):
             
             # 更新状态信息
             remaining_waypoints = len(self.path_waypoints) - self.current_waypoint_index - 1
-            self.status_label.setText(f"导航中... 剩余{remaining_waypoints}个路径点")
+            if remaining_waypoints > 0:
+                self.status_label.setText(f"移动中... 剩余{remaining_waypoints}个路径点")
+            else:
+                self.status_label.setText("即将完成移动...")
     
     def update_displays(self):
         """更新所有显示"""
