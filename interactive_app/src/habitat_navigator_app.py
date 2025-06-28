@@ -162,9 +162,8 @@ class HabitatSimulator:
         self.base_map_image = self._draw_coordinate_system(base_image)
     
     def _draw_coordinate_system(self, image: Image.Image) -> Image.Image:
-        """在地图上绘制坐标系 - 参考建筑图纸样式"""
-        draw = ImageDraw.Draw(image)
-        width, height = image.size
+        """在地图上绘制坐标系 - 参考add_grid.py的实现方式"""
+        original_width, original_height = image.size
         
         # 计算实际坐标范围
         world_min_x = self.scene_bounds[0][0]
@@ -172,27 +171,59 @@ class HabitatSimulator:
         world_min_z = self.scene_bounds[0][2] 
         world_max_z = self.scene_bounds[1][2]
         
-        # 加载字体
-        try:
-            font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
-            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
-        except:
-            font_large = ImageFont.load_default()
-            font_small = ImageFont.load_default()
-        
-        # 参考图片样式：绘制边框坐标标注
-        border_color = (255, 255, 255)  # 白色边框和标签，确保可见
-        grid_color = (128, 128, 128)    # 中灰色网格线
-        text_color = (255, 255, 255)    # 白色文字
-        
-        # 绘制外边框
-        draw.rectangle([0, 0, width-1, height-1], outline=border_color, width=2)
-        
-        # 计算坐标刻度
         x_range = world_max_x - world_min_x
         z_range = world_max_z - world_min_z
         
-        # 自动计算合适的刻度间隔
+        # 设置边距参数
+        padding_left = 80    # 为Y轴标签留出空间
+        padding_bottom = 60  # 为X轴标签留出空间
+        padding_top = 40     # 顶部边距
+        padding_right = 40   # 右侧边距
+        
+        # 创建带边距的新画布
+        new_width = original_width + padding_left + padding_right
+        new_height = original_height + padding_top + padding_bottom
+        
+        # 根据原图模式创建新画布
+        if image.mode == 'RGBA':
+            new_image = Image.new('RGBA', (new_width, new_height), (0, 0, 0, 255))  # 黑色背景
+        else:
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            new_image = Image.new('RGB', (new_width, new_height), (0, 0, 0))  # 黑色背景
+        
+        # 将原始图像粘贴到新画布上
+        image_paste_x = padding_left
+        image_paste_y = padding_top
+        new_image.paste(image, (image_paste_x, image_paste_y))
+        
+        # 创建绘图对象
+        draw = ImageDraw.Draw(new_image)
+        
+        # 加载字体
+        try:
+            font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+            font_medium = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+        except:
+            font_large = ImageFont.load_default()
+            font_medium = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        
+        # 颜色定义
+        grid_color = (100, 100, 100)     # 深灰色网格线
+        major_grid_color = (150, 150, 150)  # 主网格线（稍亮）
+        border_color = (255, 255, 255)   # 白色边框
+        tick_color = (255, 255, 255)     # 白色刻度线
+        text_color = (255, 255, 255)     # 白色文字
+        
+        # 原始图像在新画布上的区域边界
+        img_area_x0 = padding_left
+        img_area_y0 = padding_top
+        img_area_x1 = padding_left + original_width
+        img_area_y1 = padding_top + original_height
+        
+        # 计算合适的网格间隔（世界坐标）
         def get_nice_interval(range_val):
             """获取合适的刻度间隔"""
             if range_val <= 2:
@@ -201,99 +232,181 @@ class HabitatSimulator:
                 return 1.0
             elif range_val <= 10:
                 return 2.0
-            else:
+            elif range_val <= 20:
                 return 5.0
+            else:
+                return 10.0
         
         x_interval = get_nice_interval(x_range)
         z_interval = get_nice_interval(z_range)
         
-        # 绘制顶部X坐标标注（参考图片样式）
+        # 计算像素间隔
+        x_pixel_interval = x_interval / x_range * original_width
+        z_pixel_interval = z_interval / z_range * original_height
+        
+        # 绘制垂直网格线和X轴标注
         x_start = math.ceil(world_min_x / x_interval) * x_interval
         x_current = x_start
+        
         while x_current <= world_max_x:
-            # 计算像素位置（避免使用self.world_to_map_coords避免循环依赖）
-            px = int((x_current - world_min_x) / x_range * width)
-            if 0 <= px < width:
-                # 绘制刻度线
-                draw.line([(px, 0), (px, 10)], fill=border_color, width=1)
-                draw.line([(px, height-10), (px, height)], fill=border_color, width=1)
-                
-                # 绘制坐标标签
-                label = f"{x_current:.1f}m"
-                bbox = draw.textbbox((0, 0), label, font=font_small)
-                text_width = bbox[2] - bbox[0]
-                draw.text((px - text_width//2, -20), label, fill=text_color, font=font_small)
-                draw.text((px - text_width//2, height + 5), label, fill=text_color, font=font_small)
+            # 计算在原图中的像素位置
+            x_pixel_in_orig = (x_current - world_min_x) / x_range * original_width
+            x_pixel_on_canvas = img_area_x0 + x_pixel_in_orig
+            
+            if 0 <= x_pixel_in_orig <= original_width:
+                # 判断是否为主网格线（整数值）
+                is_major = abs(x_current - round(x_current)) < 0.01
+                line_color = major_grid_color if is_major else grid_color
+                line_width = 2 if is_major else 1
                 
                 # 绘制垂直网格线
-                if px > 0 and px < width:
-                    draw.line([(px, 0), (px, height)], fill=grid_color, width=1)
+                draw.line([(x_pixel_on_canvas, img_area_y0), 
+                          (x_pixel_on_canvas, img_area_y1)], 
+                         fill=line_color, width=line_width)
+                
+                # 绘制X轴刻度线
+                tick_length = 8 if is_major else 5
+                # 底部刻度线
+                draw.line([(x_pixel_on_canvas, img_area_y1), 
+                          (x_pixel_on_canvas, img_area_y1 + tick_length)], 
+                         fill=tick_color, width=2)
+                # 顶部刻度线  
+                draw.line([(x_pixel_on_canvas, img_area_y0 - tick_length), 
+                          (x_pixel_on_canvas, img_area_y0)], 
+                         fill=tick_color, width=2)
+                
+                # 绘制X轴标签
+                label_text = f"{x_current:.1f}"
+                try:
+                    bbox = draw.textbbox((0, 0), label_text, font=font_medium)
+                    text_width = bbox[2] - bbox[0]
+                except AttributeError:
+                    text_width, _ = draw.textsize(label_text, font=font_medium)
+                
+                # 底部标签
+                label_x = x_pixel_on_canvas - text_width / 2
+                label_y = img_area_y1 + tick_length + 5
+                draw.text((label_x, label_y), label_text, fill=text_color, font=font_medium)
+                
+                # 顶部标签（可选）
+                if is_major:
+                    label_y_top = img_area_y0 - tick_length - 20
+                    draw.text((label_x, label_y_top), label_text, fill=text_color, font=font_small)
             
             x_current += x_interval
         
-        # 绘制左侧Z坐标标注（参考图片样式）
+        # 绘制水平网格线和Z轴标注
         z_start = math.ceil(world_min_z / z_interval) * z_interval
         z_current = z_start
+        
         while z_current <= world_max_z:
-            # 计算像素位置
-            py = int((z_current - world_min_z) / z_range * height)
-            if 0 <= py < height:
-                # 绘制刻度线
-                draw.line([(0, py), (10, py)], fill=border_color, width=1)
-                draw.line([(width-10, py), (width, py)], fill=border_color, width=1)
-                
-                # 绘制坐标标签
-                label = f"{z_current:.1f}m"
-                draw.text((-35, py - 6), label, fill=text_color, font=font_small)
-                draw.text((width + 5, py - 6), label, fill=text_color, font=font_small)
+            # 计算在原图中的像素位置
+            z_pixel_in_orig = (z_current - world_min_z) / z_range * original_height
+            z_pixel_on_canvas = img_area_y0 + z_pixel_in_orig
+            
+            if 0 <= z_pixel_in_orig <= original_height:
+                # 判断是否为主网格线
+                is_major = abs(z_current - round(z_current)) < 0.01
+                line_color = major_grid_color if is_major else grid_color
+                line_width = 2 if is_major else 1
                 
                 # 绘制水平网格线
-                if py > 0 and py < height:
-                    draw.line([(0, py), (width, py)], fill=grid_color, width=1)
+                draw.line([(img_area_x0, z_pixel_on_canvas), 
+                          (img_area_x1, z_pixel_on_canvas)], 
+                         fill=line_color, width=line_width)
+                
+                # 绘制Z轴刻度线
+                tick_length = 8 if is_major else 5
+                # 左侧刻度线
+                draw.line([(img_area_x0 - tick_length, z_pixel_on_canvas), 
+                          (img_area_x0, z_pixel_on_canvas)], 
+                         fill=tick_color, width=2)
+                # 右侧刻度线
+                draw.line([(img_area_x1, z_pixel_on_canvas), 
+                          (img_area_x1 + tick_length, z_pixel_on_canvas)], 
+                         fill=tick_color, width=2)
+                
+                # 绘制Z轴标签
+                label_text = f"{z_current:.1f}"
+                try:
+                    bbox = draw.textbbox((0, 0), label_text, font=font_medium)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+                except AttributeError:
+                    text_width, text_height = draw.textsize(label_text, font=font_medium)
+                
+                # 左侧标签
+                label_x = img_area_x0 - tick_length - text_width - 5
+                label_y = z_pixel_on_canvas - text_height / 2
+                draw.text((label_x, label_y), label_text, fill=text_color, font=font_medium)
+                
+                # 右侧标签（可选）
+                if is_major:
+                    label_x_right = img_area_x1 + tick_length + 5
+                    draw.text((label_x_right, label_y), label_text, fill=text_color, font=font_small)
             
             z_current += z_interval
         
-        # 计算并标注原点位置（如果在范围内）
-        if world_min_x <= 0 <= world_max_x and world_min_z <= 0 <= world_max_z:
-            origin_px = int((0 - world_min_x) / x_range * width)
-            origin_py = int((0 - world_min_z) / z_range * height)
-            
-            # 绘制原点标记
-            draw.ellipse([origin_px-6, origin_py-6, origin_px+6, origin_py+6], 
-                        fill=(255, 0, 0), outline=(0, 0, 0), width=2)
-            draw.text((origin_px+10, origin_py-10), "Origin", fill=(255, 0, 0), font=font_small)
+        # 绘制原始图像区域的边框
+        draw.rectangle([img_area_x0-1, img_area_y0-1, img_area_x1+1, img_area_y1+1], 
+                      outline=border_color, width=2)
         
-        # 添加坐标轴标签（参考图片样式）
-        # X轴标签（顶部中央）
-        draw.text((width//2 - 20, -35), "X (meters)", fill=text_color, font=font_large)
+        # 添加坐标轴标签
+        # X轴标签（底部中央）
+        x_label = "X (meters)"
+        try:
+            bbox = draw.textbbox((0, 0), x_label, font=font_large)
+            x_label_width = bbox[2] - bbox[0]
+        except AttributeError:
+            x_label_width, _ = draw.textsize(x_label, font=font_large)
+        
+        x_label_x = (new_width - x_label_width) / 2
+        x_label_y = new_height - 25
+        draw.text((x_label_x, x_label_y), x_label, fill=text_color, font=font_large)
         
         # Z轴标签（左侧中央，垂直）
-        # 创建垂直文本
         z_label = "Z (meters)"
-        temp_img = Image.new('RGBA', (100, 20), (255, 255, 255, 0))
+        temp_img = Image.new('RGBA', (200, 30), (0, 0, 0, 0))
         temp_draw = ImageDraw.Draw(temp_img)
         temp_draw.text((0, 0), z_label, fill=text_color, font=font_large)
         rotated = temp_img.rotate(90, expand=True)
         
-        # 将旋转的文本粘贴到主图像
-        image.paste(rotated, (-60, height//2 - 50), rotated)
+        # 计算Z轴标签位置
+        z_label_x = 15
+        z_label_y = (new_height - rotated.height) / 2
+        new_image.paste(rotated, (int(z_label_x), int(z_label_y)), rotated)
+        
+        # 添加原点标记（如果在范围内）
+        if world_min_x <= 0 <= world_max_x and world_min_z <= 0 <= world_max_z:
+            origin_x = img_area_x0 + (0 - world_min_x) / x_range * original_width
+            origin_z = img_area_y0 + (0 - world_min_z) / z_range * original_height
+            
+            # 绘制原点标记
+            draw.ellipse([origin_x-6, origin_z-6, origin_x+6, origin_z+6], 
+                        fill=(255, 255, 0), outline=(255, 255, 255), width=2)
+            draw.text((origin_x+10, origin_z-10), "Origin (0,0)", fill=(255, 255, 0), font=font_small)
         
         # 添加比例尺信息
-        scale_info = f"Scene: {x_range:.1f}m × {z_range:.1f}m"
-        draw.text((10, height - 25), scale_info, fill=text_color, font=font_small)
+        scale_info = f"Scene: {x_range:.1f}m × {z_range:.1f}m | Grid: {x_interval}m × {z_interval}m"
+        draw.text((img_area_x0, 5), scale_info, fill=text_color, font=font_small)
         
-        # 添加指北针或方向指示
-        compass_x, compass_y = width - 80, 30
+        # 添加指北针
+        compass_x = new_width - 60
+        compass_y = 50
+        
+        # 指北针背景
         draw.rectangle([compass_x-25, compass_y-25, compass_x+25, compass_y+25], 
-                      outline=border_color, width=1, fill=(255, 255, 255))
+                      outline=border_color, width=1, fill=(50, 50, 50))
         
-        # 绘制指北针
-        draw.line([(compass_x, compass_y-15), (compass_x, compass_y+15)], fill=border_color, width=2)
-        draw.line([(compass_x-15, compass_y), (compass_x+15, compass_y)], fill=border_color, width=2)
-        draw.text((compass_x+18, compass_y-15), "+X", fill=text_color, font=font_small)
-        draw.text((compass_x-8, compass_y+18), "+Z", fill=text_color, font=font_small)
+        # 绘制指北针箭头
+        draw.line([(compass_x, compass_y-15), (compass_x, compass_y+15)], fill=(255, 0, 0), width=2)
+        draw.line([(compass_x-15, compass_y), (compass_x+15, compass_y)], fill=(0, 255, 0), width=2)
         
-        return image
+        # 指北针标签
+        draw.text((compass_x+18, compass_y-15), "+X", fill=(255, 0, 0), font=font_small)
+        draw.text((compass_x-8, compass_y+18), "+Z", fill=(0, 255, 0), font=font_small)
+        
+        return new_image
     
     def world_to_map_coords(self, world_pos: np.ndarray) -> Tuple[int, int]:
         """将3D世界坐标转换为2D地图像素坐标"""
@@ -884,8 +997,8 @@ class HabitatNavigatorApp(QMainWindow):
             # 应用新状态
             self.simulator.agent.set_state(new_state)
             
-            # 更新FPV显示
-            self.update_fpv_display()
+            # 更新所有显示（包括FPV和地图上的朝向箭头）
+            self.update_displays()
             
             self.status_label.setText(f"视角已调整: {direction} {angle}度")
             
