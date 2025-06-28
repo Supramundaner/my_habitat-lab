@@ -124,16 +124,11 @@ def test_apartment_pathfinding():
         print("\n--- 路径搜索测试 ---")
         pathfinding_commands = [
             # 短距离移动
-            [current_pos[0] + 1.0, current_pos[2]],           # 向前1米
-            [current_pos[0] + 1.0, current_pos[2] + 1.0],     # 向右1米
-            [current_pos[0], current_pos[2] + 1.0],           # 向后1米
-            [current_pos[0], current_pos[2]],                 # 回到起点
-            
-            # 中距离移动
-            [current_pos[0] + 2.0, current_pos[2]],           # 向前2米
-            [current_pos[0] + 2.0, current_pos[2] + 2.0],     # 向右2米
-            [current_pos[0], current_pos[2] + 2.0],           # 向后2米
-            [current_pos[0], current_pos[2]],                 # 回到起点
+            [4.0,2.77],
+            [0.0, 2.8],
+            [0.0,0.0],
+            [2.0, 0.5],
+            ["left", 90],  # 左转
         ]
         
         video_path = generator.process_command_sequence(pathfinding_commands)
@@ -156,7 +151,7 @@ def main():
     start_time = time.time()
     
     # 运行基础测试
-    test_apartment_basic()
+    #test_apartment_basic()
     
     # 运行路径搜索测试
     test_apartment_pathfinding()
