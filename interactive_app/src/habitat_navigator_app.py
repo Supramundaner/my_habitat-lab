@@ -404,12 +404,21 @@ class HabitatSimulator:
         draw.rectangle([compass_x-25, compass_y-25, compass_x+25, compass_y+25], 
                       outline=border_color, width=1, fill=(50, 50, 50))
         
-        # 绘制指北针箭头
-        draw.line([(compass_x, compass_y-15), (compass_x, compass_y+15)], fill=(255, 0, 0), width=2)
-        draw.line([(compass_x-15, compass_y), (compass_x+15, compass_y)], fill=(0, 255, 0), width=2)
+        # 绘制指北针箭头 - 修复方向
+        # X轴（红色）：水平向右
+        draw.line([(compass_x-15, compass_y), (compass_x+15, compass_y)], fill=(255, 0, 0), width=3)
+        # 箭头头部
+        draw.line([(compass_x+15, compass_y), (compass_x+10, compass_y-5)], fill=(255, 0, 0), width=2)
+        draw.line([(compass_x+15, compass_y), (compass_x+10, compass_y+5)], fill=(255, 0, 0), width=2)
+        
+        # Z轴（绿色）：垂直向下
+        draw.line([(compass_x, compass_y-15), (compass_x, compass_y+15)], fill=(0, 255, 0), width=3)
+        # 箭头头部
+        draw.line([(compass_x, compass_y+15), (compass_x-5, compass_y+10)], fill=(0, 255, 0), width=2)
+        draw.line([(compass_x, compass_y+15), (compass_x+5, compass_y+10)], fill=(0, 255, 0), width=2)
         
         # 指北针标签
-        draw.text((compass_x+18, compass_y-15), "+X", fill=(255, 0, 0), font=font_small)
+        draw.text((compass_x+18, compass_y-5), "+X", fill=(255, 0, 0), font=font_small)
         draw.text((compass_x-8, compass_y+18), "+Z", fill=(0, 255, 0), font=font_small)
         
         return new_image
