@@ -741,13 +741,14 @@ class HabitatNavigatorApp(QMainWindow):
                     print(f"警告: agent_rotation长度不正确: {len(rotation_array)}")
                     return  # 跳过箭头绘制
                 
-                # 从四元数计算朝向角度 - 修复四元数构造
+                # 从四元数计算朝向角度 - 修复前方向量
                 # agent_rotation格式: [x, y, z, w]
                 quat = mn.Quaternion(
                     mn.Vector3(float(rotation_array[0]), float(rotation_array[1]), float(rotation_array[2])),
                     float(rotation_array[3])
                 )
-                forward_vec = quat.transform_vector(mn.Vector3(0, 0, -1))  # Habitat中-Z是前方
+                # 在Habitat中，-Z轴是前方
+                forward_vec = quat.transform_vector(mn.Vector3(0, 0, -1))
                 
                 # 计算箭头终点
                 arrow_length = 20
@@ -985,8 +986,9 @@ class HabitatNavigatorApp(QMainWindow):
                 self.status_label.setText("无效方向，请使用: left, right, up, down")
                 return
             
-            # 应用旋转
-            new_rotation = current_quat * rotation_quat
+            # 应用旋转 - 修复四元数乘法顺序
+            # 对于局部旋转，应该用旋转四元数左乘当前四元数
+            new_rotation = rotation_quat * current_quat
             
             # 创建新的智能体状态
             new_state = habitat_sim.AgentState()
@@ -1052,15 +1054,17 @@ class HabitatNavigatorApp(QMainWindow):
             self.animation_start_pos = self.path_waypoints[self.current_waypoint_index].copy()
             self.animation_end_pos = self.path_waypoints[self.current_waypoint_index + 1].copy()
             
-            # 计算朝向 - 修复：确保从A指向B的方向
+            # 计算朝向 - 修复角度计算（180度错误）
             direction = self.animation_end_pos - self.animation_start_pos
             if np.linalg.norm(direction) > 0:
                 direction = direction / np.linalg.norm(direction)
                 
-                # 计算旋转四元数（面向移动方向）
-                # 在Habitat中，Z轴正方向是前方，所以我们计算朝向目标的角度
-                # 修复：确保智能体面向目标方向（A->B而不是A<-B）
-                angle = math.atan2(direction[0], direction[2])  # 使用+Z而不是-Z
+                # 在Habitat中，-Z轴是前方，修复角度计算
+                # 之前的计算导致了180度的错误，现在修正
+                angle = math.atan2(direction[0], direction[2])  # 使用+Z计算，然后旋转180度
+                angle += math.pi  # 加180度修正
+                
+                # 创建朝向目标的旋转四元数
                 rotation = mn.Quaternion.rotation(mn.Rad(angle), mn.Vector3.y_axis())
                 self.animation_end_rotation = np.array([rotation.vector.x, rotation.vector.y, 
                                                       rotation.vector.z, rotation.scalar], dtype=np.float32)
