@@ -27,6 +27,12 @@ import magnum as mn
 class HabitatSimulator:
     """封装Habitat-sim相关逻辑的类"""
     
+    # 地图padding参数常量 - 确保所有相关函数使用相同的值
+    MAP_PADDING_LEFT = 80    # 为Y轴标签留出空间
+    MAP_PADDING_BOTTOM = 60  # 为X轴标签留出空间
+    MAP_PADDING_TOP = 40     # 顶部边距
+    MAP_PADDING_RIGHT = 40   # 右侧边距
+    
     def __init__(self, scene_filepath: str, resolution: Tuple[int, int] = (512, 512)):
         self.scene_filepath = scene_filepath
         self.resolution = resolution
@@ -174,11 +180,11 @@ class HabitatSimulator:
         x_range = world_max_x - world_min_x
         z_range = world_max_z - world_min_z
         
-        # 设置边距参数
-        padding_left = 80    # 为Y轴标签留出空间
-        padding_bottom = 60  # 为X轴标签留出空间
-        padding_top = 40     # 顶部边距
-        padding_right = 40   # 右侧边距
+        # 设置边距参数 - 使用类常量确保一致性
+        padding_left = self.MAP_PADDING_LEFT
+        padding_bottom = self.MAP_PADDING_BOTTOM
+        padding_top = self.MAP_PADDING_TOP
+        padding_right = self.MAP_PADDING_RIGHT
         
         # 创建带边距的新画布
         new_width = original_width + padding_left + padding_right
@@ -413,7 +419,18 @@ class HabitatSimulator:
         if self.base_map_image is None:
             return (0, 0)
         
-        map_width, map_height = self.base_map_image.size
+        # 获取带padding的地图尺寸
+        padded_width, padded_height = self.base_map_image.size
+        
+        # 计算padding参数（使用类常量确保一致性）
+        padding_left = self.MAP_PADDING_LEFT
+        padding_bottom = self.MAP_PADDING_BOTTOM
+        padding_top = self.MAP_PADDING_TOP
+        padding_right = self.MAP_PADDING_RIGHT
+        
+        # 计算原始图像尺寸（未padding的尺寸）
+        original_width = padded_width - padding_left - padding_right
+        original_height = padded_height - padding_top - padding_bottom
         
         # 世界坐标范围
         world_min_x = self.scene_bounds[0][0]
@@ -421,15 +438,57 @@ class HabitatSimulator:
         world_min_z = self.scene_bounds[0][2]
         world_max_z = self.scene_bounds[1][2]
         
-        # 线性映射到像素坐标
-        px = int((world_pos[0] - world_min_x) / (world_max_x - world_min_x) * map_width)
-        py = int((world_pos[2] - world_min_z) / (world_max_z - world_min_z) * map_height)
+        # 线性映射到原始图像像素坐标
+        px_in_original = (world_pos[0] - world_min_x) / (world_max_x - world_min_x) * original_width
+        py_in_original = (world_pos[2] - world_min_z) / (world_max_z - world_min_z) * original_height
+        
+        # 转换到带padding的图像坐标
+        px = int(px_in_original + padding_left)
+        py = int(py_in_original + padding_top)
         
         # 确保坐标在图像范围内
-        px = max(0, min(px, map_width - 1))
-        py = max(0, min(py, map_height - 1))
+        px = max(0, min(px, padded_width - 1))
+        py = max(0, min(py, padded_height - 1))
         
         return (px, py)
+    
+    def map_coords_to_world(self, map_x: int, map_y: int) -> np.ndarray:
+        """将2D地图像素坐标转换为3D世界坐标（反向转换）"""
+        if self.base_map_image is None:
+            return np.array([0.0, 0.0, 0.0])
+        
+        # 获取带padding的地图尺寸
+        padded_width, padded_height = self.base_map_image.size
+        
+        # 计算padding参数（使用类常量确保一致性）
+        padding_left = self.MAP_PADDING_LEFT
+        padding_bottom = self.MAP_PADDING_BOTTOM
+        padding_top = self.MAP_PADDING_TOP
+        padding_right = self.MAP_PADDING_RIGHT
+        
+        # 计算原始图像尺寸
+        original_width = padded_width - padding_left - padding_right
+        original_height = padded_height - padding_top - padding_bottom
+        
+        # 转换到原始图像坐标
+        px_in_original = map_x - padding_left
+        py_in_original = map_y - padding_top
+        
+        # 世界坐标范围
+        world_min_x = self.scene_bounds[0][0]
+        world_max_x = self.scene_bounds[1][0]
+        world_min_z = self.scene_bounds[0][2]
+        world_max_z = self.scene_bounds[1][2]
+        
+        # 反向映射到世界坐标
+        world_x = world_min_x + (px_in_original / original_width) * (world_max_x - world_min_x)
+        world_z = world_min_z + (py_in_original / original_height) * (world_max_z - world_min_z)
+        
+        # 使用pathfinder获取对应的Y坐标
+        test_point = mn.Vector3(world_x, 0.0, world_z)
+        snapped_point = self.sim.pathfinder.snap_point(test_point)
+        
+        return np.array([world_x, snapped_point.y, world_z])
     
     def is_navigable(self, x: float, z: float) -> bool:
         """检查指定的(x,z)位置是否可导航"""
@@ -573,6 +632,25 @@ class HabitatSimulator:
         """关闭模拟器"""
         if self.sim:
             self.sim.close()
+    
+    def verify_coordinate_conversion(self, world_pos: np.ndarray) -> dict:
+        """验证世界坐标与地图坐标之间的转换是否正确"""
+        # 正向转换：世界坐标 -> 地图坐标
+        map_x, map_y = self.world_to_map_coords(world_pos)
+        
+        # 反向转换：地图坐标 -> 世界坐标
+        converted_world_pos = self.map_coords_to_world(map_x, map_y)
+        
+        # 计算误差
+        position_error = np.linalg.norm(world_pos - converted_world_pos)
+        
+        return {
+            'original_world': world_pos,
+            'map_coords': (map_x, map_y),
+            'converted_world': converted_world_pos,
+            'position_error': position_error,
+            'error_acceptable': position_error < 0.1  # 10cm以内认为是可接受的
+        }
 
 
 class HabitatNavigatorApp(QMainWindow):
@@ -917,17 +995,42 @@ class HabitatNavigatorApp(QMainWindow):
                     # 直接瞬移到目标位置
                     self.simulator.move_agent_to(target_pos)
                     self.update_displays()
-                    self.status_label.setText(f"智能体已移动到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})")
+                    
+                    # 验证坐标转换精度
+                    coord_check = self.simulator.verify_coordinate_conversion(target_pos)
+                    if coord_check['error_acceptable']:
+                        coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ✓"
+                    else:
+                        coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ⚠"
+                    
+                    self.status_label.setText(f"智能体已移动到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})\n{coord_status}")
                 else:
                     # 计算距离，如果太远，直接瞬移而不是寻路
                     distance = np.linalg.norm(target_pos - current_pos)
                     if distance > 10.0:  # 如果距离超过10米，直接瞬移
                         self.simulator.move_agent_to(target_pos)
                         self.update_displays()
-                        self.status_label.setText(f"距离较远({distance:.1f}m)，直接瞬移到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})")
+                        
+                        # 验证坐标转换精度
+                        coord_check = self.simulator.verify_coordinate_conversion(target_pos)
+                        if coord_check['error_acceptable']:
+                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ✓"
+                        else:
+                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ⚠"
+                        
+                        self.status_label.setText(f"距离较远({distance:.1f}m)，直接瞬移到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})\n{coord_status}")
                     else:
                         # 寻路并开始动画移动
                         self.start_path_animation(current_pos, target_pos)
+                        
+                        # 验证坐标转换精度
+                        coord_check = self.simulator.verify_coordinate_conversion(target_pos)
+                        if coord_check['error_acceptable']:
+                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ✓"
+                        else:
+                            coord_status = f"坐标转换精度: {coord_check['position_error']:.3f}m ⚠"
+                        
+                        self.status_label.setText(f"开始导航到 ({target_pos[0]:.1f}, {target_pos[2]:.1f})\n{coord_status}")
                         
             except Exception as e:
                 self.status_label.setText(f"移动智能体失败: {str(e)}")
@@ -1156,13 +1259,39 @@ class HabitatNavigatorApp(QMainWindow):
 def main():
     """主函数"""
     # HM3D场景文件路径 - 请根据实际情况修改
-    scene_filepath = "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb"
+    # 优先尝试相对路径，然后尝试绝对路径
+    possible_paths = [
+        "../../habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb",
+        "../../../habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb", 
+        "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb",
+        "data/scene_datasets/habitat-test-scenes/van-gogh-room.glb"
+    ]
+    
+    scene_filepath = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            scene_filepath = path
+            break
     
     # 检查场景文件是否存在
-    if not os.path.exists(scene_filepath):
-        print(f"错误: 场景文件不存在: {scene_filepath}")
-        print("请确保已下载HM3D数据集或修改scene_filepath变量")
-        sys.exit(1)
+    if scene_filepath is None:
+        print("错误: 找不到场景文件。请检查以下可能的路径:")
+        for path in possible_paths:
+            print(f"  - {path}")
+        print("\n请确保已下载HM3D数据集或修改scene_filepath变量")
+        print("或者在命令行中指定场景文件路径:")
+        print(f"  python {sys.argv[0]} <scene_file_path>")
+        
+        # 允许通过命令行参数指定场景文件
+        if len(sys.argv) > 1:
+            scene_filepath = sys.argv[1]
+            if not os.path.exists(scene_filepath):
+                print(f"指定的场景文件不存在: {scene_filepath}")
+                sys.exit(1)
+        else:
+            sys.exit(1)
+    
+    print(f"使用场景文件: {scene_filepath}")
     
     # 创建应用程序
     app = QApplication(sys.argv)
