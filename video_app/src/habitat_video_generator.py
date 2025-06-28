@@ -349,22 +349,24 @@ class HabitatVideoGenerator:
         self.simulator.agent.set_state(agent_state)
     
     def _capture_frame(self):
-        """捕获当前帧（左右分屏，保持地图比例）"""
+        """捕获当前帧（左右分屏，修复坐标转换问题）"""
         try:
             # 获取FPV图像
             fpv_image = self.simulator.get_fpv_observation()
             fpv_pil = Image.fromarray(fpv_image[..., :3], "RGB")
             
-            # 获取俯视图（复用基础地图并绘制代理）
+            # 获取俯视图（复用基础地图）
             map_image = self.simulator.base_map_image.copy()
+            
+            # 在原始地图上绘制代理（使用正确的坐标系）
             agent_state = self.simulator.get_agent_state()
-            self._draw_agent_on_map(map_image, agent_state.position, agent_state.rotation)
+            self._draw_agent_on_original_map(map_image, agent_state.position, agent_state.rotation)
+            
+            # 然后调整地图大小，保持纵横比
+            map_resized = self._resize_map_with_aspect_ratio(map_image, 512, 512)
             
             # 调整FPV图像大小到512x512
             fpv_resized = fpv_pil.resize((512, 512), Image.Resampling.LANCZOS)
-            
-            # 处理地图图像，保持纵横比
-            map_resized = self._resize_map_with_aspect_ratio(map_image, 512, 512)
             
             # 创建左右分屏图像
             combined = Image.new('RGB', (1024, 512))
@@ -377,6 +379,8 @@ class HabitatVideoGenerator:
             
         except Exception as e:
             print(f"    Failed to capture frame: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _resize_map_with_aspect_ratio(self, image: Image.Image, target_width: int, target_height: int) -> Image.Image:
         """调整地图大小同时保持纵横比，多余空间用黑色填充"""
@@ -406,16 +410,22 @@ class HabitatVideoGenerator:
         
         return result
     
-    def _draw_agent_on_map(self, image: Image.Image, agent_pos: np.ndarray, 
-                          agent_rotation: Optional[np.ndarray] = None):
-        """在地图上绘制代理位置和朝向（复用interactive_app逻辑）"""
+    def _draw_agent_on_original_map(self, image: Image.Image, agent_pos: np.ndarray, 
+                                   agent_rotation: Optional[np.ndarray] = None):
+        """在原始地图上绘制代理位置和朝向（使用正确的坐标系）"""
         draw = ImageDraw.Draw(image)
         
-        # 转换世界坐标到地图坐标
+        # 直接使用HabitatSimulator的world_to_map_coords方法
+        # 这个方法基于原始地图尺寸进行坐标转换
         map_x, map_y = self.simulator.world_to_map_coords(agent_pos)
         
+        # 确保坐标在原始地图范围内
+        original_width, original_height = image.size
+        map_x = max(0, min(map_x, original_width - 1))
+        map_y = max(0, min(map_y, original_height - 1))
+        
         # 绘制代理位置（红点）
-        dot_radius = 8
+        dot_radius = 8  # 固定大小，因为是在原始地图上绘制
         draw.ellipse([
             map_x - dot_radius, map_y - dot_radius,
             map_x + dot_radius, map_y + dot_radius
@@ -440,10 +450,14 @@ class HabitatVideoGenerator:
                     # 在Habitat中，-Z轴是前方
                     forward_vec = quat.transform_vector(mn.Vector3(0, 0, -1))
                     
-                    # 计算箭头终点
+                    # 计算箭头终点（固定长度）
                     arrow_length = 20
                     arrow_end_x = map_x + int(forward_vec.x * arrow_length)
                     arrow_end_y = map_y + int(forward_vec.z * arrow_length)
+                    
+                    # 确保箭头终点在图像范围内
+                    arrow_end_x = max(0, min(arrow_end_x, original_width - 1))
+                    arrow_end_y = max(0, min(arrow_end_y, original_height - 1))
                     
                     # 绘制箭头线
                     draw.line([(map_x, map_y), (arrow_end_x, arrow_end_y)], 
@@ -461,12 +475,128 @@ class HabitatVideoGenerator:
                     head_x2 = arrow_end_x + int(math.cos(head_angle2) * arrow_head_length)
                     head_y2 = arrow_end_y + int(math.sin(head_angle2) * arrow_head_length)
                     
+                    # 确保箭头头部在图像范围内
+                    head_x1 = max(0, min(head_x1, original_width - 1))
+                    head_y1 = max(0, min(head_y1, original_height - 1))
+                    head_x2 = max(0, min(head_x2, original_width - 1))
+                    head_y2 = max(0, min(head_y2, original_height - 1))
+                    
                     draw.line([(arrow_end_x, arrow_end_y), (head_x1, head_y1)], 
                              fill=(255, 0, 0), width=2)
                     draw.line([(arrow_end_x, arrow_end_y), (head_x2, head_y2)], 
                              fill=(255, 0, 0), width=2)
-            except:
-                pass  # 如果箭头绘制失败，只显示点
+            except Exception as e:
+                # 如果箭头绘制失败，只显示点
+                print(f"    Warning: Failed to draw arrow: {e}")
+                pass
+
+    def _draw_agent_on_map(self, image: Image.Image, agent_pos: np.ndarray, 
+                          agent_rotation: Optional[np.ndarray] = None):
+        """在地图上绘制代理位置和朝向（修复坐标转换问题）"""
+        draw = ImageDraw.Draw(image)
+        
+        # 获取原始地图坐标（基于原始地图尺寸）
+        original_map_coords = self.simulator.world_to_map_coords(agent_pos)
+        
+        # 获取原始地图和当前图像的尺寸
+        original_map_width, original_map_height = self.simulator.base_map_image.size
+        current_width, current_height = image.size
+        
+        # 计算缩放和偏移
+        # 假设当前图像是通过_resize_map_with_aspect_ratio处理的
+        original_aspect = original_map_width / original_map_height
+        current_aspect = current_width / current_height
+        
+        if original_aspect > current_aspect:
+            # 原图更宽，按宽度缩放
+            scale = current_width / original_map_width
+            scaled_width = current_width
+            scaled_height = int(original_map_height * scale)
+            x_offset = 0
+            y_offset = (current_height - scaled_height) // 2
+        else:
+            # 原图更高，按高度缩放
+            scale = current_height / original_map_height
+            scaled_width = int(original_map_width * scale)
+            scaled_height = current_height
+            x_offset = (current_width - scaled_width) // 2
+            y_offset = 0
+        
+        # 转换坐标到当前图像坐标系
+        map_x = int(original_map_coords[0] * scale + x_offset)
+        map_y = int(original_map_coords[1] * scale + y_offset)
+        
+        # 确保坐标在图像范围内
+        map_x = max(0, min(map_x, current_width - 1))
+        map_y = max(0, min(map_y, current_height - 1))
+        
+        # 绘制代理位置（红点）
+        dot_radius = max(4, int(8 * scale))  # 根据缩放调整点的大小
+        draw.ellipse([
+            map_x - dot_radius, map_y - dot_radius,
+            map_x + dot_radius, map_y + dot_radius
+        ], fill=(255, 0, 0))
+        
+        # 绘制朝向箭头
+        if agent_rotation is not None:
+            try:
+                if hasattr(agent_rotation, 'x'):
+                    rotation_array = np.array([agent_rotation.x, agent_rotation.y, agent_rotation.z, agent_rotation.w], dtype=np.float32)
+                elif isinstance(agent_rotation, np.ndarray):
+                    rotation_array = agent_rotation.astype(np.float32)
+                else:
+                    rotation_array = np.array(agent_rotation, dtype=np.float32)
+                
+                if len(rotation_array) == 4:
+                    quat = mn.Quaternion(
+                        mn.Vector3(float(rotation_array[0]), float(rotation_array[1]), float(rotation_array[2])),
+                        float(rotation_array[3])
+                    )
+                    
+                    # 在Habitat中，-Z轴是前方
+                    forward_vec = quat.transform_vector(mn.Vector3(0, 0, -1))
+                    
+                    # 计算箭头终点（根据缩放调整长度）
+                    arrow_length = max(10, int(20 * scale))
+                    arrow_end_x = map_x + int(forward_vec.x * arrow_length)
+                    arrow_end_y = map_y + int(forward_vec.z * arrow_length)
+                    
+                    # 确保箭头终点在图像范围内
+                    arrow_end_x = max(0, min(arrow_end_x, current_width - 1))
+                    arrow_end_y = max(0, min(arrow_end_y, current_height - 1))
+                    
+                    # 绘制箭头线
+                    line_width = max(2, int(3 * scale))
+                    draw.line([(map_x, map_y), (arrow_end_x, arrow_end_y)], 
+                             fill=(255, 0, 0), width=line_width)
+                    
+                    # 绘制箭头头部
+                    angle = math.atan2(forward_vec.z, forward_vec.x)
+                    arrow_head_length = max(5, int(10 * scale))
+                    
+                    head_angle1 = angle + math.pi * 0.8
+                    head_angle2 = angle - math.pi * 0.8
+                    
+                    head_x1 = arrow_end_x + int(math.cos(head_angle1) * arrow_head_length)
+                    head_y1 = arrow_end_y + int(math.sin(head_angle1) * arrow_head_length)
+                    head_x2 = arrow_end_x + int(math.cos(head_angle2) * arrow_head_length)
+                    head_y2 = arrow_end_y + int(math.sin(head_angle2) * arrow_head_length)
+                    
+                    # 确保箭头头部在图像范围内
+                    head_x1 = max(0, min(head_x1, current_width - 1))
+                    head_y1 = max(0, min(head_y1, current_height - 1))
+                    head_x2 = max(0, min(head_x2, current_width - 1))
+                    head_y2 = max(0, min(head_y2, current_height - 1))
+                    
+                    head_width = max(1, int(2 * scale))
+                    draw.line([(arrow_end_x, arrow_end_y), (head_x1, head_y1)], 
+                             fill=(255, 0, 0), width=head_width)
+                    draw.line([(arrow_end_x, arrow_end_y), (head_x2, head_y2)], 
+                             fill=(255, 0, 0), width=head_width)
+            except Exception as e:
+                # 如果箭头绘制失败，只显示点
+                print(f"    Warning: Failed to draw arrow: {e}")
+                pass
     
     def _save_video(self) -> str:
         """保存视频文件"""
