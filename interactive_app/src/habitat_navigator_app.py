@@ -1261,10 +1261,7 @@ def main():
     # HM3D场景文件路径 - 请根据实际情况修改
     # 优先尝试相对路径，然后尝试绝对路径
     possible_paths = [
-        "../../habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb",
-        "../../../habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb", 
-        "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/van-gogh-room.glb",
-        "data/scene_datasets/habitat-test-scenes/van-gogh-room.glb"
+        "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/apartment_1.glb",
     ]
     
     scene_filepath = None
