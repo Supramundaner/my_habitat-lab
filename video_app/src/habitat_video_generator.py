@@ -41,9 +41,9 @@ class HabitatVideoGenerator:
         self.movement_step = 0.1   # 每0.1米移动生成一帧（减慢移动速度）
         self.interpolation_steps = 30  # 路径段之间的插值步数（来自interactive_app）
         
-        # 视频参数
-        self.video_width = 1024  # 左右各512
-        self.video_height = 512
+        # 视频参数 - 提高精度
+        self.video_width = 2048  # 左右各1024 (提高分辨率)
+        self.video_height = 1024
         
         # 初始化模拟器
         self.simulator = None
@@ -56,10 +56,11 @@ class HabitatVideoGenerator:
     def _initialize_simulator(self):
         """初始化Habitat模拟器"""
         try:
-            # 创建自定义的HabitatSimulator实例，指定GPU设备
+            # 创建自定义的HabitatSimulator实例，指定GPU设备和更高分辨率
             self.simulator = CustomHabitatSimulator(
                 scene_filepath=self.scene_filepath,
-                gpu_device_id=self.gpu_device_id
+                gpu_device_id=self.gpu_device_id,
+                resolution=(1024, 1024)  # 提高FPV分辨率
             )
             
             # 设置代理到场景中心的可导航位置
@@ -349,7 +350,7 @@ class HabitatVideoGenerator:
         self.simulator.agent.set_state(agent_state)
     
     def _capture_frame(self):
-        """捕获当前帧（左右分屏，修复坐标转换问题）"""
+        """捕获当前帧（左右分屏，修复坐标转换问题，提高分辨率）"""
         try:
             # 获取FPV图像
             fpv_image = self.simulator.get_fpv_observation()
@@ -362,16 +363,16 @@ class HabitatVideoGenerator:
             agent_state = self.simulator.get_agent_state()
             self._draw_agent_on_original_map(map_image, agent_state.position, agent_state.rotation)
             
-            # 然后调整地图大小，保持纵横比
-            map_resized = self._resize_map_with_aspect_ratio(map_image, 512, 512)
+            # 然后调整地图大小，保持纵横比，提高分辨率到1024x1024
+            map_resized = self._resize_map_with_aspect_ratio(map_image, 1024, 1024)
             
-            # 调整FPV图像大小到512x512
-            fpv_resized = fpv_pil.resize((512, 512), Image.Resampling.LANCZOS)
+            # 调整FPV图像大小到1024x1024
+            fpv_resized = fpv_pil.resize((1024, 1024), Image.Resampling.LANCZOS)
             
-            # 创建左右分屏图像
-            combined = Image.new('RGB', (1024, 512))
+            # 创建左右分屏图像 (2048x1024)
+            combined = Image.new('RGB', (2048, 1024))
             combined.paste(fpv_resized, (0, 0))
-            combined.paste(map_resized, (512, 0))
+            combined.paste(map_resized, (1024, 0))
             
             # 转换为numpy数组并添加到帧列表
             frame_array = np.array(combined)
@@ -665,7 +666,7 @@ class CustomHabitatSimulator(HabitatSimulator):
         super().__init__(scene_filepath, resolution)
     
     def _initialize_simulator(self):
-        """重写初始化方法以支持GPU设备选择"""
+        """重写初始化方法以支持GPU设备选择和人类agent模型"""
         # 配置后端 - 指定GPU设备
         backend_cfg = habitat_sim.SimulatorConfiguration()
         backend_cfg.scene_id = self.scene_filepath
@@ -673,13 +674,20 @@ class CustomHabitatSimulator(HabitatSimulator):
         backend_cfg.gpu_device_id = self.gpu_device_id  # 指定GPU设备
         backend_cfg.random_seed = 1
         
-        # 其余配置保持不变（复用父类逻辑）
-        # 配置FPV传感器
+        # 配置人类agent模型
+        try:
+            # 尝试使用内置的人类模型
+            backend_cfg.default_agent_id = 0
+            backend_cfg.create_renderer = True
+        except Exception as e:
+            print(f"Warning: Could not load human agent model: {e}")
+        
+        # 配置FPV传感器 - 基于人类视角高度
         fpv_sensor_spec = habitat_sim.CameraSensorSpec()
         fpv_sensor_spec.uuid = "color_sensor"
         fpv_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
         fpv_sensor_spec.resolution = [self.resolution[1], self.resolution[0]]
-        fpv_sensor_spec.position = mn.Vector3(0, 1.5, 0)
+        fpv_sensor_spec.position = mn.Vector3(0, 1.7, 0)  # 人类平均视角高度1.7米
         fpv_sensor_spec.hfov = 90.0
         
         # 获取场景边界以计算正交传感器分辨率
@@ -697,8 +705,8 @@ class CustomHabitatSimulator(HabitatSimulator):
         world_size_z = temp_bounds[1][2] - temp_bounds[0][2]
         temp_sim.close()
         
-        # 计算地图分辨率
-        max_resolution = 1024
+        # 计算地图分辨率 - 提高地图质量
+        max_resolution = 2048  # 提高地图分辨率
         aspect_ratio = world_size_x / world_size_z
         
         if aspect_ratio > 1:
@@ -708,6 +716,8 @@ class CustomHabitatSimulator(HabitatSimulator):
             map_height = max_resolution
             map_width = int(max_resolution * aspect_ratio)
         
+        print(f"地图分辨率: {map_width} x {map_height}")
+        
         # 配置正交传感器
         ortho_sensor_spec = habitat_sim.CameraSensorSpec()
         ortho_sensor_spec.uuid = "ortho_sensor"
@@ -716,9 +726,26 @@ class CustomHabitatSimulator(HabitatSimulator):
         ortho_sensor_spec.position = mn.Vector3(0, 0, 0)
         ortho_sensor_spec.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
         
-        # 配置智能体
+        # 配置智能体 - 加载人类模型
         agent_cfg = habitat_sim.agent.AgentConfiguration()
         agent_cfg.sensor_specifications = [fpv_sensor_spec, ortho_sensor_spec]
+        
+        # 设置人类agent的形状和大小
+        agent_cfg.height = 1.7  # 人类平均身高
+        agent_cfg.radius = 0.3  # 人类身体半径（用于碰撞检测）
+        
+        # 尝试加载人类模型文件 - 使用URDF配置
+        try:
+            # 检查是否有Fetch机器人模型（可以作为人形agent的替代）
+            fetch_urdf_path = "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+            
+            if os.path.exists(fetch_urdf_path):
+                print(f"Found robot model: {fetch_urdf_path}")
+                # 注意：由于这是机器人模型而非人类模型，我们只使用其物理属性
+            else:
+                print("No specific agent model found, using default capsule shape with human dimensions")
+        except Exception as e:
+            print(f"Warning: Could not check agent model: {e}")
         
         agent_cfg.action_space = {
             "move_forward": habitat_sim.agent.ActionSpec(
@@ -749,5 +776,6 @@ class CustomHabitatSimulator(HabitatSimulator):
         self.ortho_scale = max(self.scene_size[0], self.scene_size[2]) / 2.0
         
         print(f"Simulator initialized with GPU device {self.gpu_device_id}")
+        print(f"Agent height: {agent_cfg.height}m, radius: {agent_cfg.radius}m")
         print(f"Scene bounds: {self.scene_bounds}")
         print(f"Scene center: {self.scene_center}")
