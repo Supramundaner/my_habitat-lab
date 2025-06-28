@@ -36,9 +36,10 @@ class HabitatVideoGenerator:
         self.fps = fps
         self.output_dir = output_dir
         
-        # 动画参数
-        self.rotation_step = 1.0  # 每度旋转生成一帧
-        self.movement_step = 0.05  # 每0.05米移动生成一帧
+        # 动画参数 - 调整为更慢的速度
+        self.rotation_step = 2.0  # 每2度旋转生成一帧（减慢旋转速度）
+        self.movement_step = 0.1   # 每0.1米移动生成一帧（减慢移动速度）
+        self.interpolation_steps = 30  # 路径段之间的插值步数（来自interactive_app）
         
         # 视频参数
         self.video_width = 1024  # 左右各512
@@ -169,7 +170,7 @@ class HabitatVideoGenerator:
             return False
     
     def _execute_movement(self, target_x: float, target_z: float) -> bool:
-        """执行移动指令（平滑动画，带碰撞检测和视角调整）"""
+        """执行移动指令（完全复刻interactive_app的实现）"""
         try:
             # 检查目标位置是否可导航
             target_pos = self.simulator.snap_to_navigable(target_x, target_z)
@@ -177,57 +178,140 @@ class HabitatVideoGenerator:
                 print(f"    ERROR: Target position ({target_x:.2f}, {target_z:.2f}) is not navigable")
                 return False
             
-            # 获取当前位置和旋转
+            # 获取当前位置
             current_state = self.simulator.get_agent_state()
             current_pos = current_state.position
-            current_rotation = current_state.rotation
+            
+            # 计算距离
+            distance = np.linalg.norm(target_pos - current_pos)
             
             # 如果距离很近，直接瞬移
-            distance = np.linalg.norm(target_pos - current_pos)
-            if distance < self.movement_step:
-                # 计算朝向目标的旋转
-                target_rotation = self._calculate_rotation_towards_target(current_pos, target_pos)
-                self.simulator.move_agent_to(target_pos, target_rotation)
+            if distance < 0.1:
+                self.simulator.move_agent_to(target_pos)
                 self._capture_frame()
                 return True
             
-            # 计算移动步数
-            total_steps = int(distance / self.movement_step)
+            # 使用寻路（如interactive_app）
+            path = self.simulator.find_path(current_pos, target_pos)
             
-            # 计算每步的位置增量
-            direction_vector = (target_pos - current_pos) / total_steps
+            if not path or len(path) < 2:
+                # 寻路失败，尝试直线移动
+                print(f"    Pathfinding failed, using direct movement")
+                return self._execute_direct_movement(current_pos, target_pos)
             
-            # 计算目标旋转（朝向目标点）
-            target_rotation = self._calculate_rotation_towards_target(current_pos, target_pos)
+            # 使用路径进行动画移动（复刻interactive_app的animate_movement）
+            return self._execute_path_movement(path)
             
-            # 开始移动，每步都调整视角
+        except Exception as e:
+            print(f"    Movement failed: {e}")
+            return False
+    
+    def _execute_direct_movement(self, start_pos: np.ndarray, end_pos: np.ndarray) -> bool:
+        """直线移动（带碰撞检测）"""
+        try:
+            distance = np.linalg.norm(end_pos - start_pos)
+            total_steps = max(1, int(distance / self.movement_step))
+            
+            # 计算每步的增量
+            direction_vector = (end_pos - start_pos) / total_steps
+            
             for step in range(total_steps):
                 # 计算下一个位置
-                next_pos = current_pos + direction_vector * (step + 1)
+                next_pos = start_pos + direction_vector * (step + 1)
                 
                 # 碰撞检测
                 if not self.simulator.is_navigable(next_pos[0], next_pos[2]):
-                    print(f"    ERROR: Collision detected while moving to [{target_x:.2f}, {target_z:.2f}]. Aborting.")
+                    print(f"    ERROR: Collision detected at step {step+1}/{total_steps}")
                     return False
                 
-                # 计算插值旋转（平滑过渡到目标朝向）
-                t = (step + 1) / total_steps
-                interpolated_rotation = self._interpolate_rotation(current_rotation, target_rotation, t)
-                
-                # 移动代理并设置旋转
-                self.simulator.move_agent_to(next_pos, interpolated_rotation)
-                
-                # 捕获帧
+                # 移动代理
+                self.simulator.move_agent_to(next_pos)
                 self._capture_frame()
-            
-            # 确保到达精确位置和旋转
-            self.simulator.move_agent_to(target_pos, target_rotation)
-            self._capture_frame()
             
             return True
             
         except Exception as e:
-            print(f"    Movement failed: {e}")
+            print(f"    Direct movement failed: {e}")
+            return False
+    
+    def _execute_path_movement(self, path: List[np.ndarray]) -> bool:
+        """执行路径移动（完全复刻interactive_app的实现）"""
+        try:
+            # 为每个路径段生成平滑动画
+            for i in range(len(path) - 1):
+                start_pos = path[i]
+                end_pos = path[i + 1]
+                
+                # 计算朝向 - 完全复刻interactive_app的角度计算
+                direction = end_pos - start_pos
+                if np.linalg.norm(direction) > 0:
+                    direction = direction / np.linalg.norm(direction)
+                    
+                    # 在Habitat中，-Z轴是前方，复刻interactive_app的修正
+                    angle = math.atan2(direction[0], direction[2])  # 使用+Z计算
+                    angle += math.pi  # 加180度修正（复刻interactive_app）
+                    
+                    # 创建朝向目标的旋转四元数
+                    rotation = mn.Quaternion.rotation(mn.Rad(angle), mn.Vector3.y_axis())
+                    target_rotation = np.array([rotation.vector.x, rotation.vector.y, 
+                                              rotation.vector.z, rotation.scalar], dtype=np.float32)
+                else:
+                    target_rotation = np.array([0, 0, 0, 1], dtype=np.float32)
+                
+                # 获取当前旋转
+                current_state = self.simulator.get_agent_state()
+                if hasattr(current_state.rotation, 'x'):
+                    start_rotation = np.array([
+                        current_state.rotation.x, current_state.rotation.y, 
+                        current_state.rotation.z, current_state.rotation.w
+                    ], dtype=np.float32)
+                else:
+                    start_rotation = current_state.rotation.astype(np.float32)
+                
+                # 生成插值帧（复刻interactive_app的interpolation_steps）
+                for step in range(self.interpolation_steps):
+                    t = step / self.interpolation_steps
+                    
+                    # 位置插值
+                    interpolated_pos = start_pos + t * (end_pos - start_pos)
+                    
+                    # 旋转插值（球面线性插值）
+                    try:
+                        start_quat = mn.Quaternion(
+                            mn.Vector3(start_rotation[0], start_rotation[1], start_rotation[2]),
+                            start_rotation[3]
+                        )
+                        end_quat = mn.Quaternion(
+                            mn.Vector3(target_rotation[0], target_rotation[1], target_rotation[2]),
+                            target_rotation[3]
+                        )
+                        
+                        # 球面线性插值
+                        interpolated_quat = mn.Math.slerp(start_quat, end_quat, t)
+                        interpolated_rotation = np.array([
+                            interpolated_quat.vector.x, interpolated_quat.vector.y,
+                            interpolated_quat.vector.z, interpolated_quat.scalar
+                        ], dtype=np.float32)
+                        
+                    except Exception:
+                        # 如果球面插值失败，使用线性插值
+                        interpolated_rotation = start_rotation + t * (target_rotation - start_rotation)
+                        norm = np.linalg.norm(interpolated_rotation)
+                        if norm > 0:
+                            interpolated_rotation = interpolated_rotation / norm
+                    
+                    # 移动代理到插值位置
+                    self.simulator.move_agent_to(interpolated_pos, interpolated_rotation)
+                    self._capture_frame()
+                
+                # 确保到达精确的路径点
+                self.simulator.move_agent_to(end_pos, target_rotation)
+                self._capture_frame()
+            
+            return True
+            
+        except Exception as e:
+            print(f"    Path movement failed: {e}")
             return False
     
     def _rotate_agent(self, angle_degrees: float):
@@ -439,59 +523,7 @@ class HabitatVideoGenerator:
             self.simulator.close()
             self.simulator = None
     
-    def _calculate_rotation_towards_target(self, current_pos: np.ndarray, target_pos: np.ndarray) -> np.ndarray:
-        """计算从当前位置朝向目标位置的旋转四元数"""
-        # 计算方向向量
-        direction = target_pos - current_pos
-        direction[1] = 0  # 忽略Y轴差异，只考虑水平方向
-        
-        # 如果距离太近，返回当前旋转
-        if np.linalg.norm(direction) < 0.01:
-            current_state = self.simulator.get_agent_state()
-            return current_state.rotation
-        
-        # 归一化方向向量
-        direction = direction / np.linalg.norm(direction)
-        
-        # 在Habitat中，-Z轴是前方，计算需要的旋转角度
-        # 参考interactive_app的实现
-        angle = math.atan2(direction[0], -direction[2])  # 注意这里使用-Z
-        
-        # 创建朝向目标的旋转四元数
-        rotation_quat = mn.Quaternion.rotation(mn.Rad(angle), mn.Vector3.y_axis())
-        
-        return np.array([
-            rotation_quat.vector.x, rotation_quat.vector.y,
-            rotation_quat.vector.z, rotation_quat.scalar
-        ], dtype=np.float32)
-    
-    def _interpolate_rotation(self, start_rotation: np.ndarray, end_rotation: np.ndarray, t: float) -> np.ndarray:
-        """在两个旋转之间进行插值"""
-        # 处理不同类型的旋转数据
-        if hasattr(start_rotation, 'x'):
-            start_array = np.array([start_rotation.x, start_rotation.y, start_rotation.z, start_rotation.w], dtype=np.float32)
-        else:
-            start_array = start_rotation.astype(np.float32)
-        
-        if hasattr(end_rotation, 'x'):
-            end_array = np.array([end_rotation.x, end_rotation.y, end_rotation.z, end_rotation.w], dtype=np.float32)
-        else:
-            end_array = end_rotation.astype(np.float32)
-        
-        # 检查四元数的点积，确保选择较短的路径
-        dot_product = np.dot(start_array, end_array)
-        if dot_product < 0:
-            end_array = -end_array  # 反向四元数代表相同的旋转
-        
-        # 线性插值
-        interpolated = start_array + t * (end_array - start_array)
-        
-        # 归一化四元数
-        norm = np.linalg.norm(interpolated)
-        if norm > 0:
-            interpolated = interpolated / norm
-        
-        return interpolated
+
 
 
 class CustomHabitatSimulator(HabitatSimulator):
