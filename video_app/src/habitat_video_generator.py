@@ -208,12 +208,79 @@ class HabitatVideoGenerator:
             return False
     
     def _execute_direct_movement(self, start_pos: np.ndarray, end_pos: np.ndarray) -> bool:
-        """直线移动（带碰撞检测）"""
+        """直线移动（先转向再移动，避免漂移效果）"""
         try:
-            distance = np.linalg.norm(end_pos - start_pos)
-            total_steps = max(1, int(distance / self.movement_step))
+            # 计算移动方向和目标朝向
+            direction = end_pos - start_pos
+            distance = np.linalg.norm(direction)
             
-            # 计算每步的增量
+            if distance < 0.01:  # 距离太近，直接移动
+                self.simulator.move_agent_to(end_pos)
+                self._capture_frame()
+                return True
+            
+            # 归一化方向向量
+            direction = direction / distance
+            
+            # 计算目标朝向角度
+            angle = math.atan2(direction[0], direction[2])  # 使用+Z计算
+            angle += math.pi  # 加180度修正
+            
+            # 创建目标旋转四元数
+            rotation = mn.Quaternion.rotation(mn.Rad(angle), mn.Vector3.y_axis())
+            target_rotation = np.array([rotation.vector.x, rotation.vector.y, 
+                                      rotation.vector.z, rotation.scalar], dtype=np.float32)
+            
+            # 获取当前旋转
+            current_state = self.simulator.get_agent_state()
+            if hasattr(current_state.rotation, 'x'):
+                start_rotation = np.array([
+                    current_state.rotation.x, current_state.rotation.y, 
+                    current_state.rotation.z, current_state.rotation.w
+                ], dtype=np.float32)
+            else:
+                start_rotation = current_state.rotation.astype(np.float32)
+            
+            # 第一阶段：先执行视角转向（保持位置不变）
+            rotation_steps = 15  # 转向帧数
+            for step in range(rotation_steps):
+                t = step / rotation_steps
+                
+                # 旋转插值
+                try:
+                    start_quat = mn.Quaternion(
+                        mn.Vector3(start_rotation[0], start_rotation[1], start_rotation[2]),
+                        start_rotation[3]
+                    )
+                    end_quat = mn.Quaternion(
+                        mn.Vector3(target_rotation[0], target_rotation[1], target_rotation[2]),
+                        target_rotation[3]
+                    )
+                    
+                    # 球面线性插值
+                    interpolated_quat = mn.Math.slerp(start_quat, end_quat, t)
+                    interpolated_rotation = np.array([
+                        interpolated_quat.vector.x, interpolated_quat.vector.y,
+                        interpolated_quat.vector.z, interpolated_quat.scalar
+                    ], dtype=np.float32)
+                    
+                except Exception:
+                    # 如果球面插值失败，使用线性插值
+                    interpolated_rotation = start_rotation + t * (target_rotation - start_rotation)
+                    norm = np.linalg.norm(interpolated_rotation)
+                    if norm > 0:
+                        interpolated_rotation = interpolated_rotation / norm
+                
+                # 只改变旋转，保持当前位置
+                self.simulator.move_agent_to(start_pos, interpolated_rotation)
+                self._capture_frame()
+            
+            # 确保转向完成
+            self.simulator.move_agent_to(start_pos, target_rotation)
+            self._capture_frame()
+            
+            # 第二阶段：再执行位置移动（保持目标朝向）
+            total_steps = max(1, int(distance / self.movement_step))
             direction_vector = (end_pos - start_pos) / total_steps
             
             for step in range(total_steps):
@@ -225,8 +292,8 @@ class HabitatVideoGenerator:
                     print(f"    ERROR: Collision detected at step {step+1}/{total_steps}")
                     return False
                 
-                # 移动代理
-                self.simulator.move_agent_to(next_pos)
+                # 移动代理（保持目标朝向）
+                self.simulator.move_agent_to(next_pos, target_rotation)
                 self._capture_frame()
             
             return True
@@ -236,7 +303,7 @@ class HabitatVideoGenerator:
             return False
     
     def _execute_path_movement(self, path: List[np.ndarray]) -> bool:
-        """执行路径移动（完全复刻interactive_app的实现）"""
+        """执行路径移动（先转向再移动，避免漂移效果）"""
         try:
             # 为每个路径段生成平滑动画
             for i in range(len(path) - 1):
@@ -269,12 +336,10 @@ class HabitatVideoGenerator:
                 else:
                     start_rotation = current_state.rotation.astype(np.float32)
                 
-                # 生成插值帧（复刻interactive_app的interpolation_steps）
-                for step in range(self.interpolation_steps):
-                    t = step / self.interpolation_steps
-                    
-                    # 位置插值
-                    interpolated_pos = start_pos + t * (end_pos - start_pos)
+                # 第一阶段：先执行视角转向（保持位置不变）
+                rotation_steps = self.interpolation_steps // 2  # 转向用一半的帧数
+                for step in range(rotation_steps):
+                    t = step / rotation_steps
                     
                     # 旋转插值（球面线性插值）
                     try:
@@ -301,8 +366,24 @@ class HabitatVideoGenerator:
                         if norm > 0:
                             interpolated_rotation = interpolated_rotation / norm
                     
-                    # 移动代理到插值位置
-                    self.simulator.move_agent_to(interpolated_pos, interpolated_rotation)
+                    # 只改变旋转，保持当前位置
+                    self.simulator.move_agent_to(start_pos, interpolated_rotation)
+                    self._capture_frame()
+                
+                # 确保转向完成
+                self.simulator.move_agent_to(start_pos, target_rotation)
+                self._capture_frame()
+                
+                # 第二阶段：再执行位置移动（保持目标朝向）
+                movement_steps = self.interpolation_steps - rotation_steps  # 移动用剩余的帧数
+                for step in range(movement_steps):
+                    t = step / movement_steps
+                    
+                    # 位置插值
+                    interpolated_pos = start_pos + t * (end_pos - start_pos)
+                    
+                    # 保持目标旋转不变
+                    self.simulator.move_agent_to(interpolated_pos, target_rotation)
                     self._capture_frame()
                 
                 # 确保到达精确的路径点
