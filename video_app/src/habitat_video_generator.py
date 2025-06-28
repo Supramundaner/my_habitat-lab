@@ -48,6 +48,7 @@ class HabitatVideoGenerator:
         # 初始化模拟器
         self.simulator = None
         self.current_frames = []
+        self.agent_initialized = False  # 标记代理是否已初始化位置
         self._initialize_simulator()
         
         # 验证坐标转换精度
@@ -55,6 +56,7 @@ class HabitatVideoGenerator:
         
         print(f"Video generator initialized with {fps} FPS")
         print(f"Animation steps: {self.rotation_step}°/frame, {self.movement_step}m/frame")
+        print("Agent will be positioned at the first command location")
     
     def _initialize_simulator(self):
         """初始化Habitat模拟器"""
@@ -66,25 +68,31 @@ class HabitatVideoGenerator:
                 resolution=(1024, 1024)  # 提高FPV分辨率
             )
             
-            # 设置代理到场景中心的可导航位置
-            self._reset_agent_to_center()
+            # 不立即设置代理位置，等待第一个指令来决定初始位置
+            print("Simulator initialized. Agent position will be set with first command.")
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize simulator: {e}")
     
-    def _reset_agent_to_center(self):
-        """将代理重置到场景中心的可导航位置"""
-        center_x = (self.simulator.scene_bounds[0][0] + self.simulator.scene_bounds[1][0]) / 2
-        center_z = (self.simulator.scene_bounds[0][2] + self.simulator.scene_bounds[1][2]) / 2
-        
+    def _reset_agent_to_position(self, x: float, z: float):
+        """将代理重置到指定位置的可导航位置"""
         # 尝试对齐到可导航位置
-        navigable_pos = self.simulator.snap_to_navigable(center_x, center_z)
+        navigable_pos = self.simulator.snap_to_navigable(x, z)
         if navigable_pos is not None:
             self.simulator.move_agent_to(navigable_pos)
+            print(f"Agent initialized at position ({navigable_pos[0]:.2f}, {navigable_pos[2]:.2f})")
+            return True
         else:
-            # 如果中心不可导航，使用pathfinder找一个随机可导航点
-            random_point = self.simulator.sim.pathfinder.get_random_navigable_point()
-            self.simulator.move_agent_to(np.array([random_point.x, random_point.y, random_point.z]))
+            print(f"ERROR: Position ({x:.2f}, {z:.2f}) is not navigable")
+            # 尝试找到最近的可导航点
+            try:
+                random_point = self.simulator.sim.pathfinder.get_random_navigable_point()
+                self.simulator.move_agent_to(np.array([random_point.x, random_point.y, random_point.z]))
+                print(f"Agent fallback to random navigable position ({random_point.x:.2f}, {random_point.z:.2f})")
+                return True
+            except Exception as e:
+                print(f"ERROR: Could not find any navigable position: {e}")
+                return False
     
     def process_command_sequence(self, commands: List[List[Union[str, float]]]) -> Optional[str]:
         """处理指令序列并生成视频"""
@@ -92,8 +100,48 @@ class HabitatVideoGenerator:
         start_time = time.time()
         
         try:
-            # 添加起始帧
-            self._capture_frame()
+            # 如果代理还未初始化位置，使用第一个指令来设置初始位置
+            if not self.agent_initialized and len(commands) > 0:
+                first_command = commands[0]
+                
+                # 检查第一个指令是否是移动指令（包含坐标）
+                if not isinstance(first_command[0], str):
+                    # 第一个指令是移动指令 [x, z]
+                    target_x = float(first_command[0])
+                    target_z = float(first_command[1])
+                    
+                    # 将代理初始化到第一个指令的位置
+                    success = self._reset_agent_to_position(target_x, target_z)
+                    if not success:
+                        print("ERROR: Failed to initialize agent at first command position")
+                        return None
+                    
+                    self.agent_initialized = True
+                    
+                    # 添加初始帧
+                    self._capture_frame()
+                    
+                    # 跳过第一个指令（因为代理已经在目标位置）
+                    commands = commands[1:]
+                    print(f"Agent initialized at first command position ({target_x:.2f}, {target_z:.2f})")
+                else:
+                    # 第一个指令是旋转指令，使用场景中心作为初始位置
+                    center_x = (self.simulator.scene_bounds[0][0] + self.simulator.scene_bounds[1][0]) / 2
+                    center_z = (self.simulator.scene_bounds[0][2] + self.simulator.scene_bounds[1][2]) / 2
+                    
+                    success = self._reset_agent_to_position(center_x, center_z)
+                    if not success:
+                        print("ERROR: Failed to initialize agent at scene center")
+                        return None
+                    
+                    self.agent_initialized = True
+                    
+                    # 添加初始帧
+                    self._capture_frame()
+                    print("Agent initialized at scene center (first command is rotation)")
+            else:
+                # 代理已初始化，直接添加起始帧
+                self._capture_frame()
             
             for i, command in enumerate(commands):
                 print(f"  Executing command {i+1}/{len(commands)}: {command}")
@@ -440,6 +488,11 @@ class HabitatVideoGenerator:
     def _capture_frame(self):
         """捕获当前帧（左右分屏，修复坐标转换问题，提高分辨率）"""
         try:
+            # 检查代理是否已初始化
+            if not self.agent_initialized:
+                print("    Warning: Attempting to capture frame before agent initialization")
+                return
+            
             # 获取FPV图像
             fpv_image = self.simulator.get_fpv_observation()
             fpv_pil = Image.fromarray(fpv_image[..., :3], "RGB")
@@ -729,7 +782,7 @@ class HabitatVideoGenerator:
     
     def get_agent_position(self) -> Tuple[float, float, float]:
         """获取代理当前位置"""
-        if self.simulator:
+        if self.simulator and self.agent_initialized:
             state = self.simulator.get_agent_state()
             pos = state.position
             return (float(pos[0]), float(pos[1]), float(pos[2]))
@@ -737,7 +790,7 @@ class HabitatVideoGenerator:
     
     def get_agent_rotation(self) -> Tuple[float, float, float, float]:
         """获取代理当前旋转（四元数）"""
-        if self.simulator:
+        if self.simulator and self.agent_initialized:
             state = self.simulator.get_agent_state()
             rot = state.rotation
             if hasattr(rot, 'x'):
@@ -793,8 +846,17 @@ class HabitatVideoGenerator:
     
     def get_agent_coordinate_info(self) -> dict:
         """获取代理的详细坐标信息，包括转换精度"""
-        if not self.simulator:
-            return {}
+        if not self.simulator or not self.agent_initialized:
+            return {
+                'error': 'Agent not initialized yet',
+                'scene_info': {
+                    'bounds': {
+                        'min': [float(self.simulator.scene_bounds[0][i]) for i in range(3)] if self.simulator else [],
+                        'max': [float(self.simulator.scene_bounds[1][i]) for i in range(3)] if self.simulator else []
+                    },
+                    'center': [float(self.simulator.scene_center[i]) for i in range(3)] if self.simulator else []
+                }
+            }
         
         try:
             agent_state = self.simulator.get_agent_state()
@@ -826,7 +888,8 @@ class HabitatVideoGenerator:
                         'max': [float(self.simulator.scene_bounds[1][i]) for i in range(3)]
                     },
                     'center': [float(self.simulator.scene_center[i]) for i in range(3)]
-                }
+                },
+                'agent_initialized': self.agent_initialized
             }
             
         except Exception as e:
