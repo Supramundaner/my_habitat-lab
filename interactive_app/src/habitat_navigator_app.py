@@ -493,11 +493,18 @@ class HabitatSimulator:
         world_x = world_min_x + (px_in_original / original_width) * (world_max_x - world_min_x)
         world_z = world_min_z + (py_in_original / original_height) * (world_max_z - world_min_z)
         
-        # 使用pathfinder获取对应的Y坐标
-        test_point = mn.Vector3(world_x, 0.0, world_z)
-        snapped_point = self.sim.pathfinder.snap_point(test_point)
+        # 获取对应的Y坐标，但保持X和Z坐标精确
+        # 不使用snap_point避免X,Z坐标偏移
+        try:
+            test_point = mn.Vector3(world_x, 0.0, world_z)
+            snapped_point = self.sim.pathfinder.snap_point(test_point)
+            # 只使用snapped_point的Y坐标，保持计算出的X,Z坐标不变
+            world_y = snapped_point.y
+        except Exception:
+            # 如果获取Y坐标失败，使用默认值
+            world_y = 0.0
         
-        return np.array([world_x, snapped_point.y, world_z])
+        return np.array([world_x, world_y, world_z])
     
     def is_navigable(self, x: float, z: float) -> bool:
         """检查指定的(x,z)位置是否可导航"""
@@ -643,23 +650,47 @@ class HabitatSimulator:
             self.sim.close()
     
     def verify_coordinate_conversion(self, world_pos: np.ndarray) -> dict:
-        """验证世界坐标与地图坐标之间的转换是否正确"""
+        """验证世界坐标与地图坐标之间的转换是否正确（仅测试X和Z坐标）"""
         # 正向转换：世界坐标 -> 地图坐标
         map_x, map_y = self.world_to_map_coords(world_pos)
         
         # 反向转换：地图坐标 -> 世界坐标
         converted_world_pos = self.map_coords_to_world(map_x, map_y)
         
-        # 计算误差
-        position_error = np.linalg.norm(world_pos - converted_world_pos)
+        # 只计算X和Z坐标的误差（忽略Y坐标，因为地图是2D的）
+        original_xz = np.array([world_pos[0], world_pos[2]])
+        converted_xz = np.array([converted_world_pos[0], converted_world_pos[2]])
+        position_error = np.linalg.norm(original_xz - converted_xz)
         
         return {
             'original_world': world_pos,
             'map_coords': (map_x, map_y),
             'converted_world': converted_world_pos,
             'position_error': position_error,
-            'error_acceptable': position_error < 0.1  # 10cm以内认为是可接受的
+            'error_acceptable': position_error < 0.1,  # 10cm以内认为是可接受的
+            'note': 'Y坐标误差已排除（地图为2D）'
         }
+    
+    def get_position_with_navmesh_height(self, x: float, z: float) -> Optional[np.ndarray]:
+        """获取指定(x,z)位置对应的navmesh上的3D点，不进行snap操作"""
+        try:
+            # 直接使用用户指定的x,z坐标，仅从navmesh获取对应的Y坐标
+            test_point = mn.Vector3(x, 0.0, z)
+            
+            # 检查该点是否在navmesh表面上
+            # 使用snap_point获取最近的navmesh点，但我们只使用其Y坐标
+            snapped_point = self.sim.pathfinder.snap_point(test_point)
+            
+            if self.sim.pathfinder.is_navigable(snapped_point):
+                # 返回用户指定的x,z坐标和navmesh的y坐标
+                return np.array([x, snapped_point.y, z])
+            else:
+                # 如果snap_point后的位置不可导航，说明用户指定的位置不在有效区域
+                return None
+                
+        except Exception as e:
+            print(f"Error getting position with navmesh height: {e}")
+            return None
 
 
 class HabitatNavigatorApp(QMainWindow):

@@ -75,24 +75,26 @@ class HabitatVideoGenerator:
             raise RuntimeError(f"Failed to initialize simulator: {e}")
     
     def _reset_agent_to_position(self, x: float, z: float):
-        """将代理重置到指定位置的可导航位置"""
-        # 尝试对齐到可导航位置
-        navigable_pos = self.simulator.snap_to_navigable(x, z)
-        if navigable_pos is not None:
-            self.simulator.move_agent_to(navigable_pos)
-            print(f"Agent initialized at position ({navigable_pos[0]:.2f}, {navigable_pos[2]:.2f})")
-            return True
-        else:
-            print(f"ERROR: Position ({x:.2f}, {z:.2f}) is not navigable")
-            # 尝试找到最近的可导航点
-            try:
-                random_point = self.simulator.sim.pathfinder.get_random_navigable_point()
-                self.simulator.move_agent_to(np.array([random_point.x, random_point.y, random_point.z]))
-                print(f"Agent fallback to random navigable position ({random_point.x:.2f}, {random_point.z:.2f})")
+        """将代理重置到指定位置，直接使用用户坐标，从navmesh获取Y坐标"""
+        try:
+            # 直接使用用户指定的(x, z)，从navmesh获取Y坐标
+            target_pos = self.simulator.get_position_with_navmesh_height(x, z)
+            if target_pos is not None:
+                self.simulator.move_agent_to(target_pos)
+                print(f"Agent initialized at position ({target_pos[0]:.2f}, {target_pos[2]:.2f})")
+                
+                # 报告坐标转换精度
+                coord_check = self.simulator.verify_coordinate_conversion(target_pos)
+                print(f"Coordinate conversion accuracy: {coord_check['position_error']:.4f}m {'✓' if coord_check['error_acceptable'] else '⚠'}")
+                
                 return True
-            except Exception as e:
-                print(f"ERROR: Could not find any navigable position: {e}")
+            else:
+                print(f"ERROR: Position ({x:.2f}, {z:.2f}) is not on navmesh surface")
                 return False
+                
+        except Exception as e:
+            print(f"ERROR: Could not set agent position: {e}")
+            return False
     
     def process_command_sequence(self, commands: List[List[Union[str, float]]]) -> Optional[str]:
         """处理指令序列并生成视频"""
@@ -222,23 +224,22 @@ class HabitatVideoGenerator:
             return False
     
     def _execute_movement(self, target_x: float, target_z: float) -> bool:
-        """执行移动指令（直线移动，并在每一步检查碰撞）。
+        """执行移动指令（直接移动到指定坐标，使用navmesh仅获取Y坐标）。
         
-        该函数严格遵循指令，不使用pathfinder进行自动寻路。
-        它会直接朝目标点移动，并在动画的每一步检查碰撞。
-        如果检测到碰撞或目标点不可达，将停止执行并返回False。
+        该函数严格遵循用户指令，直接移动到指定的(x, z)坐标，
+        使用navmesh仅获取对应的Y坐标。在移动过程中检查碰撞，
+        如果检测到碰撞，代理会回退到最后有效位置并截断视频。
         """
         try:
-            # 检查目标位置是否可导航，主要是为了获取正确的Y坐标
-            target_pos = self.simulator.snap_to_navigable(target_x, target_z)
+            # 直接使用用户指定的(x, z)，从navmesh获取Y坐标
+            target_pos = self.simulator.get_position_with_navmesh_height(target_x, target_z)
             if target_pos is None:
-                print(f"    ERROR: Target position ({target_x:.2f}, {target_z:.2f}) is not on a navigable surface. Halting.")
+                print(f"    ERROR: Target position ({target_x:.2f}, {target_z:.2f}) is not on navmesh surface. Halting.")
                 return False  # 返回False将停止指令序列
 
             # 验证目标位置的坐标转换精度
             coord_check = self.simulator.verify_coordinate_conversion(target_pos)
-            if not coord_check['error_acceptable']:
-                print(f"    Warning: Target position coordinate conversion error {coord_check['position_error']:.3f}m")
+            print(f"    Target coordinate accuracy: error={coord_check['position_error']:.4f}m {'✓' if coord_check['error_acceptable'] else '⚠'}")
 
             # 获取当前位置
             current_state = self.simulator.get_agent_state()
@@ -253,17 +254,16 @@ class HabitatVideoGenerator:
                 self._capture_frame()
                 return True
 
-            # 直接执行直线移动。_execute_direct_movement函数内部包含碰撞检测。
-            # 这样就实现了严格跟随指令，并在碰撞时停止。
+            # 执行直接移动，包含碰撞检测和回退逻辑
             print(f"    Executing direct movement to ({target_x:.2f}, {target_z:.2f})")
-            return self._execute_direct_movement(current_pos, target_pos)
+            return self._execute_direct_movement_with_collision_handling(current_pos, target_pos)
 
         except Exception as e:
             print(f"    Movement failed: {e}")
             return False
     
-    def _execute_direct_movement(self, start_pos: np.ndarray, end_pos: np.ndarray) -> bool:
-        """直线移动（先转向再移动，避免漂移效果）"""
+    def _execute_direct_movement_with_collision_handling(self, start_pos: np.ndarray, end_pos: np.ndarray) -> bool:
+        """直线移动，包含碰撞检测和回退机制（先转向再移动，避免漂移效果）"""
         try:
             # 计算移动方向和目标朝向
             direction = end_pos - start_pos
@@ -334,27 +334,35 @@ class HabitatVideoGenerator:
             self.simulator.move_agent_to(start_pos, target_rotation)
             self._capture_frame()
             
-            # 第二阶段：再执行位置移动（保持目标朝向）
+            # 第二阶段：执行位置移动（保持目标朝向）- 包含碰撞检测和回退
             total_steps = max(1, int(distance / self.movement_step))
             direction_vector = (end_pos - start_pos) / total_steps
+            last_valid_pos = start_pos  # 记录最后一个有效位置
             
             for step in range(total_steps):
                 # 计算下一个位置
                 next_pos = start_pos + direction_vector * (step + 1)
                 
-                # 碰撞检测
-                if not self.simulator.is_navigable(next_pos[0], next_pos[2]):
-                    print(f"    ERROR: Collision detected at step {step+1}/{total_steps}")
-                    return False
+                # 碰撞检测：检查目标位置是否在navmesh上
+                navmesh_pos = self.simulator.get_position_with_navmesh_height(next_pos[0], next_pos[2])
+                if navmesh_pos is None:
+                    print(f"    COLLISION: Position ({next_pos[0]:.2f}, {next_pos[2]:.2f}) not on navmesh at step {step+1}/{total_steps}")
+                    print(f"    Reverting to last valid position ({last_valid_pos[0]:.2f}, {last_valid_pos[2]:.2f})")
+                    # 回退到最后有效位置
+                    self.simulator.move_agent_to(last_valid_pos, target_rotation)
+                    self._capture_frame()
+                    print(f"    Video truncated due to collision detection")
+                    return False  # 返回False将停止指令序列
                 
-                # 移动代理（保持目标朝向）
-                self.simulator.move_agent_to(next_pos, target_rotation)
+                # 移动代理到有效位置（使用navmesh的Y坐标）
+                self.simulator.move_agent_to(navmesh_pos, target_rotation)
                 self._capture_frame()
+                last_valid_pos = navmesh_pos  # 更新最后有效位置
             
             return True
             
         except Exception as e:
-            print(f"    Direct movement failed: {e}")
+            print(f"    Direct movement with collision handling failed: {e}")
             return False
     
     def _execute_path_movement(self, path: List[np.ndarray]) -> bool:
