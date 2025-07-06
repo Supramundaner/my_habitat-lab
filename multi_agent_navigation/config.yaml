@@ -1,0 +1,56 @@
+# Main simulation configuration
+scene_path: "data/scene_datasets/hm3d/hm3d-minival-habitat.scene_dataset.json" # Change to your .scene_dataset.json
+
+output_dir: "outputs"
+state_dir: "state"
+log_file: "multi_agent_nav.log"
+
+simulation_settings:
+  gpu_device_id: 0
+  time_step: 0.033  # ~30 FPS simulation physics step
+  max_duration_seconds: 120 # Safety limit for simulation
+  collision_distance_threshold: 0.5 # Meters between agent centers to trigger collision
+
+map_settings:
+  resolution: 2048 # Max dimension for the top-down map
+  padding:
+    left: 80
+    bottom: 60
+    top: 40
+    right: 40
+
+video_settings:
+  enabled: true
+  fps: 30
+  resolution: [2048, 1024] # [width, height] for the combined FPV + Map video
+
+agents:
+  - agent_id: "agent_0"
+    urdf_path: "data/robots/hab_fetch/robots/hab_fetch.urdf" # Path to Fetch robot model
+    fpv_sensor_uuid: "head_rgb_sensor" # Match sensor name in URDF
+    sensors:
+      - uuid: "head_rgb_sensor"
+        resolution: [1024, 1024]
+        hfov: 90
+        position: [0.0, 0.7, 0.0] # Relative to agent base link
+        orientation: [0.0, 0.0, 0.0]
+    motion_params:
+      linear_speed: 1.0  # m/s
+      angular_speed: 45.0 # degrees/s
+    initial_state: # Optional: if not resuming from state, use this
+      position: [3.5, 0.0, 2.0] # Initial X, Y, Z (Y will be snapped to navmesh)
+
+  - agent_id: "agent_1"
+    urdf_path: "data/robots/hab_fetch/robots/hab_fetch.urdf"
+    fpv_sensor_uuid: "head_rgb_sensor"
+    sensors:
+      - uuid: "head_rgb_sensor"
+        resolution: [1024, 1024]
+        hfov: 90
+        position: [0.0, 0.7, 0.0]
+        orientation: [0.0, 0.0, 0.0]
+    motion_params:
+      linear_speed: 1.2
+      angular_speed: 50.0
+    initial_state:
+      position: [-1.0, 0.0, 2.0]
