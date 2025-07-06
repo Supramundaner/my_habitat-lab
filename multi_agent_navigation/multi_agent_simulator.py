@@ -14,7 +14,6 @@ import argparse
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from typing import List, Dict, Any, Optional, Tuple
-import xml.etree.ElementTree as ET
 
 # Habitat and Magnum imports
 import habitat_sim
@@ -23,170 +22,6 @@ import magnum as mn
 # --- Constants ---
 # Epsilon for float comparisons
 EPSILON = 1e-4
-
-# --- URDF Camera Parser ---
-class URDFCameraParser:
-    """Parse URDF files to get robot head camera real position and orientation"""
-    
-    def __init__(self, urdf_path: str):
-        self.urdf_path = urdf_path
-        self.tree = ET.parse(urdf_path)
-        self.root = self.tree.getroot()
-        self.joint_transforms = {}
-        self._parse_joints()
-    
-    def _parse_joints(self):
-        """Parse all joint transforms"""
-        for joint in self.root.findall('joint'):
-            joint_name = joint.get('name')
-            origin = joint.find('origin')
-            if origin is not None:
-                xyz = origin.get('xyz', '0 0 0').split()
-                rpy = origin.get('rpy', '0 0 0').split()
-                translation = np.array([float(x) for x in xyz])
-                rotation = np.array([float(x) for x in rpy])
-                
-                # Convert RPY to rotation matrix
-                rot_matrix = self._rpy_to_rotation_matrix(rotation)
-                
-                # Build 4x4 transform matrix
-                transform = np.eye(4)
-                transform[:3, :3] = rot_matrix
-                transform[:3, 3] = translation
-                
-                self.joint_transforms[joint_name] = {
-                    'transform': transform,
-                    'parent': joint.find('parent').get('link') if joint.find('parent') is not None else None,
-                    'child': joint.find('child').get('link') if joint.find('child') is not None else None
-                }
-    
-    def _rpy_to_rotation_matrix(self, rpy):
-        """Convert RPY angles to rotation matrix"""
-        roll, pitch, yaw = rpy
-        
-        # Rotation matrix = Rz(yaw) * Ry(pitch) * Rx(roll)
-        R_x = np.array([[1, 0, 0],
-                        [0, np.cos(roll), -np.sin(roll)],
-                        [0, np.sin(roll), np.cos(roll)]])
-        
-        R_y = np.array([[np.cos(pitch), 0, np.sin(pitch)],
-                        [0, 1, 0],
-                        [-np.sin(pitch), 0, np.cos(pitch)]])
-        
-        R_z = np.array([[np.cos(yaw), -np.sin(yaw), 0],
-                        [np.sin(yaw), np.cos(yaw), 0],
-                        [0, 0, 1]])
-        
-        return R_z @ R_y @ R_x
-    
-    def get_camera_transform_chain(self, camera_link='head_camera_rgb_frame'):
-        """Get complete transform chain from base_link to camera"""
-        # Define Fetch robot kinematic chain: base_link -> torso_lift_link -> head_pan_link -> head_tilt_link -> head_camera_link -> head_camera_rgb_frame
-        chain = [
-            'torso_lift_joint',    # base_link -> torso_lift_link
-            'head_pan_joint',      # torso_lift_link -> head_pan_link  
-            'head_tilt_joint',     # head_pan_link -> head_tilt_link
-            'head_camera_joint',   # head_tilt_link -> head_camera_link
-            'head_camera_rgb_joint' # head_camera_link -> head_camera_rgb_frame
-        ]
-        
-        # Calculate cumulative transform
-        cumulative_transform = np.eye(4)
-        for joint_name in chain:
-            if joint_name in self.joint_transforms:
-                cumulative_transform = cumulative_transform @ self.joint_transforms[joint_name]['transform']
-            else:
-                logging.warning(f"Joint '{joint_name}' not found in URDF")
-        
-        return cumulative_transform
-    
-    def get_camera_position_and_orientation(self, robot_transform):
-        """Get camera position and orientation in world coordinates"""
-        try:
-            # Get camera transform relative to robot base
-            camera_transform = self.get_camera_transform_chain()
-            
-            # Apply robot world transform
-            world_camera_transform = robot_transform @ camera_transform
-            
-            # Extract position
-            position = world_camera_transform[:3, 3]
-            
-            # Extract rotation matrix and convert to quaternion
-            rotation_matrix = world_camera_transform[:3, :3]
-            quaternion = self._rotation_matrix_to_quaternion(rotation_matrix)
-            
-            return position, quaternion
-            
-        except Exception as e:
-            logging.error(f"Failed to get camera transform: {e}")
-            return None, None
-    
-    def _rotation_matrix_to_quaternion(self, R):
-        """Convert rotation matrix to quaternion [x, y, z, w]"""
-        trace = np.trace(R)
-        if trace > 0:
-            s = np.sqrt(trace + 1.0) * 2
-            w = 0.25 * s
-            x = (R[2, 1] - R[1, 2]) / s
-            y = (R[0, 2] - R[2, 0]) / s
-            z = (R[1, 0] - R[0, 1]) / s
-        elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-            s = np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
-            w = (R[2, 1] - R[1, 2]) / s
-            x = 0.25 * s
-            y = (R[0, 1] + R[1, 0]) / s
-            z = (R[0, 2] + R[2, 0]) / s
-        elif R[1, 1] > R[2, 2]:
-            s = np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
-            w = (R[0, 2] - R[2, 0]) / s
-            x = (R[0, 1] + R[1, 0]) / s
-            y = 0.25 * s
-            z = (R[1, 2] + R[2, 1]) / s
-        else:
-            s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
-            w = (R[1, 0] - R[0, 1]) / s
-            x = (R[0, 2] + R[2, 0]) / s
-            y = (R[1, 2] + R[2, 1]) / s
-            z = 0.25 * s
-        
-        return np.array([x, y, z, w])
-
-# --- Matrix4 Utilities ---
-def safe_matrix4_to_numpy(matrix4: mn.Matrix4) -> np.ndarray:
-    """Safely convert Magnum Matrix4 to numpy array"""
-    try:
-        # Try the new API first
-        if hasattr(matrix4, 'data'):
-            return np.array(matrix4.data()).reshape(4, 4).T  # magnum is column-major, need transpose
-        else:
-            # Fallback to manual extraction
-            result = np.zeros((4, 4))
-            for i in range(4):
-                for j in range(4):
-                    result[i, j] = matrix4[i, j]
-            return result
-    except Exception as e:
-        logging.warning(f"Matrix4 conversion failed: {e}, using identity matrix")
-        return np.eye(4)
-
-def safe_quaternion_to_numpy(quat) -> np.ndarray:
-    """Safely convert various quaternion formats to numpy array [x, y, z, w]"""
-    try:
-        if isinstance(quat, np.ndarray):
-            return quat.astype(np.float32)
-        elif hasattr(quat, 'vector') and hasattr(quat, 'scalar'):
-            # Magnum Quaternion
-            vec = quat.vector
-            return np.array([vec.x, vec.y, vec.z, quat.scalar], dtype=np.float32)
-        elif hasattr(quat, '__len__') and len(quat) == 4:
-            return np.array(quat, dtype=np.float32)
-        else:
-            # Default identity quaternion
-            return np.array([0, 0, 0, 1], dtype=np.float32)
-    except Exception as e:
-        logging.warning(f"Quaternion conversion failed: {e}, using identity")
-        return np.array([0, 0, 0, 1], dtype=np.float32)
 
 # --- Utility: Logger Setup ---
 def setup_logger(log_path: str) -> logging.Logger:
@@ -230,17 +65,6 @@ class VideoRecorder:
             self.config['output_dir'], f"{self.agent_id}_output.mp4"
         )
         
-        # Initialize URDF parser for physical robots
-        self.urdf_parser = None
-        agent_idx = next(i for i, agent in enumerate(config['agents']) if agent['agent_id'] == agent_id)
-        agent_config = config['agents'][agent_idx]
-        if 'urdf_path' in agent_config and agent_config['urdf_path']:
-            try:
-                self.urdf_parser = URDFCameraParser(agent_config['urdf_path'])
-                self.logger.info(f"[{agent_id}] URDF parser initialized for camera positioning")
-            except Exception as e:
-                self.logger.warning(f"[{agent_id}] Failed to initialize URDF parser: {e}")
-        
         # Pre-load font
         try:
             self.font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
@@ -252,14 +76,12 @@ class VideoRecorder:
         if not self.video_config['enabled']:
             return
 
-        # 1. Get FPV observation - handle URDF robots properly
-        try:
-            fpv_image_np = self._get_fpv_observation(sim, agent_idx)
-            fpv_pil = Image.fromarray(fpv_image_np[..., :3], "RGB")
-        except Exception as e:
-            self.logger.warning(f"[{self.agent_id}] Failed to get FPV observation: {e}")
-            # Fallback to black image
-            fpv_pil = Image.new('RGB', (640, 480), (0, 0, 0))
+        # 1. Get FPV observation from the agent's sensor
+        agent_config = self.config['agents'][agent_idx]
+        fpv_sensor_uuid = agent_config['fpv_sensor_uuid']
+        observations = sim.get_sensor_observations(agent_index=agent_idx)
+        fpv_image_np = observations[fpv_sensor_uuid]
+        fpv_pil = Image.fromarray(fpv_image_np[..., :3], "RGB")
 
         # 2. Prepare the map view
         map_image = self.base_map.copy()
@@ -277,98 +99,6 @@ class VideoRecorder:
         combined_frame = Image.new('RGB', (vid_w, vid_h))
         combined_frame.paste(fpv_resized, (0, 0))
         combined_frame.paste(map_resized, (fpv_w, 0))
-
-        self.frames.append(np.array(combined_frame))
-
-    def _get_fpv_observation(self, sim: habitat_sim.Simulator, agent_idx: int) -> np.ndarray:
-        """Get FPV observation, using URDF robot camera position if available"""
-        agent_config = self.config['agents'][agent_idx]
-        fpv_sensor_uuid = agent_config['fpv_sensor_uuid']
-        
-        # Check if this is a physical URDF robot
-        if self.urdf_parser and 'urdf_path' in agent_config:
-            try:
-                return self._get_urdf_robot_observation(sim, agent_idx, fpv_sensor_uuid)
-            except Exception as e:
-                self.logger.warning(f"⚠️ URDF-based camera failed: {e}")
-                self.logger.warning("⚠️ FPV fallback - System falls back to virtual agent observations")
-        
-        # Fallback to standard sensor observation
-        observations = sim.get_sensor_observations(agent_index=agent_idx)
-        return observations[fpv_sensor_uuid]
-    
-    def _get_urdf_robot_observation(self, sim: habitat_sim.Simulator, agent_idx: int, sensor_uuid: str) -> np.ndarray:
-        """Get observation from URDF robot camera with proper positioning"""
-        try:
-            # Get robot object if it exists
-            robot_obj = None
-            if hasattr(sim, 'get_rigid_object_manager'):
-                rigid_obj_mgr = sim.get_rigid_object_manager()
-                # Find robot object by name/id
-                robot_id = self.config['agents'][agent_idx]['agent_id']
-                for obj_id in rigid_obj_mgr.get_object_handles():
-                    obj = rigid_obj_mgr.get_object_by_handle(obj_id)
-                    if robot_id in obj_id or str(agent_idx) in obj_id:
-                        robot_obj = obj
-                        break
-            
-            if robot_obj is None:
-                # No physical robot found, use agent state
-                agent_state = sim.get_agent(agent_idx).state
-                robot_transform = np.eye(4)
-                robot_transform[:3, 3] = agent_state.position
-                quat_array = safe_quaternion_to_numpy(agent_state.rotation)
-                robot_transform[:3, :3] = self._quaternion_to_rotation_matrix(quat_array)
-            else:
-                # Get robot transformation matrix
-                robot_transform_matrix = robot_obj.transformation
-                robot_transform = safe_matrix4_to_numpy(robot_transform_matrix)
-            
-            # Get camera position and orientation using URDF
-            camera_position, camera_orientation = self.urdf_parser.get_camera_position_and_orientation(robot_transform)
-            
-            if camera_position is not None and camera_orientation is not None:
-                # Create temporary agent state with camera pose
-                camera_agent_state = habitat_sim.AgentState()
-                camera_agent_state.position = mn.Vector3(camera_position)
-                
-                # Convert quaternion to Magnum Quaternion
-                quat_norm = np.linalg.norm(camera_orientation)
-                if quat_norm > 0:
-                    camera_orientation = camera_orientation / quat_norm
-                camera_agent_state.rotation = mn.Quaternion(
-                    mn.Vector3(camera_orientation[0], camera_orientation[1], camera_orientation[2]), 
-                    camera_orientation[3]
-                )
-                
-                # Temporarily set agent to camera position
-                original_state = sim.get_agent(agent_idx).state
-                sim.get_agent(agent_idx).set_state(camera_agent_state, reset_sensors=False)
-                
-                # Get observation
-                observations = sim.get_sensor_observations(agent_index=agent_idx)
-                observation = observations[sensor_uuid]
-                
-                # Restore original state
-                sim.get_agent(agent_idx).set_state(original_state, reset_sensors=False)
-                
-                self.logger.debug(f"[{self.agent_id}] Got URDF-based camera observation from position: {camera_position}")
-                return observation
-            else:
-                raise Exception("Failed to get camera transform from URDF")
-                
-        except Exception as e:
-            self.logger.error(f"⚠️ Matrix4 conversion error - The URDF-based camera parsing has a technical issue with Magnum Matrix4 data access: {e}")
-            raise e
-    
-    def _quaternion_to_rotation_matrix(self, q):
-        """Convert quaternion [x, y, z, w] to rotation matrix"""
-        x, y, z, w = q
-        return np.array([
-            [1 - 2*(y**2 + z**2), 2*(x*y - z*w), 2*(x*z + y*w)],
-            [2*(x*y + z*w), 1 - 2*(x**2 + z**2), 2*(y*z - x*w)],
-            [2*(x*z - y*w), 2*(y*z + x*w), 1 - 2*(x**2 + y**2)]
-        ])
 
         self.frames.append(np.array(combined_frame))
 
@@ -691,12 +421,10 @@ class MultiAgentSimulator:
             h_agent_cfg = habitat_sim.agent.AgentConfiguration()
             h_agent_cfg.name = agent_cfg_data['agent_id']
             
-            # Load agent model - handle URDF robots properly
-            if 'urdf_path' in agent_cfg_data and agent_cfg_data['urdf_path']:
-                h_agent_cfg.urdf_path = agent_cfg_data['urdf_path']
-                self.logger.info(f"Loading URDF robot: {agent_cfg_data['urdf_path']}")
+            # Load agent model
+            h_agent_cfg.urdf_path = agent_cfg_data['urdf_path']
             
-            # Configure sensors - avoid hardcoded orientation for URDF robots
+            # Configure sensors
             h_agent_cfg.sensor_specifications = []
             for sensor_data in agent_cfg_data['sensors']:
                 sensor_spec = habitat_sim.CameraSensorSpec()
@@ -704,23 +432,7 @@ class MultiAgentSimulator:
                 sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
                 sensor_spec.resolution = sensor_data['resolution']
                 sensor_spec.position = sensor_data['position']
-                
-                # For URDF robots, don't set hardcoded orientation - it will be calculated dynamically
-                if 'urdf_path' not in agent_cfg_data or not agent_cfg_data['urdf_path']:
-                    # Only set orientation for non-URDF agents
-                    if 'orientation' in sensor_data:
-                        try:
-                            sensor_spec.orientation = sensor_data['orientation']
-                        except Exception as e:
-                            self.logger.warning(f"Failed to set sensor orientation: {e}, using default")
-                            sensor_spec.orientation = [0.0, 0.0, 0.0]
-                    else:
-                        sensor_spec.orientation = [0.0, 0.0, 0.0]
-                else:
-                    # For URDF robots, use default orientation - will be overridden by URDF parsing
-                    sensor_spec.orientation = [0.0, 0.0, 0.0]
-                    self.logger.info(f"URDF robot sensor orientation will be calculated dynamically")
-                
+                sensor_spec.orientation = sensor_data['orientation']
                 sensor_spec.hfov = sensor_data['hfov']
                 h_agent_cfg.sensor_specifications.append(sensor_spec)
             agent_configs.append(h_agent_cfg)
@@ -749,7 +461,6 @@ class MultiAgentSimulator:
         self.logger.info("Setting initial agent states...")
         for i, agent_controller in enumerate(self.agents):
             agent_id = agent_controller.agent_id
-            agent_config = self.config['agents'][i]
             state_to_set = None
 
             # Priority 1: Resume from state file
@@ -757,28 +468,15 @@ class MultiAgentSimulator:
                 state_data = self.resume_state[agent_id]
                 state_to_set = habitat_sim.AgentState()
                 state_to_set.position = np.array(state_data['position'])
-                
-                # Safe quaternion handling
-                try:
-                    rotation_data = state_data['rotation']
-                    if len(rotation_data) == 4:
-                        state_to_set.rotation = mn.Quaternion(
-                            mn.Vector3(rotation_data[0], rotation_data[1], rotation_data[2]), 
-                            rotation_data[3]
-                        )
-                    else:
-                        state_to_set.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
-                except Exception as e:
-                    self.logger.warning(f"[{agent_id}] Failed to set rotation from state: {e}")
-                    state_to_set.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
-                
+                state_to_set.rotation = mn.Quaternion(
+                    mn.Vector3(state_data['rotation'][0:3]), state_data['rotation'][3]
+                )
                 self.logger.info(f"[{agent_id}] Resuming from saved state.")
 
             # Priority 2: Use initial state from config
             else:
-                initial_state_data = agent_config['initial_state']
+                initial_state_data = self.config['agents'][i]['initial_state']
                 pos = initial_state_data['position']
-                
                 # Snap to a valid navigable point
                 snapped_pos = self.sim.pathfinder.snap_point(pos)
                 if np.linalg.norm(np.array(pos) - np.array(snapped_pos)) > 1.0:
@@ -786,47 +484,11 @@ class MultiAgentSimulator:
                 
                 state_to_set = habitat_sim.AgentState()
                 state_to_set.position = snapped_pos
-                
-                # Set rotation from config if available
-                if 'rotation' in initial_state_data:
-                    try:
-                        rotation_data = initial_state_data['rotation']
-                        if len(rotation_data) == 4:
-                            state_to_set.rotation = mn.Quaternion(
-                                mn.Vector3(rotation_data[0], rotation_data[1], rotation_data[2]), 
-                                rotation_data[3]
-                            )
-                        else:
-                            state_to_set.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
-                    except Exception as e:
-                        self.logger.warning(f"[{agent_id}] Failed to set rotation from config: {e}")
-                        state_to_set.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
-                else:
-                    # Default rotation
-                    state_to_set.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
-                
+                # Default rotation (can be added to config)
+                state_to_set.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
                 self.logger.info(f"[{agent_id}] Placed at initial config position {snapped_pos}.")
 
-            # Set agent state with error handling
-            try:
-                self.sim.get_agent(i).set_state(state_to_set, reset_sensors=False)
-                
-                # For URDF robots, we may need additional setup
-                if 'urdf_path' in agent_config and agent_config['urdf_path']:
-                    self.logger.info(f"[{agent_id}] URDF robot initialized at position {state_to_set.position}")
-                    
-            except Exception as e:
-                self.logger.error(f"[{agent_id}] Failed to set initial state: {e}")
-                # Try with default state
-                try:
-                    default_state = habitat_sim.AgentState()
-                    default_state.position = np.array([0.0, 0.0, 0.0])
-                    default_state.rotation = mn.Quaternion.rotation(mn.Deg(0.0), mn.Vector3.y_axis())
-                    self.sim.get_agent(i).set_state(default_state, reset_sensors=False)
-                    self.logger.warning(f"[{agent_id}] Set to default state due to initialization error")
-                except Exception as e2:
-                    self.logger.error(f"[{agent_id}] Failed to set even default state: {e2}")
-            
+            self.sim.get_agent(i).set_state(state_to_set,-1,False)
             agent_controller.start_next_action()
             
     def run_simulation(self):
@@ -867,31 +529,20 @@ class MultiAgentSimulator:
                 self.logger.warning(f"Reason: {reason}")
                 break
 
-            # 4. If no collision, execute the move with safe state handling
+            # 4. If no collision, execute the move
             for i, state in enumerate(proposed_states):
-                try:
-                    # Snap Y-coordinate to navmesh to prevent falling
-                    snapped_pos = self.sim.pathfinder.snap_point(state.position)
-                    state.position[1] = snapped_pos[1]
-                    
-                    # Safe state setting with error handling
-                    self.sim.get_agent(i).set_state(state, reset_sensors=False)
-                    
-                except Exception as e:
-                    agent_id = self.config['agents'][i]['agent_id']
-                    self.logger.warning(f"[{agent_id}] Failed to update state: {e}")
-                    # Keep current state if update fails
+                # Snap Y-coordinate to navmesh to prevent falling
+                snapped_pos = self.sim.pathfinder.snap_point(state.position)
+                state.position[1] = snapped_pos[1]
+                self.sim.get_agent(i).set_state(state, reset_sensors=False)
 
             # 5. Step physics
             self.sim.step_physics(time_step)
             sim_time += time_step
 
-            # 6. Capture video frames with error handling
+            # 6. Capture video frames
             for agent in self.agents:
-                try:
-                    agent.video_recorder.capture_frame(self.sim, agent.agent_idx, self.scene_bounds)
-                except Exception as e:
-                    self.logger.warning(f"[{agent.agent_id}] Failed to capture video frame: {e}")
+                agent.video_recorder.capture_frame(self.sim, agent.agent_idx, self.scene_bounds)
 
         else: # Loop finished due to timeout
             self.logger.warning(f"====== Simulation Halted: Max duration of {max_duration}s reached. ======")
