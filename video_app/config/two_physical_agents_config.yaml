@@ -1,0 +1,121 @@
+# Two Physical Agents Configuration
+# 两个物理智能体配置文件
+
+# 场景配置
+scene:
+  # 场景数据集路径
+  scene_dataset_path: "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/apartment_1.glb"
+  # 具体场景ID（如果为null，将使用scene_dataset_path指定的场景）
+  scene_id: null
+  
+# 模拟器配置
+simulator:
+  # GPU设备ID
+  gpu_device_id: 0
+  # 是否启用物理引擎
+  enable_physics: true
+  # 随机种子
+  random_seed: 1
+  # 是否启用重力
+  enable_gfx_replay_save: false
+
+# 智能体配置列表
+agents:
+  - id: "agent_0"
+    # 智能体模型路径 - 使用真实的Fetch机器人
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    # 传感器配置
+    sensors:
+      color_sensor:
+        sensor_type: "COLOR"
+        resolution: [512, 512]  # [height, width]
+        position: [0.0, 1.5, 0.0]  # [x, y, z] relative to agent
+        hfov: 90.0  # horizontal field of view in degrees
+      depth_sensor:
+        sensor_type: "DEPTH" 
+        resolution: [512, 512]
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+    # 动作配置
+    action_space:
+      move_forward:
+        amount: 0.25  # 每步25cm
+      move_backward:
+        amount: 0.25
+      turn_left:
+        amount: 10.0  # 每次转10度
+      turn_right:
+        amount: 10.0
+    # 初始位置（将从动作序列的第一个move_to动作中获取）
+    initial_position: null
+    initial_rotation: [0, 0, 0, 1]  # quaternion [x, y, z, w]
+
+  - id: "agent_1"
+    # 智能体模型路径 - 使用真实的Fetch机器人
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    sensors:
+      color_sensor:
+        sensor_type: "COLOR"
+        resolution: [512, 512]
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+      depth_sensor:
+        sensor_type: "DEPTH"
+        resolution: [512, 512] 
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+    action_space:
+      move_forward:
+        amount: 0.25
+      move_backward:
+        amount: 0.25
+      turn_left:
+        amount: 10.0
+      turn_right:
+        amount: 10.0
+    initial_position: null
+    initial_rotation: [0, 0, 0, 1]
+
+# 碰撞检测配置
+collision_detection:
+  enabled: false  # 暂时禁用碰撞检测以完成演示
+  agent_radius: 0.4  # 智能体半径（米）
+  height_threshold: 0.3  # 高度差阈值
+  prediction_steps: 3  # 预测步数
+  min_agent_distance: 1.5  # 智能体间最小距离（稍大一些以避免碰撞）
+
+# 视频输出配置
+video_output:
+  output_dir: "./outputs/two_agents_test"
+  fps: 24  # 较高的帧率以获得更流畅的视频
+  resolution: [720, 1280]  # [height, width] - 更高的分辨率
+  codec: "XVID"  # 使用更兼容的编解码器
+  save_frames: false  # 不保存单独的帧文件
+
+# 地图配置
+map_config:
+  resolution: 1024  # 更高分辨率的地图
+  show_grid: true
+  grid_interval: 1.0
+  agent_marker_size: 8
+  agent_marker_color: [255, 0, 0]  # 红色标记
+  direction_arrow_length: 15
+
+# 运动配置
+movement:
+  linear_speed: 1.0  # 线性速度（米/秒）
+  angular_speed: 30.0  # 角度速度（度/秒）
+  time_step: 0.05  # 更小的时间步长以获得更平滑的运动
+  path_interpolation_points: 20  # 更多的插值点
+
+# 日志配置
+logging:
+  log_file: "./outputs/two_agents_test/two_agents_navigation.log"
+  log_level: "INFO"
+  console_output: true
+
+# 状态持久化配置
+state_persistence:
+  state_file: "./outputs/two_agents_test/agent_states.json"
+  save_after_each_action: true
+  save_final_state: true

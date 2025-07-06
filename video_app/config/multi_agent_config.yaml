@@ -1,0 +1,171 @@
+# Multi-Agent Navigation Configuration
+# 多智能体导航配置文件
+
+# 场景配置
+scene:
+  # 场景数据集路径 - 使用直接的GLB文件路径更简单可靠
+  scene_dataset_path: "data/scene_datasets/habitat-test-scenes/apartment_1.glb"
+  # 具体场景ID（如果为null，将使用scene_dataset_path指定的场景）
+  scene_id: null
+  
+# 模拟器配置
+simulator:
+  # GPU设备ID
+  gpu_device_id: 0
+  # 是否启用物理引擎
+  enable_physics: true
+  # 随机种子
+  random_seed: 1
+  # 是否启用重力
+  enable_gfx_replay_save: false
+
+# 智能体配置列表
+agents:
+  - id: "agent_0"
+    # 智能体模型路径（如果为null，使用默认的虚拟智能体）
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    # 传感器配置
+    sensors:
+      color_sensor:
+        sensor_type: "COLOR"
+        resolution: [512, 512]  # [height, width]
+        position: [0.0, 1.5, 0.0]  # [x, y, z] relative to agent
+        hfov: 90.0  # horizontal field of view in degrees
+      depth_sensor:
+        sensor_type: "DEPTH" 
+        resolution: [512, 512]
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+    # 动作配置
+    action_space:
+      move_forward:
+        amount: 0.25  # 每步25cm
+      move_backward:
+        amount: 0.25
+      turn_left:
+        amount: 10.0  # 每次转10度
+      turn_right:
+        amount: 10.0
+    # 初始位置（如果为null，将从动作序列的第一个move_to动作中获取）
+    initial_position: null
+    initial_rotation: [0, 0, 0, 1]  # quaternion [x, y, z, w]
+
+  - id: "agent_1"
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    sensors:
+      color_sensor:
+        sensor_type: "COLOR"
+        resolution: [512, 512]
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+      depth_sensor:
+        sensor_type: "DEPTH"
+        resolution: [512, 512] 
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+    action_space:
+      move_forward:
+        amount: 0.25
+      move_backward:
+        amount: 0.25
+      turn_left:
+        amount: 10.0
+      turn_right:
+        amount: 10.0
+    initial_position: null
+    initial_rotation: [0, 0, 0, 1]
+
+  - id: "agent_2"
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    sensors:
+      color_sensor:
+        sensor_type: "COLOR"
+        resolution: [512, 512]
+        position: [0.0, 1.5, 0.0]
+        hfov: 90.0
+      depth_sensor:
+        sensor_type: "DEPTH"
+        resolution: [512, 512]
+        position: [0.0, 1.5, 0.0] 
+        hfov: 90.0
+    action_space:
+      move_forward:
+        amount: 0.25
+      move_backward:
+        amount: 0.25
+      turn_left:
+        amount: 10.0
+      turn_right:
+        amount: 10.0
+    initial_position: null
+    initial_rotation: [0, 0, 0, 1]
+
+# 碰撞检测配置
+collision_detection:
+  # 是否启用碰撞检测
+  enabled: true
+  # 智能体半径（米）
+  agent_radius: 0.1
+  # 高度阈值（忽略低于此高度的障碍物）
+  height_threshold: 0.3
+  # 预测步数（提前多少步预测碰撞）
+  prediction_steps: 1
+  # 最小安全距离（智能体之间的最小距离）
+  min_agent_distance: 0.8
+
+# 视频输出配置
+video_output:
+  # 输出目录
+  output_dir: "./outputs"
+  # 视频帧率
+  fps: 30
+  # 视频分辨率
+  resolution: [1024, 2048]  # [height, width] - 左右分屏
+  # 视频编码器
+  codec: "mp4v"
+  # 是否保存单独的帧图像
+  save_frames: false
+
+# 地图配置
+map_config:
+  # 地图分辨率
+  resolution: 1024
+  # 是否显示网格
+  show_grid: true
+  # 网格间隔（米）
+  grid_interval: 1.0
+  # 智能体标记大小
+  agent_marker_size: 8
+  # 智能体标记颜色（RGB）
+  agent_marker_color: [255, 0, 0]
+  # 智能体方向箭头长度
+  direction_arrow_length: 15
+
+# 运动参数
+movement:
+  # 移动速度（米/秒）
+  linear_speed: 1.0
+  # 旋转速度（度/秒）
+  angular_speed: 30.0
+  # 时间步长（秒）
+  time_step: 0.033  # ~30fps
+  # 路径插值点数
+  path_interpolation_points: 20
+
+# 日志配置
+logging:
+  # 日志文件路径
+  log_file: "./outputs/multi_agent_nav.log"
+  # 日志级别 (DEBUG, INFO, WARNING, ERROR)
+  log_level: "INFO"
+  # 是否在控制台输出日志
+  console_output: true
+
+# 状态保存配置
+state_persistence:
+  # 状态保存文件路径
+  state_file: "./outputs/agent_states.json"
+  # 是否在每个动作后保存状态
+  save_after_each_action: true
+  # 是否在模拟结束时保存最终状态
+  save_final_state: true

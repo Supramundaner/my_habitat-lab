@@ -1,0 +1,67 @@
+# 双智能体测试配置
+scene:
+  scene_dataset_path: "data/scene_datasets/habitat-test-scenes/apartment_1.glb"
+  scene_id: null
+
+simulator:
+  gpu_device_id: 0
+  enable_physics: true
+
+agents:
+  - id: "agent_walker"
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    initial_position: [4.0, -1.6, 3.0]  # 起始位置
+    initial_rotation: [0, 0, 0, 1]  # 默认朝向
+    sensors:
+      color_sensor:
+        position: [0.0, 1.5, 0.0]  # 传感器相对机器人的位置
+        resolution: [480, 640]  # [height, width]
+        hfov: 90
+
+  - id: "agent_spinner"
+    agent_model_path: "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    initial_position: [2.0, -1.6, 1.5]  # 起始位置
+    initial_rotation: [0, 0, 0, 1]  # 默认朝向
+    sensors:
+      color_sensor:
+        position: [0.0, 1.5, 0.0]  # 传感器相对机器人的位置
+        resolution: [480, 640]  # [height, width]
+        hfov: 90
+
+collision_detection:
+  enabled: false  # 暂时禁用碰撞检测以便观察完整动作
+  agent_radius: 0.4
+  height_threshold: 0.3
+  prediction_steps: 3
+  min_agent_distance: 1.5
+
+video_output:
+  output_dir: "./outputs/two_agents_test"
+  fps: 10
+  resolution: [480, 960]  # [height, width] - 分屏显示
+  codec: "XVID"
+  save_frames: false
+
+map_config:
+  resolution: 512
+  show_grid: true
+  grid_interval: 1.0
+  agent_marker_size: 8
+  agent_marker_color: [255, 0, 0]  # 红色标记
+  direction_arrow_length: 15
+
+movement:
+  linear_speed: 0.8  # 稍快的移动速度
+  angular_speed: 45.0  # 度/秒
+  time_step: 0.1
+  path_interpolation_points: 10
+
+logging:
+  log_file: "./outputs/two_agents_test/two_agents_test.log"
+  log_level: "INFO"
+  console_output: true
+
+state_persistence:
+  state_file: "./outputs/two_agents_test/agent_states.json"
+  save_after_each_action: true
+  save_final_state: true

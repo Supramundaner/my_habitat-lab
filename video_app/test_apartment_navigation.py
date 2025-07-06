@@ -124,11 +124,12 @@ def test_apartment_pathfinding():
         print("\n--- 路径搜索测试 ---")
         pathfinding_commands = [
             # 短距离移动
-            [4.0,2.77],
-            [0.0, 2.8],
-            [0.0,0.0],
             [2.0, 0.5],
-            ["left", 90],  # 左转
+            ["left", 90],  # 左转，
+            [2.0, 1.0],
+            ["left", 90],
+            [2.0, 2.0],
+            ["right", 180]
         ]
         
         video_path = generator.process_command_sequence(pathfinding_commands)
