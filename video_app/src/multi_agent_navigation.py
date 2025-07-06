@@ -1261,6 +1261,76 @@ class MultiAgentSimulator:
             logging.warning(f"Failed to get robot camera transform for {agent_id}: {e}")
             return None, None
     
+    def _get_robot_sensor_observation(self, agent_id: str, agent_state: AgentState) -> np.ndarray:
+        """从物理机器人的传感器获取第一人称观察"""
+        try:
+            # 获取物理机器人对象
+            robot_obj = self.agent_robots.get(agent_id)
+            if robot_obj is None:
+                logging.warning(f"No physical robot for {agent_id}, using fallback")
+                return self._get_virtual_agent_observation(agent_id, agent_state)
+            
+            # 获取机器人的变换矩阵
+            robot_transform_matrix = self._get_robot_transform_matrix(robot_obj)
+            if robot_transform_matrix is None:
+                logging.warning(f"Failed to get robot transform matrix for {agent_id}")
+                return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
+            
+            # 获取摄像头的位置和朝向
+            camera_position, camera_orientation = self._get_robot_camera_transform(agent_id, robot_transform_matrix)
+            
+            if camera_position is None or camera_orientation is None:
+                logging.warning(f"Failed to calculate camera transform for {agent_id}")
+                return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
+            
+            # 设置虚拟智能体到摄像头位置并获取观察
+            agent_node = self.simulator.get_agent(0)._body.object  # 获取默认智能体
+            
+            # 保存原始位置和朝向
+            original_translation = agent_node.translation
+            original_rotation = agent_node.rotation
+            
+            try:
+                # 临时设置智能体位置到摄像头位置
+                agent_node.translation = mn.Vector3(camera_position[0], camera_position[1], camera_position[2])
+                
+                # 设置朝向（quaternion转换为rotation）
+                quat = mn.Quaternion(mn.Vector3(camera_orientation[0], camera_orientation[1], camera_orientation[2]), camera_orientation[3])
+                agent_node.rotation = quat
+                
+                # 获取观察
+                observations = self.simulator.sim.get_sensor_observations()
+                color_obs = observations.get("color_sensor", observations.get("rgb", None))
+                
+                if color_obs is not None:
+                    # 确保图像格式正确
+                    if len(color_obs.shape) == 3 and color_obs.shape[2] == 3:
+                        # RGB format
+                        fpv_image = color_obs
+                    elif len(color_obs.shape) == 3 and color_obs.shape[2] == 4:
+                        # RGBA format, 移除alpha通道
+                        fpv_image = color_obs[:, :, :3]
+                    else:
+                        # 异常格式，创建默认图像
+                        fpv_image = np.zeros((480, 640, 3), dtype=np.uint8)
+                        logging.warning(f"Unexpected observation format for {agent_id}: {color_obs.shape}")
+                    
+                    logging.info(f"✓ Got robot sensor observation for {agent_id}: {fpv_image.shape}")
+                    return fpv_image
+                else:
+                    logging.warning(f"No color observation available for {agent_id}")
+                    return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
+                    
+            finally:
+                # 恢复原始位置和朝向
+                agent_node.translation = original_translation
+                agent_node.rotation = original_rotation
+                
+        except Exception as e:
+            logging.error(f"Failed to get robot sensor observation for {agent_id}: {e}")
+            logging.error(traceback.format_exc())
+            return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
+    
     def _get_robot_sensor_observation_fallback(self, agent_id: str, robot_obj) -> np.ndarray:
         """回退方法：使用简单的头部偏移来估计摄像头位置"""
         try:
