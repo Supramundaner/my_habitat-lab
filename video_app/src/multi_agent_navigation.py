@@ -18,6 +18,7 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
+import xml.etree.ElementTree as ET
 
 # 添加interactive_app的src路径以复用代码
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../src'))
@@ -490,6 +491,7 @@ class MultiAgentSimulator:
             
             # 创建视频写入器
             video_writers = self._create_video_writers()
+            self._current_video_writers = video_writers  # 存储供动画函数使用
             
             # 写入初始帧
             self._write_initial_frames(video_writers)
@@ -708,7 +710,7 @@ class MultiAgentSimulator:
         
         # 计算动画步数
         duration = distance / self.linear_speed
-        num_steps = max(1, int(duration / self.time_step))
+        num_steps = max(10, int(duration / self.time_step))  # 最少10步
         
         for step in range(num_steps + 1):
             t = step / num_steps if num_steps > 0 else 1.0
@@ -719,7 +721,14 @@ class MultiAgentSimulator:
             # 更新智能体位置（同时更新虚拟智能体和物理机器人）
             self._update_agent_pose(agent_id, current_pos)
             
-            # 这里可以添加帧捕获逻辑（如果需要更平滑的视频）
+            # 在运动过程中生成视频帧（每几步生成一帧）
+            if step % max(1, num_steps // 10) == 0:  # 生成约10个中间帧
+                try:
+                    video_writers = getattr(self, '_current_video_writers', None)
+                    if video_writers and agent_id in video_writers:
+                        self._write_video_frame(agent_id, video_writers[agent_id])
+                except Exception as e:
+                    logging.debug(f"Failed to write intermediate frame: {e}")
         
         logging.info(f"Agent {agent_id} moved to {target_pos}")
         return True
@@ -732,7 +741,7 @@ class MultiAgentSimulator:
         
         # 计算动画步数
         duration = abs(angle_deg) / self.angular_speed
-        num_steps = max(1, int(duration / self.time_step))
+        num_steps = max(10, int(duration / self.time_step))  # 最少10步
         
         # 将当前旋转转换为欧拉角
         current_rotation = agent_state.rotation
@@ -749,6 +758,15 @@ class MultiAgentSimulator:
             # 更新智能体旋转
             new_rotation = np.array([quat.vector.x, quat.vector.y, quat.vector.z, quat.scalar])
             self._update_agent_pose(agent_id, agent_state.position, new_rotation)
+            
+            # 在旋转过程中生成视频帧（每几步生成一帧）
+            if step % max(1, num_steps // 15) == 0:  # 生成约15个中间帧
+                try:
+                    video_writers = getattr(self, '_current_video_writers', None)
+                    if video_writers and agent_id in video_writers:
+                        self._write_video_frame(agent_id, video_writers[agent_id])
+                except Exception as e:
+                    logging.debug(f"Failed to write intermediate frame: {e}")
         
         logging.info(f"Agent {agent_id} rotated {angle_deg} degrees")
         return True
@@ -1160,45 +1178,38 @@ class MultiAgentSimulator:
                 robot_obj = self.agent_robots[agent_id]
                 
                 # 获取机器人的当前变换矩阵
-                robot_transform = robot_obj.transformation
+                robot_transform_matrix = robot_obj.transformation
                 
-                # 获取机器人的头部/传感器位置
-                # 对于Fetch机器人，头部传感器通常在基座上方约1.5米处
-                sensor_config = self.agent_configs_dict[agent_id]["sensors"]["color_sensor"]
-                sensor_offset = np.array(sensor_config["position"])  # [0.0, 1.5, 0.0]
+                # 将magnum Matrix4转换为numpy 4x4矩阵
+                robot_transform_np = np.array(robot_transform_matrix.data()).reshape(4, 4).T  # magnum是列主序，需要转置
                 
-                # 将传感器偏移应用到机器人位置
-                robot_position = robot_transform.translation
-                robot_rotation_matrix = robot_transform.rotation()
+                # 尝试使用URDF解析器获取精确的摄像头位置
+                sensor_position, sensor_orientation = self._get_robot_camera_transform(agent_id, robot_transform_np)
                 
-                # 计算传感器在世界坐标系中的位置
-                sensor_local = mn.Vector3(sensor_offset)
-                sensor_world_offset = robot_rotation_matrix * sensor_local
-                sensor_world_position = robot_position + sensor_world_offset
+                if sensor_position is not None and sensor_orientation is not None:
+                    # 使用URDF解析的摄像头位置和朝向
+                    sensor_agent_state = habitat_sim.AgentState()
+                    sensor_agent_state.position = mn.Vector3(sensor_position)
+                    
+                    # 确保四元数归一化
+                    quat_norm = np.linalg.norm(sensor_orientation)
+                    if quat_norm > 0:
+                        sensor_orientation = sensor_orientation / quat_norm
+                    sensor_agent_state.rotation = sensor_orientation.astype(np.float32)
+                    
+                    # 临时设置智能体状态并获取观察
+                    original_state = self.simulator.agent.get_state()
+                    self.simulator.agent.set_state(sensor_agent_state)
+                    observation = self.simulator.get_fpv_observation()
+                    self.simulator.agent.set_state(original_state)
+                    
+                    logging.info(f"Got URDF-based robot sensor observation from position: {sensor_position}")
+                    return observation
                 
-                # 计算传感器的朝向（机器人的朝向）
-                robot_quaternion = mn.Quaternion.from_matrix(robot_rotation_matrix)
-                
-                # 设置虚拟智能体到传感器位置以获取观察
-                sensor_agent_state = habitat_sim.AgentState()
-                sensor_agent_state.position = sensor_world_position
-                
-                # 将robot_quaternion转换为numpy数组格式
-                vec = robot_quaternion.vector
-                robot_quat_array = np.array([vec.x, vec.y, vec.z, robot_quaternion.scalar], dtype=np.float32)
-                quat_norm = np.linalg.norm(robot_quat_array)
-                if quat_norm > 0:
-                    robot_quat_array = robot_quat_array / quat_norm
-                sensor_agent_state.rotation = robot_quat_array
-                
-                # 临时设置智能体状态并获取观察
-                original_state = self.simulator.agent.get_state()
-                self.simulator.agent.set_state(sensor_agent_state)
-                observation = self.simulator.get_fpv_observation()
-                self.simulator.agent.set_state(original_state)  # 恢复原始状态
-                
-                logging.info(f"Got robot sensor observation from position: {sensor_world_position}")
-                return observation
+                else:
+                    # 回退到简单偏移方法
+                    logging.warning(f"URDF parsing failed for {agent_id}, using fallback method")
+                    return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
             
             else:
                 # 如果没有物理机器人，使用虚拟智能体位置
@@ -1257,3 +1268,106 @@ class MultiAgentSimulator:
             # 返回默认的黑色图像
             resolution = self.agent_configs[0]["sensors"]["color_sensor"]["resolution"]
             return np.zeros((resolution[0], resolution[1], 3), dtype=np.uint8)
+    
+
+class URDFCameraParser:
+    """解析URDF文件以获取机器人头部摄像头的真实位置和朝向"""
+    
+    def __init__(self, urdf_path: str):
+        self.urdf_path = urdf_path
+        self.tree = ET.parse(urdf_path)
+        self.root = self.tree.getroot()
+        self.joint_transforms = {}
+        self._parse_joints()
+    
+    def _parse_joints(self):
+        """解析所有关节的变换"""
+        for joint in self.root.findall('joint'):
+            joint_name = joint.get('name')
+            origin = joint.find('origin')
+            if origin is not None:
+                xyz = origin.get('xyz', '0 0 0').split()
+                rpy = origin.get('rpy', '0 0 0').split()
+                translation = np.array([float(x) for x in xyz])
+                rotation = np.array([float(x) for x in rpy])
+                
+                # 将RPY转换为旋转矩阵
+                rot_matrix = self._rpy_to_rotation_matrix(rotation)
+                
+                # 构建4x4变换矩阵
+                transform = np.eye(4)
+                transform[:3, :3] = rot_matrix
+                transform[:3, 3] = translation
+                
+                self.joint_transforms[joint_name] = {
+                    'transform': transform,
+                    'parent': joint.find('parent').get('link') if joint.find('parent') is not None else None,
+                    'child': joint.find('child').get('link') if joint.find('child') is not None else None
+                }
+    
+    def _rpy_to_rotation_matrix(self, rpy):
+        """将RPY角度转换为旋转矩阵"""
+        roll, pitch, yaw = rpy
+        
+        # 旋转矩阵 = Rz(yaw) * Ry(pitch) * Rx(roll)
+        R_x = np.array([[1, 0, 0],
+                        [0, np.cos(roll), -np.sin(roll)],
+                        [0, np.sin(roll), np.cos(roll)]])
+        
+        R_y = np.array([[np.cos(pitch), 0, np.sin(pitch)],
+                        [0, 1, 0],
+                        [-np.sin(pitch), 0, np.cos(pitch)]])
+        
+        R_z = np.array([[np.cos(yaw), -np.sin(yaw), 0],
+                        [np.sin(yaw), np.cos(yaw), 0],
+                        [0, 0, 1]])
+        
+        return R_z @ R_y @ R_x
+    
+    def get_camera_transform_chain(self, camera_link='head_camera_rgb_frame'):
+        """获取从base_link到摄像头的完整变换链"""
+        # 定义Fetch机器人的运动链：base_link -> torso_lift_link -> head_pan_link -> head_tilt_link -> head_camera_link -> head_camera_rgb_frame
+        chain = [
+            'torso_lift_joint',    # base_link -> torso_lift_link
+            'head_pan_joint',      # torso_lift_link -> head_pan_link  
+            'head_tilt_joint',     # head_pan_link -> head_tilt_link
+            'head_camera_joint',   # head_tilt_link -> head_camera_link
+            'head_camera_rgb_joint' # head_camera_link -> head_camera_rgb_frame
+        ]
+        
+        # 计算累积变换
+        cumulative_transform = np.eye(4)
+        for joint_name in chain:
+            if joint_name in self.joint_transforms:
+                cumulative_transform = cumulative_transform @ self.joint_transforms[joint_name]['transform']
+            else:
+                logging.warning(f"Joint '{joint_name}' not found in URDF")
+        
+        return cumulative_transform
+    
+    def get_camera_position_and_orientation(self, robot_transform):
+        """
+        获取摄像头在世界坐标系中的位置和朝向
+        
+        Args:
+            robot_transform: 机器人base_link在世界坐标系中的4x4变换矩阵
+            
+        Returns:
+            tuple: (position, orientation_quaternion)
+        """
+        # 获取从base_link到摄像头的变换
+        camera_local_transform = self.get_camera_transform_chain()
+        
+        # 计算摄像头在世界坐标系中的变换
+        camera_world_transform = robot_transform @ camera_local_transform
+        
+        # 提取位置
+        position = camera_world_transform[:3, 3]
+        
+        # 提取旋转矩阵并转换为四元数
+        rotation_matrix = camera_world_transform[:3, :3]
+        from scipy.spatial.transform import Rotation as R
+        rotation = R.from_matrix(rotation_matrix)
+        orientation_quaternion = rotation.as_quat()  # [x, y, z, w]
+        
+        return position, orientation_quaternion
