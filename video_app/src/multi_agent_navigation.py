@@ -1284,19 +1284,19 @@ class MultiAgentSimulator:
                 return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
             
             # 设置虚拟智能体到摄像头位置并获取观察
-            agent_node = self.simulator.get_agent(0)._body.object  # 获取默认智能体
+            agent = self.simulator.sim.get_agent(0)  # 获取默认智能体
             
-            # 保存原始位置和朝向
-            original_translation = agent_node.translation
-            original_rotation = agent_node.rotation
+            # 保存原始状态
+            original_state = agent.get_state()
             
             try:
-                # 临时设置智能体位置到摄像头位置
-                agent_node.translation = mn.Vector3(camera_position[0], camera_position[1], camera_position[2])
+                # 创建新的智能体状态
+                new_state = habitat_sim.AgentState()
+                new_state.position = camera_position
+                new_state.rotation = camera_orientation  # quaternion [x, y, z, w]
                 
-                # 设置朝向（quaternion转换为rotation）
-                quat = mn.Quaternion(mn.Vector3(camera_orientation[0], camera_orientation[1], camera_orientation[2]), camera_orientation[3])
-                agent_node.rotation = quat
+                # 设置智能体到摄像头位置
+                agent.set_state(new_state)
                 
                 # 获取观察
                 observations = self.simulator.sim.get_sensor_observations()
@@ -1322,9 +1322,8 @@ class MultiAgentSimulator:
                     return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
                     
             finally:
-                # 恢复原始位置和朝向
-                agent_node.translation = original_translation
-                agent_node.rotation = original_rotation
+                # 恢复原始状态
+                agent.set_state(original_state)
                 
         except Exception as e:
             logging.error(f"Failed to get robot sensor observation for {agent_id}: {e}")
