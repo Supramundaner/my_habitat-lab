@@ -103,10 +103,10 @@ class CollisionDetector:
     
     def __init__(self, config: Dict):
         self.enabled = config.get("enabled", True)
-        self.agent_radius = config.get("agent_radius", 0.4)
+        self.agent_radius = config.get("agent_radius", 0.1)
         self.height_threshold = config.get("height_threshold", 0.3)
         self.prediction_steps = config.get("prediction_steps", 3)
-        self.min_agent_distance = config.get("min_agent_distance", 0.8)
+        self.min_agent_distance = config.get("min_agent_distance", 0.4)
         
     def check_collision_with_environment(self, sim: habitat_sim.Simulator, 
                                        position: np.ndarray) -> bool:
@@ -117,21 +117,43 @@ class CollisionDetector:
         try:
             # 检查位置是否可导航
             test_point = mn.Vector3(position[0], position[1], position[2])
-            is_navigable = sim.pathfinder.is_navigable(test_point)
             
-            if not is_navigable:
-                return True
-                
-            # 检查周围一圈的可导航性（考虑智能体半径）
-            for angle in np.linspace(0, 2*np.pi, 8, endpoint=False):
-                check_x = position[0] + self.agent_radius * np.cos(angle)
-                check_z = position[2] + self.agent_radius * np.sin(angle)
-                check_point = mn.Vector3(check_x, position[1], check_z)
-                
-                if not sim.pathfinder.is_navigable(check_point):
-                    return True
+            # 首先检查原始位置是否可导航
+            is_original_navigable = sim.pathfinder.is_navigable(test_point)
+            
+            if is_original_navigable:
+                # 如果原始位置可导航，再检查周围一圈
+                for angle in np.linspace(0, 2*np.pi, 8, endpoint=False):
+                    check_x = position[0] + self.agent_radius * 0.8 * np.cos(angle)  # 使用80%半径
+                    check_z = position[2] + self.agent_radius * 0.8 * np.sin(angle)
+                    check_point = mn.Vector3(check_x, position[1], check_z)
                     
-            return False
+                    if not sim.pathfinder.is_navigable(check_point):
+                        return True  # 周围有不可导航点
+                        
+                return False  # 原始位置和周围都可导航
+            
+            else:
+                # 如果原始位置不可导航，尝试捕捉到最近的可导航点
+                snapped_point = sim.pathfinder.snap_point(test_point)
+                
+                # 检查捕捉后的点是否可导航
+                is_snapped_navigable = sim.pathfinder.is_navigable(snapped_point)
+                
+                if not is_snapped_navigable:
+                    return True  # 捕捉后仍不可导航
+                
+                # 检查捕捉距离，如果距离太远说明原位置确实有问题
+                snap_distance = np.linalg.norm(
+                    np.array([test_point.x, test_point.y, test_point.z]) - 
+                    np.array([snapped_point.x, snapped_point.y, snapped_point.z])
+                )
+                
+                # 放宽捕捉距离的阈值，只有距离很远才认为有碰撞
+                if snap_distance > self.agent_radius * 2.0:
+                    return True  # 捕捉距离过大
+                    
+                return False  # 捕捉距离可接受，认为安全
             
         except Exception as e:
             logging.warning(f"Environment collision check failed: {e}")
@@ -174,16 +196,29 @@ class CollisionDetector:
             else:
                 future_positions[agent_id] = current_pos
         
+        # 收集所有碰撞信息
+        environment_collisions = []
+        agent_collisions = []
+        
         # 检查与环境的碰撞
         for agent_id, future_pos in future_positions.items():
             if self.check_collision_with_environment(sim, future_pos):
-                return True, f"Agent {agent_id} will collide with environment"
+                environment_collisions.append(agent_id)
         
         # 检查智能体之间的碰撞
-        has_collision, collision_pairs = self.check_collision_between_agents(future_positions)
-        if has_collision:
-            pair_str = ", ".join([f"{a1}-{a2}" for a1, a2 in collision_pairs])
+        has_agent_collision, collision_pairs = self.check_collision_between_agents(future_positions)
+        if has_agent_collision:
+            agent_collisions = collision_pairs
+        
+        # 优先报告智能体碰撞，因为这是多智能体系统的核心关注点
+        if agent_collisions:
+            pair_str = ", ".join([f"{a1}-{a2}" for a1, a2 in agent_collisions])
             return True, f"Agent collision predicted: {pair_str}"
+        
+        # 然后报告环境碰撞
+        if environment_collisions:
+            agents_str = ", ".join(environment_collisions)
+            return True, f"Environment collision predicted for agents: {agents_str}"
         
         return False, ""
 
