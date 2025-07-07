@@ -17,9 +17,12 @@ from multi_agent_navigation import MultiAgentSimulator
 
 def create_safe_test_config():
     """创建安全的测试配置"""
+    # 获取项目根目录
+    habitat_root = Path(__file__).parent.parent
+    
     config = {
         "scene": {
-            "scene_dataset_path": "data/scene_datasets/habitat-test-scenes/apartment_1.glb"
+            "scene_dataset_path": str(habitat_root / "data/scene_datasets/habitat-test-scenes/apartment_1.glb")
         },
         "simulator": {
             "gpu_device_id": 0,
@@ -30,7 +33,7 @@ def create_safe_test_config():
                 "id": "agent_walker",
                 "initial_position": [5.0, 0.0, 4.0],  # 更远的起始位置
                 "initial_rotation": [0, 0, 0, 1],
-                "agent_model_path": "data/robots/hab_fetch/robots/hab_fetch.urdf",
+                "agent_model_path": str(habitat_root / "data/robots/hab_fetch/robots/hab_fetch.urdf"),
                 "sensors": {
                     "color_sensor": {
                         "resolution": [480, 640]
@@ -41,7 +44,7 @@ def create_safe_test_config():
                 "id": "agent_spinner", 
                 "initial_position": [1.0, 0.0, 1.0],  # 更远的起始位置
                 "initial_rotation": [0, 0, 0, 1],
-                "agent_model_path": "data/robots/hab_fetch/robots/hab_fetch.urdf",
+                "agent_model_path": str(habitat_root / "data/robots/hab_fetch/robots/hab_fetch.urdf"),
                 "sensors": {
                     "color_sensor": {
                         "resolution": [480, 640]

@@ -1887,19 +1887,36 @@ class CustomHabitatSimulator(HabitatSimulator):
             agent_state = habitat_sim.AgentState()
             agent_state.position = position
             
-            # 处理旋转 - 确保是正确的四元数格式
-            if len(rotation) == 4:
-                # 四元数格式 [x, y, z, w]
-                quat = mn.Quaternion(mn.Vector3(rotation[0], rotation[1], rotation[2]), rotation[3])
-                agent_state.rotation = quat
-            else:
-                # 默认旋转
-                agent_state.rotation = mn.Quaternion()
+            # 处理旋转 - 确保转换为正确格式
+            try:
+                if isinstance(rotation, mn.Quaternion):
+                    # 如果是Magnum Quaternion对象，转换为numpy数组
+                    rotation_array = np.array([
+                        rotation.vector.x, rotation.vector.y, rotation.vector.z, rotation.scalar
+                    ], dtype=np.float32)
+                    agent_state.rotation = rotation_array
+                elif hasattr(rotation, '__len__') and len(rotation) == 4:
+                    # 四元数格式 [x, y, z, w] - 确保转换为numpy数组
+                    rotation_array = np.array([
+                        float(rotation[0]), float(rotation[1]), float(rotation[2]), float(rotation[3])
+                    ], dtype=np.float32)
+                    agent_state.rotation = rotation_array
+                else:
+                    # 默认旋转 - 单位四元数
+                    agent_state.rotation = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            except Exception as rot_e:
+                print(f"  Rotation conversion error: {rot_e}")
+                # 使用默认旋转作为回退
+                agent_state.rotation = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
             
             # 设置智能体状态
             self.agent.set_state(agent_state)
             
         except Exception as e:
+            print(f"Warning: Failed to set agent state: {e}")
+            # 添加更多调试信息
+            print(f"  Position type: {type(position)}, value: {position}")
+            print(f"  Rotation type: {type(rotation)}, value: {rotation}")
             print(f"Warning: Failed to set agent state: {e}")
 
     def move_agent_to(self, position: np.ndarray, rotation: np.ndarray):

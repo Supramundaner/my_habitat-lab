@@ -786,24 +786,35 @@ class MultiAgentSimulator:
         # 使用平滑转向动画
         return self._animate_rotation(agent_id, turn_angle, simulator, agent_state)
 
-    def _update_agent_pose(self, agent_id: str, position: np.ndarray, rotation: np.ndarray):
+    def _update_agent_pose(self, agent_id: str, position: np.ndarray, rotation: Union[np.ndarray, mn.Quaternion]):
         """更新智能体的姿态（位置和旋转），包括物理机器人"""
+        # 确保rotation是numpy数组格式
+        if isinstance(rotation, mn.Quaternion):
+            # 如果rotation是Magnum Quaternion对象，转换为numpy数组
+            rotation_array = np.array([
+                rotation.vector.x, rotation.vector.y, rotation.vector.z, rotation.scalar
+            ], dtype=np.float32)
+            logging.debug(f"Converted Quaternion to array for {agent_id}")
+        else:
+            # 如果已经是数组，确保是正确的dtype
+            rotation_array = np.array(rotation, dtype=np.float32)
+        
         # 更新状态
         agent_state = self.agent_states[agent_id]
         agent_state.position = position
-        agent_state.rotation = rotation
+        agent_state.rotation = rotation_array
 
         # 更新Habitat Lab中的虚拟智能体
-        self.simulator.set_agent_state(position, rotation)
+        self.simulator.set_agent_state(position, rotation_array)
 
         # 如果有物理机器人，也更新它
         if agent_id in self.agent_robots:
             robot_obj = self.agent_robots[agent_id]
             
             try:
-                # 创建变换矩阵 - 修复矩阵计算
+                # 创建变换矩阵 - 使用数组格式的rotation
                 pos_vec = mn.Vector3(position[0], position[1], position[2])
-                quat = mn.Quaternion(mn.Vector3(rotation[0], rotation[1], rotation[2]), rotation[3])
+                quat = mn.Quaternion(mn.Vector3(rotation_array[0], rotation_array[1], rotation_array[2]), rotation_array[3])
                 
                 # 创建旋转矩阵和平移
                 rotation_matrix = mn.Matrix4.from_(quat.to_matrix(), mn.Vector3())
@@ -1335,28 +1346,6 @@ class MultiAgentSimulator:
             print()
         
         print("="*60)
-    
-    def _update_agent_pose(self, agent_id: str, position: np.ndarray, rotation: np.ndarray):
-        """更新智能体的姿态（位置和旋转），包括物理机器人"""
-        # 更新状态
-        agent_state = self.agent_states[agent_id]
-        agent_state.position = position
-        agent_state.rotation = rotation
-
-        # 更新Habitat Lab中的虚拟智能体
-        self.simulator.set_agent_state(position, rotation)
-
-        # 如果有物理机器人，也更新它
-        if agent_id in self.agent_robots:
-            robot_obj = self.agent_robots[agent_id]
-            
-            # 创建变换矩阵
-            translation = mn.Matrix4.translation(mn.Vector3(position))
-            quat = mn.Quaternion(mn.Vector3(rotation[:3]), rotation[3])
-            rotation_matrix = mn.Matrix4.from_(quat.to_rotation_matrix(), mn.Vector3())
-            
-            # 应用变换
-            robot_obj.transformation = translation @ rotation_matrix
     
     def _get_robot_sensor_observation(self, agent_id: str, agent_state: AgentState) -> np.ndarray:
         """从物理机器人的传感器位置获取观察"""
