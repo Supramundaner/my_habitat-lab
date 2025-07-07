@@ -111,13 +111,7 @@ def create_walker_spinner_actions():
         })
     
     # Spinner: 在[2.0, 1.3]位置旋转3个完整的360度
-    # 首先移动到指定位置
-    spinner_actions.append({
-        "action": "move_to",
-        "target": [2.0, 1.3]
-    })
-    
-    # 然后进行3次360度旋转
+    # Spinner is already at the target location, so we just need to rotate
     for rotation in range(3):
         spinner_actions.append({
             "action": "turn_left",
