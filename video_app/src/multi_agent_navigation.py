@@ -617,7 +617,7 @@ class MultiAgentSimulator:
                 if point_index >= 0:
                     current_positions[agent_id] = path[point_index]
 
-            # 检查环境碰撞
+            # 检查与环境的碰撞
             for agent_id, pos in current_positions.items():
                 if not self.simulator.sim.pathfinder.is_navigable(pos):
                     return True, f"Agent {agent_id} environment collision predicted at step {i}"
@@ -666,18 +666,10 @@ class MultiAgentSimulator:
 
     def _execute_step_actions(self, step_actions: Dict[str, ActionCommand], 
                             video_writers: Dict[str, cv2.VideoWriter]) -> bool:
-        """执行当前步骤的所有动作"""
+        """执行当前步骤的所有动作 - 并行同步执行"""
         try:
-            for agent_id, action in step_actions.items():
-                success = self._execute_single_action(agent_id, action)
-                if not success:
-                    logging.error(f"Failed to execute action for agent {agent_id}: {action}")
-                    return False
-                
-                # 写入视频帧
-                self._write_video_frame(agent_id, video_writers[agent_id])
-            
-            return True
+            # 并行同步执行所有智能体的动作
+            return self._execute_actions_parallel(step_actions, video_writers)
             
         except Exception as e:
             logging.error(f"Step action execution failed: {e}")
@@ -1472,3 +1464,290 @@ class MultiAgentSimulator:
             # 返回默认的黑色图像
             resolution = self.agent_configs[0]["sensors"]["color_sensor"]["resolution"]
             return np.zeros((resolution[0], resolution[1], 3), dtype=np.uint8)
+    
+    def _execute_actions_parallel(self, step_actions: Dict[str, ActionCommand], 
+                                 video_writers: Dict[str, cv2.VideoWriter]) -> bool:
+        """并行同步执行所有智能体的动作"""
+        try:
+            # 1. 分析每个智能体的动作，计算执行时间和步数
+            action_plans = {}
+            max_steps = 0
+            
+            for agent_id, action in step_actions.items():
+                agent_state = self.agent_states[agent_id]
+                plan = self._analyze_action_execution(agent_id, action, agent_state)
+                action_plans[agent_id] = plan
+                max_steps = max(max_steps, plan['total_steps'])
+            
+            logging.info(f"Parallel execution: {len(step_actions)} agents, max steps: {max_steps}")
+            
+            # 2. 同步执行所有智能体的动作
+            for step in range(max_steps):
+                # 在每个时间步，更新所有智能体的状态
+                for agent_id, plan in action_plans.items():
+                    if step < plan['total_steps']:
+                        # 计算当前步骤的插值状态
+                        current_state = self._interpolate_action_state(plan, step)
+                        
+                        # 更新智能体状态
+                        self._update_agent_pose(agent_id, current_state['position'], current_state['rotation'])
+                
+                # 为所有智能体写入同步的视频帧
+                for agent_id in step_actions.keys():
+                    if agent_id in video_writers:
+                        self._write_video_frame(agent_id, video_writers[agent_id])
+                
+                # 控制帧率 - 可选的时间延迟
+                # time.sleep(self.time_step)  # 如果需要实时播放效果
+            
+            # 3. 确保所有智能体都到达最终状态
+            for agent_id, plan in action_plans.items():
+                final_state = plan['final_state']
+                self._update_agent_pose(agent_id, final_state['position'], final_state['rotation'])
+                
+                # 记录完成
+                logging.info(f"Agent {agent_id} completed action: {step_actions[agent_id].action}")
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Parallel action execution failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _analyze_action_execution(self, agent_id: str, action: ActionCommand, 
+                                 agent_state: AgentState) -> Dict[str, Any]:
+        """分析动作执行计划，计算所需步数和轨迹"""
+        plan = {
+            'agent_id': agent_id,
+            'action': action,
+            'start_state': {
+                'position': agent_state.position.copy(),
+                'rotation': agent_state.rotation.copy()
+            },
+            'trajectory': [],
+            'total_steps': 0,
+            'final_state': None
+        }
+        
+        try:
+            if action.action == "move_to" and action.target:
+                # 计算move_to的轨迹
+                target_pos = self.simulator.get_position_with_navmesh_height(action.target[0], action.target[1])
+                if target_pos is not None:
+                    plan.update(self._plan_move_to_trajectory(agent_state, target_pos))
+                else:
+                    logging.warning(f"Agent {agent_id}: Target {action.target} not navigable")
+                    plan['total_steps'] = 1
+                    plan['final_state'] = plan['start_state'].copy()
+            
+            elif action.action == "move_forward" and action.distance:
+                # 计算move_forward的轨迹
+                plan.update(self._plan_move_forward_trajectory(agent_state, action.distance))
+            
+            elif action.action in ["turn_left", "turn_right"] and action.angle:
+                # 计算旋转的轨迹
+                turn_angle = action.angle if action.action == "turn_left" else -action.angle
+                plan.update(self._plan_rotation_trajectory(agent_state, turn_angle))
+            
+            else:
+                # 未知动作或无效参数
+                logging.warning(f"Agent {agent_id}: Unknown or invalid action: {action}")
+                plan['total_steps'] = 1
+                plan['final_state'] = plan['start_state'].copy()
+        
+        except Exception as e:
+            logging.error(f"Failed to analyze action for {agent_id}: {e}")
+            plan['total_steps'] = 1
+            plan['final_state'] = plan['start_state'].copy()
+        
+        return plan
+    
+    def _plan_move_to_trajectory(self, agent_state: AgentState, target_pos: np.ndarray) -> Dict[str, Any]:
+        """规划move_to动作的轨迹"""
+        current_pos = agent_state.position
+        current_rot = agent_state.rotation
+        
+        # 计算移动方向和距离
+        direction = target_pos - current_pos
+        direction[1] = 0  # 忽略Y轴
+        distance = np.linalg.norm(direction)
+        
+        if distance < 0.01:
+            return {
+                'total_steps': 1,
+                'trajectory': [{'position': current_pos, 'rotation': current_rot}],
+                'final_state': {'position': current_pos, 'rotation': current_rot}
+            }
+        
+        # 计算目标朝向
+        direction = direction / distance
+        target_angle = math.atan2(direction[0], direction[2]) + math.pi
+        target_rotation_quat = mn.Quaternion.rotation(mn.Rad(target_angle), mn.Vector3.y_axis())
+        target_rotation = np.array([target_rotation_quat.vector.x, target_rotation_quat.vector.y, 
+                                  target_rotation_quat.vector.z, target_rotation_quat.scalar])
+        
+        # 分为两个阶段：旋转 + 移动
+        rotation_steps = self._calculate_rotation_steps(current_rot, target_rotation)
+        movement_steps = max(30, int(distance / self.linear_speed / self.time_step))
+        
+        total_steps = rotation_steps + movement_steps
+        trajectory = []
+        
+        # 阶段1：旋转轨迹
+        for step in range(rotation_steps):
+            t = step / rotation_steps if rotation_steps > 0 else 1.0
+            interpolated_rot = self._interpolate_rotation(current_rot, target_rotation, t)
+            trajectory.append({
+                'position': current_pos.copy(),
+                'rotation': interpolated_rot
+            })
+        
+        # 阶段2：移动轨迹
+        for step in range(movement_steps):
+            t = step / movement_steps if movement_steps > 0 else 1.0
+            interpolated_pos = current_pos + (target_pos - current_pos) * t
+            trajectory.append({
+                'position': interpolated_pos,
+                'rotation': target_rotation.copy()
+            })
+        
+        return {
+            'total_steps': total_steps,
+            'trajectory': trajectory,
+            'final_state': {'position': target_pos, 'rotation': target_rotation}
+        }
+    
+    def _plan_move_forward_trajectory(self, agent_state: AgentState, distance: float) -> Dict[str, Any]:
+        """规划move_forward动作的轨迹"""
+        current_pos = agent_state.position
+        current_rot = agent_state.rotation
+        
+        # 计算前进方向
+        quat = mn.Quaternion(mn.Vector3(current_rot[0], current_rot[1], current_rot[2]), current_rot[3])
+        forward_dir = quat.transform_vector(mn.Vector3(0, 0, -1))
+        target_pos = current_pos + np.array([forward_dir.x, 0, forward_dir.z]) * distance
+        target_pos[1] = current_pos[1]  # 保持Y坐标
+        
+        # 检查目标位置是否可导航
+        test_point = mn.Vector3(target_pos[0], target_pos[1], target_pos[2])
+        snapped_point = self.simulator.sim.pathfinder.snap_point(test_point)
+        
+        if not self.simulator.sim.pathfinder.is_navigable(snapped_point):
+            # 目标不可导航，保持原位
+            return {
+                'total_steps': 1,
+                'trajectory': [{'position': current_pos, 'rotation': current_rot}],
+                'final_state': {'position': current_pos, 'rotation': current_rot}
+            }
+        
+        target_pos = np.array([snapped_point.x, snapped_point.y, snapped_point.z])
+        
+        # 计算移动步数
+        movement_steps = max(30, int(distance / self.linear_speed / self.time_step))
+        trajectory = []
+        
+        for step in range(movement_steps):
+            t = step / movement_steps if movement_steps > 0 else 1.0
+            interpolated_pos = current_pos + (target_pos - current_pos) * t
+            trajectory.append({
+                'position': interpolated_pos,
+                'rotation': current_rot.copy()
+            })
+        
+        return {
+            'total_steps': movement_steps,
+            'trajectory': trajectory,
+            'final_state': {'position': target_pos, 'rotation': current_rot}
+        }
+    
+    def _plan_rotation_trajectory(self, agent_state: AgentState, angle_deg: float) -> Dict[str, Any]:
+        """规划旋转动作的轨迹"""
+        current_pos = agent_state.position
+        current_rot = agent_state.rotation
+        
+        if abs(angle_deg) < 0.1:
+            return {
+                'total_steps': 1,
+                'trajectory': [{'position': current_pos, 'rotation': current_rot}],
+                'final_state': {'position': current_pos, 'rotation': current_rot}
+            }
+        
+        # 计算旋转步数
+        rotation_steps = max(15, int(abs(angle_deg) / self.angular_speed / self.time_step))
+        trajectory = []
+        
+        # 计算最终旋转
+        current_quat = mn.Quaternion(mn.Vector3(current_rot[0], current_rot[1], current_rot[2]), current_rot[3])
+        rotation_delta = mn.Quaternion.rotation(mn.Rad(math.radians(angle_deg)), mn.Vector3.y_axis())
+        final_quat = current_quat * rotation_delta
+        final_rotation = np.array([final_quat.vector.x, final_quat.vector.y, final_quat.vector.z, final_quat.scalar])
+        
+        for step in range(rotation_steps):
+            t = step / rotation_steps if rotation_steps > 0 else 1.0
+            interpolated_rot = self._interpolate_rotation(current_rot, final_rotation, t)
+            trajectory.append({
+                'position': current_pos.copy(),
+                'rotation': interpolated_rot
+            })
+        
+        return {
+            'total_steps': rotation_steps,
+            'trajectory': trajectory,
+            'final_state': {'position': current_pos, 'rotation': final_rotation}
+        }
+    
+    def _calculate_rotation_steps(self, current_rot: np.ndarray, target_rot: np.ndarray) -> int:
+        """计算旋转所需的步数"""
+        try:
+            current_quat = mn.Quaternion(mn.Vector3(current_rot[0], current_rot[1], current_rot[2]), current_rot[3])
+            target_quat = mn.Quaternion(mn.Vector3(target_rot[0], target_rot[1], target_rot[2]), target_rot[3])
+            
+            # 计算角度差异
+            dot_product = (current_quat.vector.x * target_quat.vector.x + 
+                         current_quat.vector.y * target_quat.vector.y + 
+                         current_quat.vector.z * target_quat.vector.z + 
+                         current_quat.scalar * target_quat.scalar)
+            
+            dot_product = max(-1.0, min(1.0, dot_product))
+            angle_diff = 2 * math.acos(abs(dot_product))
+            
+            if angle_diff < math.radians(5):  # 小于5度
+                return 1
+            
+            # 计算步数
+            duration = angle_diff / math.radians(self.angular_speed)
+            return max(20, int(duration / self.time_step))
+            
+        except Exception as e:
+            logging.debug(f"Failed to calculate rotation steps: {e}")
+            return 20  # 默认值
+    
+    def _interpolate_rotation(self, start_rot: np.ndarray, end_rot: np.ndarray, t: float) -> np.ndarray:
+        """插值旋转"""
+        try:
+            start_quat = mn.Quaternion(mn.Vector3(start_rot[0], start_rot[1], start_rot[2]), start_rot[3])
+            end_quat = mn.Quaternion(mn.Vector3(end_rot[0], end_rot[1], end_rot[2]), end_rot[3])
+            
+            interpolated_quat = mn.Math.slerp(start_quat, end_quat, t)
+            return np.array([
+                interpolated_quat.vector.x, interpolated_quat.vector.y,
+                interpolated_quat.vector.z, interpolated_quat.scalar
+            ], dtype=np.float32)
+            
+        except Exception as e:
+            # 如果slerp失败，使用线性插值
+            interpolated_rot = start_rot + t * (end_rot - start_rot)
+            norm = np.linalg.norm(interpolated_rot)
+            if norm > 0:
+                interpolated_rot = interpolated_rot / norm
+            return interpolated_rot.astype(np.float32)
+    
+    def _interpolate_action_state(self, plan: Dict[str, Any], step: int) -> Dict[str, Any]:
+        """根据执行计划和当前步骤，计算插值状态"""
+        if step >= len(plan['trajectory']):
+            # 如果超出轨迹长度，返回最终状态
+            return plan['final_state']
+        else:
+            return plan['trajectory'][step]
