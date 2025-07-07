@@ -15,7 +15,7 @@ agents:
     sensors:
       color_sensor:
         position: [0.0, 1.5, 0.0]  # 传感器相对机器人的位置
-        resolution: [480, 640]  # [height, width]
+        resolution: [720, 720]  # [height, width] - 提高传感器分辨率匹配视频质量
         hfov: 90
 
   - id: "agent_spinner"
@@ -25,7 +25,7 @@ agents:
     sensors:
       color_sensor:
         position: [0.0, 1.5, 0.0]  # 传感器相对机器人的位置
-        resolution: [480, 640]  # [height, width]
+        resolution: [720, 720]  # [height, width] - 提高传感器分辨率匹配视频质量
         hfov: 90
 
 collision_detection:
@@ -37,8 +37,8 @@ collision_detection:
 
 video_output:
   output_dir: "./outputs/two_agents_test"
-  fps: 30  # 提高到30 FPS
-  resolution: [480, 960]  # [height, width] - 分屏显示
+  fps: 60  # 提高到60 FPS，确保运动更流畅
+  resolution: [720, 1440]  # [height, width] - 提高分辨率到720p分屏
   codec: "XVID"
   save_frames: false
 
@@ -51,10 +51,10 @@ map_config:
   direction_arrow_length: 15
 
 movement:
-  linear_speed: 2.0  # 提高移动速度 (米/秒)
-  angular_speed: 90.0  # 提高旋转速度 (度/秒)
-  time_step: 0.033  # 约30 FPS的时间步长
-  path_interpolation_points: 30  # 增加插值点使运动更平滑
+  linear_speed: 0.8  # 降低移动速度使运动更慢更连贯 (米/秒)
+  angular_speed: 30.0  # 降低旋转速度使转向更平滑 (度/秒)
+  time_step: 0.016  # 约60 FPS的时间步长，提高动画流畅度
+  path_interpolation_points: 60  # 大幅增加插值点使运动更平滑
 
 logging:
   log_file: "./outputs/two_agents_test/two_agents_test.log"

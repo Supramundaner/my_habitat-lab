@@ -738,9 +738,9 @@ class MultiAgentSimulator:
         if distance < 0.01:  # 距离太小，直接到达
             return True
         
-        # 计算动画步数
+        # 计算动画步数 - 使用更高的帧率和更多步数
         duration = distance / self.linear_speed
-        num_steps = max(10, int(duration / self.time_step))  # 最少10步
+        num_steps = max(30, int(duration / self.time_step))  # 最少30步，提高流畅度
         
         # 保存当前的旋转，确保在移动过程中保持一致
         current_rotation = agent_state.rotation
@@ -755,8 +755,8 @@ class MultiAgentSimulator:
             # 传递当前旋转以保持方向
             self._update_agent_pose(agent_id, current_pos, current_rotation)
             
-            # 在运动过程中生成视频帧（每几步生成一帧）
-            if step % max(1, num_steps // 10) == 0:  # 生成约10个中间帧
+            # 在运动过程中生成视频帧（更频繁地生成帧）
+            if step % max(1, num_steps // 20) == 0:  # 生成约20个中间帧
                 try:
                     video_writers = getattr(self, '_current_video_writers', None)
                     if video_writers and agent_id in video_writers:
@@ -805,7 +805,7 @@ class MultiAgentSimulator:
             
             # 计算动画步数
             duration = angle_diff / math.radians(self.angular_speed)
-            num_steps = max(10, int(duration / self.time_step))  # 最少10步
+            num_steps = max(20, int(duration / self.time_step))  # 增加最少步数到20步
             
             # 执行旋转动画
             for step in range(num_steps + 1):
@@ -830,7 +830,7 @@ class MultiAgentSimulator:
                 self._update_agent_pose(agent_id, agent_state.position, interpolated_rotation)
                 
                 # 在旋转过程中生成视频帧（每几步生成一帧）
-                if step % max(1, num_steps // 15) == 0:  # 生成约15个中间帧
+                if step % max(1, num_steps // 20) == 0:  # 生成约20个中间帧
                     try:
                         video_writers = getattr(self, '_current_video_writers', None)
                         if video_writers and agent_id in video_writers:
@@ -853,7 +853,7 @@ class MultiAgentSimulator:
         
         # 计算动画步数
         duration = abs(angle_deg) / self.angular_speed
-        num_steps = max(10, int(duration / self.time_step))  # 最少10步
+        num_steps = max(15, int(duration / self.time_step))  # 增加最少步数到15步
         
         # 将当前旋转转换为欧拉角
         current_rotation = agent_state.rotation
@@ -872,12 +872,13 @@ class MultiAgentSimulator:
             self._update_agent_pose(agent_id, agent_state.position, new_rotation)
             
             # 在旋转过程中生成视频帧（每几步生成一帧）
-            if step % max(1, num_steps // 15) == 0:  # 生成约15个中间帧
+            if step % max(1, num_steps // 20) == 0:  # 生成约20个中间帧
                 try:
                     video_writers = getattr(self, '_current_video_writers', None)
                     if video_writers and agent_id in video_writers:
                         self._write_video_frame(agent_id, video_writers[agent_id])
                 except Exception as e:
+                    logging.debug(f"Failed to write intermediate frame: {e}")
                     logging.debug(f"Failed to write intermediate frame: {e}")
         
         logging.info(f"Agent {agent_id} rotated {angle_deg} degrees")
@@ -1065,7 +1066,7 @@ class MultiAgentSimulator:
         return map_image
     
     def _create_split_screen_frame(self, fpv_image: Image.Image, map_image: Image.Image) -> Image.Image:
-        """创建分屏视频帧（左侧FPV，右侧地图）"""
+        """创建分屏视频帧（左侧FPV，右侧地图）- 保持地图原始比例"""
         height, width = self.video_config["resolution"]
         half_width = width // 2
         
@@ -1076,9 +1077,30 @@ class MultiAgentSimulator:
         fpv_resized = fpv_image.resize((half_width, height), Image.Resampling.LANCZOS)
         frame.paste(fpv_resized, (0, 0))
         
-        # 调整地图图像大小并放置在右侧
-        map_resized = map_image.resize((half_width, height), Image.Resampling.LANCZOS)
-        frame.paste(map_resized, (half_width, 0))
+        # 为地图保持原始比例，避免拉伸
+        map_width, map_height = map_image.size
+        map_aspect_ratio = map_width / map_height
+        
+        # 计算在右侧半屏中的最佳地图尺寸
+        right_half_aspect = half_width / height
+        
+        if map_aspect_ratio > right_half_aspect:
+            # 地图比右侧区域更宽，以宽度为准
+            new_map_width = half_width
+            new_map_height = int(half_width / map_aspect_ratio)
+        else:
+            # 地图比右侧区域更高，以高度为准
+            new_map_height = height
+            new_map_width = int(height * map_aspect_ratio)
+        
+        # 调整地图大小并居中放置在右侧
+        map_resized = map_image.resize((new_map_width, new_map_height), Image.Resampling.LANCZOS)
+        
+        # 计算居中位置
+        map_x = half_width + (half_width - new_map_width) // 2
+        map_y = (height - new_map_height) // 2
+        
+        frame.paste(map_resized, (map_x, map_y))
         
         return frame
     
