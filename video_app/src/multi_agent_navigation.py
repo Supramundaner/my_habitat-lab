@@ -653,7 +653,7 @@ class MultiAgentSimulator:
     
     def _execute_move_to(self, agent_id: str, target: List[float], 
                         simulator: HabitatSimulator, agent_state: AgentState) -> bool:
-        """执行移动到指定坐标的动作"""
+        """执行移动到指定坐标的动作 - 先转向到运动方向，然后再运动"""
         if not target or len(target) < 2:
             return False
         
@@ -662,7 +662,36 @@ class MultiAgentSimulator:
             logging.warning(f"Agent {agent_id}: Target position {target} not navigable")
             return False
         
-        # 使用平滑移动动画
+        # 计算移动方向向量
+        current_pos = agent_state.position
+        direction = target_pos - current_pos
+        direction[1] = 0  # 忽略Y轴方向，只考虑水平面的方向
+        
+        distance = np.linalg.norm(direction)
+        if distance < 0.01:  # 距离太小，直接到达
+            return True
+        
+        # 归一化方向向量
+        direction = direction / distance
+        
+        # 计算目标朝向角度（在Habitat中，-Z轴是前方）
+        target_angle = math.atan2(direction[0], direction[2])  # 使用+Z计算
+        target_angle += math.pi  # 加180度修正，因为Habitat的前方是-Z
+        
+        # 创建目标旋转四元数
+        target_rotation_quat = mn.Quaternion.rotation(mn.Rad(target_angle), mn.Vector3.y_axis())
+        target_rotation = np.array([target_rotation_quat.vector.x, target_rotation_quat.vector.y, 
+                                  target_rotation_quat.vector.z, target_rotation_quat.scalar])
+        
+        # 第一步：转向到目标方向
+        logging.info(f"Agent {agent_id}: Step 1 - Turning towards target direction")
+        success = self._animate_rotation_to_target(agent_id, target_rotation, simulator, agent_state)
+        if not success:
+            logging.warning(f"Agent {agent_id}: Failed to turn towards target")
+            return False
+        
+        # 第二步：沿着目标方向移动
+        logging.info(f"Agent {agent_id}: Step 2 - Moving to target position")
         return self._animate_movement(agent_id, target_pos, simulator, agent_state)
     
     def _execute_move_forward(self, agent_id: str, distance: float,
@@ -685,6 +714,7 @@ class MultiAgentSimulator:
             return False
         
         target_pos = np.array([snapped_point.x, snapped_point.y, snapped_point.z])
+        # 保存原始旋转，确保前进时方向不变
         return self._animate_movement(agent_id, target_pos, simulator, agent_state)
     
     def _execute_turn(self, agent_id: str, angle: float, turn_left: bool,
@@ -712,6 +742,9 @@ class MultiAgentSimulator:
         duration = distance / self.linear_speed
         num_steps = max(10, int(duration / self.time_step))  # 最少10步
         
+        # 保存当前的旋转，确保在移动过程中保持一致
+        current_rotation = agent_state.rotation
+        
         for step in range(num_steps + 1):
             t = step / num_steps if num_steps > 0 else 1.0
             
@@ -719,7 +752,8 @@ class MultiAgentSimulator:
             current_pos = start_pos + (target_pos - start_pos) * t
             
             # 更新智能体位置（同时更新虚拟智能体和物理机器人）
-            self._update_agent_pose(agent_id, current_pos)
+            # 传递当前旋转以保持方向
+            self._update_agent_pose(agent_id, current_pos, current_rotation)
             
             # 在运动过程中生成视频帧（每几步生成一帧）
             if step % max(1, num_steps // 10) == 0:  # 生成约10个中间帧
@@ -732,6 +766,84 @@ class MultiAgentSimulator:
         
         logging.info(f"Agent {agent_id} moved to {target_pos}")
         return True
+    
+    def _animate_rotation_to_target(self, agent_id: str, target_rotation: np.ndarray,
+                                   simulator: HabitatSimulator, agent_state: AgentState) -> bool:
+        """执行平滑旋转到目标方向的动画"""
+        try:
+            # 获取当前旋转
+            current_rotation = agent_state.rotation
+            
+            # 创建当前和目标的四元数
+            current_quat = mn.Quaternion(
+                mn.Vector3(current_rotation[0], current_rotation[1], current_rotation[2]),
+                current_rotation[3]
+            )
+            target_quat = mn.Quaternion(
+                mn.Vector3(target_rotation[0], target_rotation[1], target_rotation[2]),
+                target_rotation[3]
+            )
+            
+            # 计算旋转差异角度
+            # 使用四元数积判断是否有相似方向
+            # 注意：quaternion.dot是一个静态方法，而不是实例方法
+            # 正确调用：quaternion dot product = x1*x2 + y1*y2 + z1*z2 + w1*w2
+            dot_product = (current_quat.vector.x * target_quat.vector.x + 
+                         current_quat.vector.y * target_quat.vector.y + 
+                         current_quat.vector.z * target_quat.vector.z + 
+                         current_quat.scalar * target_quat.scalar)
+            
+            # 限制dot_product在[-1, 1]范围内，避免acos domain error
+            dot_product = max(-1.0, min(1.0, dot_product))
+            angle_diff = 2 * math.acos(abs(dot_product))
+            
+            # 如果角度差异很小，直接设置目标旋转
+            if angle_diff < math.radians(5):  # 小于5度
+                agent_state.rotation = target_rotation
+                self._update_agent_pose(agent_id, agent_state.position, target_rotation)
+                return True
+            
+            # 计算动画步数
+            duration = angle_diff / math.radians(self.angular_speed)
+            num_steps = max(10, int(duration / self.time_step))  # 最少10步
+            
+            # 执行旋转动画
+            for step in range(num_steps + 1):
+                t = step / num_steps if num_steps > 0 else 1.0
+                
+                # 球面线性插值
+                try:
+                    interpolated_quat = mn.Math.slerp(current_quat, target_quat, t)
+                    interpolated_rotation = np.array([
+                        interpolated_quat.vector.x, interpolated_quat.vector.y,
+                        interpolated_quat.vector.z, interpolated_quat.scalar
+                    ], dtype=np.float32)
+                except Exception as e:
+                    # 如果slerp失败，使用线性插值
+                    interpolated_rotation = current_rotation + t * (target_rotation - current_rotation)
+                    # 归一化四元数
+                    norm = np.linalg.norm(interpolated_rotation)
+                    if norm > 0:
+                        interpolated_rotation = interpolated_rotation / norm
+                
+                # 更新智能体旋转
+                self._update_agent_pose(agent_id, agent_state.position, interpolated_rotation)
+                
+                # 在旋转过程中生成视频帧（每几步生成一帧）
+                if step % max(1, num_steps // 15) == 0:  # 生成约15个中间帧
+                    try:
+                        video_writers = getattr(self, '_current_video_writers', None)
+                        if video_writers and agent_id in video_writers:
+                            self._write_video_frame(agent_id, video_writers[agent_id])
+                    except Exception as e:
+                        logging.debug(f"Failed to write intermediate frame: {e}")
+            
+            logging.info(f"Agent {agent_id} rotated to target direction (angle diff: {math.degrees(angle_diff):.1f}°)")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Failed to animate rotation to target for {agent_id}: {e}")
+            return False
     
     def _animate_rotation(self, agent_id: str, angle_deg: float,
                          simulator: HabitatSimulator, agent_state: AgentState) -> bool:
@@ -1205,7 +1317,7 @@ class MultiAgentSimulator:
                         logging.debug(f"Failed to get robot rotation for {agent_id}: {rot_e}, using agent state rotation")
                         robot_rotation = agent_state.rotation
                     
-                    # 为摄像头位置添加一个偏移（模拟头部摄像头）
+                    # 为摄像头位置添加一个偏移（模拟头部摄像头）（默认为0）
                     forward_offset = 0.0
                     height_offset = 0.0
                     
