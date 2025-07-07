@@ -594,50 +594,54 @@ class MultiAgentSimulator:
     
     def _predict_dynamic_collisions(self, step_actions: Dict[str, ActionCommand]) -> Tuple[bool, str]:
         """
-        预测智能体在执行动作过程中的动态碰撞，包括与环境和其他智能体的碰撞。
+        预测智能体在执行动作过程中的动态碰撞，基于绝对时间轴同步方式
         """
         if not self.collision_detector.enabled:
             return False, ""
 
-        # 1. 采样每个智能体的计划路径
-        planned_paths = {}
-        for agent_id, action in step_actions.items():
-            agent_state = self.agent_states[agent_id]
-            path = self._sample_path_for_action(action, agent_state)
-            planned_paths[agent_id] = path
-
-        # 2. 检查路径中的碰撞
-        num_steps = self.collision_check_steps
-        for i in range(1, num_steps + 1):
-            # 获取当前时间点的所有智能体位置
-            current_positions = {}
-            for agent_id, path in planned_paths.items():
-                # 如果路径点不足，则使用最后一个点
-                point_index = min(i, len(path) - 1)
-                if point_index >= 0:
-                    current_positions[agent_id] = path[point_index]
-
-            # 检查与环境的碰撞
-            for agent_id, pos in current_positions.items():
-                if not self.simulator.sim.pathfinder.is_navigable(pos):
-                    return True, f"Agent {agent_id} environment collision predicted at step {i}"
-
-            # 检查智能体间碰撞
-            agent_ids = list(current_positions.keys())
-            for j in range(len(agent_ids)):
-                for k in range(j + 1, len(agent_ids)):
-                    agent1_id = agent_ids[j]
-                    agent2_id = agent_ids[k]
-                    
-                    pos1 = current_positions[agent1_id]
-                    pos2 = current_positions[agent2_id]
-                    
-                    distance = np.linalg.norm(pos1 - pos2)
-                    # 使用配置的最小距离而不是半径的两倍
-                    if distance < self.collision_detector.min_agent_distance:
-                        return True, f"Collision predicted between {agent1_id} and {agent2_id} at step {i} (distance: {distance:.2f}m)"
-        
-        return False, ""
+        try:
+            # 1. 为每个智能体分析动作的真实时间轨迹
+            action_plans = {}
+            max_duration = 0.0
+            
+            for agent_id, action in step_actions.items():
+                agent_state = self.agent_states[agent_id]
+                plan = self._analyze_action_execution_with_real_time(agent_id, action, agent_state)
+                action_plans[agent_id] = plan
+                max_duration = max(max_duration, plan['duration'])
+            
+            if max_duration <= 0:
+                return False, ""  # 没有动作需要检测
+            
+            # 2. 在时间轴上进行碰撞检测采样
+            num_check_points = max(10, int(max_duration * 10))  # 每0.1秒检测一次
+            time_step = max_duration / num_check_points
+            
+            for i in range(num_check_points + 1):
+                check_time = i * time_step
+                
+                # 获取所有智能体在当前时刻的位置
+                agent_positions = {}
+                for agent_id, plan in action_plans.items():
+                    state_at_time = self._get_agent_state_at_time(plan, check_time)
+                    agent_positions[agent_id] = state_at_time['position']
+                
+                # 检查与环境的碰撞
+                for agent_id, position in agent_positions.items():
+                    if self.collision_detector.check_collision_with_environment(self.simulator.sim, position):
+                        return True, f"Agent {agent_id} environment collision predicted at t={check_time:.2f}s"
+                
+                # 检查智能体间碰撞
+                has_collision, collision_pairs = self.collision_detector.check_collision_between_agents(agent_positions)
+                if has_collision:
+                    pair_str = ", ".join([f"{a1}-{a2}" for a1, a2 in collision_pairs])
+                    return True, f"Agent collision predicted at t={check_time:.2f}s: {pair_str}"
+            
+            return False, ""
+            
+        except Exception as e:
+            logging.error(f"Dynamic collision prediction failed: {e}")
+            return True, f"Collision prediction error: {e}"  # 安全起见，假设有碰撞
 
     def _sample_path_for_action(self, action: ActionCommand, agent_state: AgentState) -> list:
         """为单个动作采样路径点"""
@@ -903,8 +907,7 @@ class MultiAgentSimulator:
                 try:
                     interpolated_quat = mn.Math.slerp(current_quat, target_quat, t)
                     interpolated_rotation = np.array([
-                        interpolated_quat.vector.x, interpolated_quat.vector.y,
-                        interpolated_quat.vector.z, interpolated_quat.scalar
+                        interpolated_quat.vector.x, interpolated_quat.vector.y, interpolated_quat.vector.z, interpolated_quat.scalar
                     ], dtype=np.float32)
                 except Exception as e:
                     # 如果slerp失败，使用线性插值
@@ -1468,52 +1471,69 @@ class MultiAgentSimulator:
     def _execute_actions_parallel(self, step_actions: Dict[str, ActionCommand], 
                                  video_writers: Dict[str, cv2.VideoWriter]) -> bool:
         """
-        并行独立执行所有智能体的动作，保持视频时间同步
+        并行执行所有智能体的动作，实现绝对时间轴同步
         
-        每个智能体执行自己的动作，不需要等待其他智能体完成
-        但视频帧保持时间同步 - 即所有视频的第N帧对应同一时刻
+        关键概念：
+        - 所有智能体在 t=0 同时开始执行各自的动作
+        - 每个动作按照真实物理耗时执行（不人为拉伸或压缩）
+        - 视频的每一帧对应绝对时间轴上的一个精确时刻
+        - 例如：第30帧就是 t=1.0秒 那个瞬间所有智能体的状态（假设30fps）
         """
         try:
-            # 1. 分析每个智能体的动作，计算执行时间和步数
+            # 1. 分析每个智能体的动作，计算真实物理耗时
             action_plans = {}
-            max_steps = 0
+            max_duration = 0.0  # 最长动作的物理耗时（秒）
             
             for agent_id, action in step_actions.items():
                 agent_state = self.agent_states[agent_id]
-                plan = self._analyze_action_execution(agent_id, action, agent_state)
+                plan = self._analyze_action_execution_with_real_time(agent_id, action, agent_state)
                 action_plans[agent_id] = plan
-                max_steps = max(max_steps, plan['total_steps'])
+                max_duration = max(max_duration, plan['duration'])
+                
+                # 调试轨迹连续性
+                self._debug_trajectory_continuity(plan)
+                
+                logging.info(f"Agent {agent_id}: {action.action} planned for {plan['duration']:.2f}s")
             
-            logging.info(f"Parallel independent execution: {len(step_actions)} agents, max video frames: {max_steps}")
+            logging.info(f"Absolute time sync execution: {len(step_actions)} agents, max duration: {max_duration:.2f}s")
             
-            # 2. 统一视频总帧数，计算每个智能体的动作速度缩放系数
-            # 这样所有智能体在视频中的动作会在相同的帧数内完成，确保时间同步
-            speed_scale = {}
-            for agent_id, plan in action_plans.items():
-                if plan['total_steps'] > 0:
-                    # 计算速度缩放系数：较长的动作速度提高，较短的动作速度降低
-                    speed_scale[agent_id] = plan['total_steps'] / max_steps if max_steps > 0 else 1.0
-                else:
-                    speed_scale[agent_id] = 1.0
+            # 2. 计算视频总帧数（基于最长动作的物理耗时）
+            fps = self.video_config["fps"]
             
-            # 3. 生成统一数量的视频帧，每个智能体独立执行其动作
-            for frame in range(max_steps):
-                # 更新每个智能体的状态
+            # 确保最小持续时间，避免动作太快导致跳跃
+            min_duration = 1.0  # 最少1秒
+            effective_duration = max(max_duration, min_duration)
+            
+            total_frames = max(30, int(effective_duration * fps))  # 最少30帧
+            frame_time_step = effective_duration / total_frames if total_frames > 0 else 0.0
+            
+            logging.info(f"Video frames: {total_frames}, time per frame: {frame_time_step:.4f}s")
+            logging.info(f"Effective duration: {effective_duration:.2f}s (extended from {max_duration:.2f}s)")
+            
+            # 3. 在绝对时间轴上逐帧执行
+            for frame in range(total_frames):
+                # 计算当前帧对应的绝对时间（映射到实际动作时间）
+                current_time = frame * frame_time_step
+                # 如果当前时间超过实际动作时间，限制在max_duration范围内
+                actual_action_time = min(current_time, max_duration)
+                
+                # 更新每个智能体在当前时刻的状态
                 for agent_id, plan in action_plans.items():
-                    # 计算实际的步骤索引，根据速度缩放
-                    # 对于动作较短的智能体，它们会在完成后保持最终状态
-                    scaled_step = min(int(frame * speed_scale[agent_id]), plan['total_steps'] - 1) if plan['total_steps'] > 0 else 0
-                    
-                    # 计算当前步骤的插值状态
-                    current_state = self._interpolate_action_state(plan, scaled_step)
+                    # 根据绝对时间计算智能体的当前状态
+                    current_state = self._get_agent_state_at_time(plan, actual_action_time)
                     
                     # 更新智能体状态
                     self._update_agent_pose(agent_id, current_state['position'], current_state['rotation'])
                 
-                # 为所有智能体写入同步的视频帧
+                # 为所有智能体写入同步的视频帧（对应同一时刻）
                 for agent_id in step_actions.keys():
                     if agent_id in video_writers:
                         self._write_video_frame(agent_id, video_writers[agent_id])
+                
+                # 显示进度（每10帧显示一次）
+                if frame % 10 == 0 or frame == total_frames - 1:
+                    progress = (frame + 1) / total_frames * 100
+                    logging.info(f"Progress: {progress:.1f}% (frame {frame+1}/{total_frames}, t={actual_action_time:.2f}s)")
             
             # 4. 确保所有智能体都到达最终状态
             for agent_id, plan in action_plans.items():
@@ -1521,19 +1541,21 @@ class MultiAgentSimulator:
                 self._update_agent_pose(agent_id, final_state['position'], final_state['rotation'])
                 
                 # 记录完成
-                logging.info(f"Agent {agent_id} completed action: {step_actions[agent_id].action}")
+                action_type = step_actions[agent_id].action
+                duration = plan['duration']
+                logging.info(f"Agent {agent_id} completed {action_type} in {duration:.2f}s")
             
             return True
             
         except Exception as e:
-            logging.error(f"Parallel independent action execution failed: {e}")
+            logging.error(f"Absolute time sync execution failed: {e}")
             import traceback
             traceback.print_exc()
             return False
     
-    def _analyze_action_execution(self, agent_id: str, action: ActionCommand, 
-                                 agent_state: AgentState) -> Dict[str, Any]:
-        """分析动作执行计划，计算所需步数和轨迹"""
+    def _analyze_action_execution_with_real_time(self, agent_id: str, action: ActionCommand, 
+                                               agent_state: AgentState) -> Dict[str, Any]:
+        """分析动作执行计划，基于真实物理时间计算"""
         plan = {
             'agent_id': agent_id,
             'action': action,
@@ -1541,46 +1563,49 @@ class MultiAgentSimulator:
                 'position': agent_state.position.copy(),
                 'rotation': agent_state.rotation.copy()
             },
-            'trajectory': [],
-            'total_steps': 0,
+            'duration': 0.0,  # 动作的真实物理耗时（秒）
+            'trajectory_func': None,  # 轨迹函数，接受时间参数返回状态
             'final_state': None
         }
         
         try:
             if action.action == "move_to" and action.target:
-                # 计算move_to的轨迹
+                # 计算move_to的真实耗时和轨迹函数
                 target_pos = self.simulator.get_position_with_navmesh_height(action.target[0], action.target[1])
                 if target_pos is not None:
-                    plan.update(self._plan_move_to_trajectory(agent_state, target_pos))
+                    plan.update(self._plan_move_to_with_real_time(agent_state, target_pos))
                 else:
                     logging.warning(f"Agent {agent_id}: Target {action.target} not navigable")
-                    plan['total_steps'] = 1
+                    plan['duration'] = 0.0
+                    plan['trajectory_func'] = lambda t: plan['start_state']
                     plan['final_state'] = plan['start_state'].copy()
             
             elif action.action == "move_forward" and action.distance:
-                # 计算move_forward的轨迹
-                plan.update(self._plan_move_forward_trajectory(agent_state, action.distance))
+                # 计算move_forward的真实耗时和轨迹函数
+                plan.update(self._plan_move_forward_with_real_time(agent_state, action.distance))
             
             elif action.action in ["turn_left", "turn_right"] and action.angle:
-                # 计算旋转的轨迹
+                # 计算旋转的真实耗时和轨迹函数
                 turn_angle = action.angle if action.action == "turn_left" else -action.angle
-                plan.update(self._plan_rotation_trajectory(agent_state, turn_angle))
+                plan.update(self._plan_rotation_with_real_time(agent_state, turn_angle))
             
             else:
                 # 未知动作或无效参数
                 logging.warning(f"Agent {agent_id}: Unknown or invalid action: {action}")
-                plan['total_steps'] = 1
+                plan['duration'] = 0.0
+                plan['trajectory_func'] = lambda t: plan['start_state']
                 plan['final_state'] = plan['start_state'].copy()
         
         except Exception as e:
-            logging.error(f"Failed to analyze action for {agent_id}: {e}")
-            plan['total_steps'] = 1
+            logging.error(f"Failed to analyze real-time action for {agent_id}: {e}")
+            plan['duration'] = 0.0
+            plan['trajectory_func'] = lambda t: plan['start_state']
             plan['final_state'] = plan['start_state'].copy()
         
         return plan
-    
-    def _plan_move_to_trajectory(self, agent_state: AgentState, target_pos: np.ndarray) -> Dict[str, Any]:
-        """规划move_to动作的轨迹"""
+
+    def _plan_move_to_with_real_time(self, agent_state: AgentState, target_pos: np.ndarray) -> Dict[str, Any]:
+        """规划move_to动作的真实时间轨迹"""
         current_pos = agent_state.position
         current_rot = agent_state.rotation
         
@@ -1591,8 +1616,8 @@ class MultiAgentSimulator:
         
         if distance < 0.01:
             return {
-                'total_steps': 1,
-                'trajectory': [{'position': current_pos, 'rotation': current_rot}],
+                'duration': 0.0,
+                'trajectory_func': lambda t: {'position': current_pos, 'rotation': current_rot},
                 'final_state': {'position': current_pos, 'rotation': current_rot}
             }
         
@@ -1603,39 +1628,46 @@ class MultiAgentSimulator:
         target_rotation = np.array([target_rotation_quat.vector.x, target_rotation_quat.vector.y, 
                                   target_rotation_quat.vector.z, target_rotation_quat.scalar])
         
-        # 分为两个阶段：旋转 + 移动
-        rotation_steps = self._calculate_rotation_steps(current_rot, target_rotation)
-        movement_steps = max(30, int(distance / self.linear_speed / self.time_step))
+        # 计算真实物理耗时
+        rotation_duration = self._calculate_rotation_duration(current_rot, target_rotation)
+        movement_duration = distance / self.linear_speed  # 移动耗时 = 距离 / 速度
+        total_duration = rotation_duration + movement_duration
         
-        total_steps = rotation_steps + movement_steps
-        trajectory = []
-        
-        # 阶段1：旋转轨迹
-        for step in range(rotation_steps):
-            t = step / rotation_steps if rotation_steps > 0 else 1.0
-            interpolated_rot = self._interpolate_rotation(current_rot, target_rotation, t)
-            trajectory.append({
-                'position': current_pos.copy(),
-                'rotation': interpolated_rot
-            })
-        
-        # 阶段2：移动轨迹
-        for step in range(movement_steps):
-            t = step / movement_steps if movement_steps > 0 else 1.0
-            interpolated_pos = current_pos + (target_pos - current_pos) * t
-            trajectory.append({
-                'position': interpolated_pos,
-                'rotation': target_rotation.copy()
-            })
+        def trajectory_func(t: float) -> Dict[str, Any]:
+            """轨迹函数：根据绝对时间返回状态，确保平滑连续"""
+            if t <= 0:
+                return {'position': current_pos.copy(), 'rotation': current_rot.copy()}
+            elif t >= total_duration:
+                return {'position': target_pos.copy(), 'rotation': target_rotation.copy()}
+            elif t <= rotation_duration:
+                # 旋转阶段：只旋转，不移动
+                if rotation_duration > 0:
+                    t_rot = t / rotation_duration
+                    # 使用平滑的插值曲线
+                    t_rot = self._smooth_interpolation(t_rot)
+                    interpolated_rot = self._interpolate_rotation(current_rot, target_rotation, t_rot)
+                else:
+                    interpolated_rot = target_rotation.copy()
+                return {'position': current_pos.copy(), 'rotation': interpolated_rot}
+            else:
+                # 移动阶段：移动但保持目标旋转
+                if movement_duration > 0:
+                    t_move = (t - rotation_duration) / movement_duration
+                    # 使用平滑的插值曲线
+                    t_move = self._smooth_interpolation(t_move)
+                    interpolated_pos = current_pos + (target_pos - current_pos) * t_move
+                else:
+                    interpolated_pos = target_pos.copy()
+                return {'position': interpolated_pos, 'rotation': target_rotation.copy()}
         
         return {
-            'total_steps': total_steps,
-            'trajectory': trajectory,
+            'duration': total_duration,
+            'trajectory_func': trajectory_func,
             'final_state': {'position': target_pos, 'rotation': target_rotation}
         }
-    
-    def _plan_move_forward_trajectory(self, agent_state: AgentState, distance: float) -> Dict[str, Any]:
-        """规划move_forward动作的轨迹"""
+
+    def _plan_move_forward_with_real_time(self, agent_state: AgentState, distance: float) -> Dict[str, Any]:
+        """规划move_forward动作的真实时间轨迹"""
         current_pos = agent_state.position
         current_rot = agent_state.rotation
         
@@ -1643,6 +1675,7 @@ class MultiAgentSimulator:
         quat = mn.Quaternion(mn.Vector3(current_rot[0], current_rot[1], current_rot[2]), current_rot[3])
         forward_dir = quat.transform_vector(mn.Vector3(0, 0, -1))
         target_pos = current_pos + np.array([forward_dir.x, 0, forward_dir.z]) * distance
+       
         target_pos[1] = current_pos[1]  # 保持Y坐标
         
         # 检查目标位置是否可导航
@@ -1652,46 +1685,51 @@ class MultiAgentSimulator:
         if not self.simulator.sim.pathfinder.is_navigable(snapped_point):
             # 目标不可导航，保持原位
             return {
-                'total_steps': 1,
-                'trajectory': [{'position': current_pos, 'rotation': current_rot}],
+                'duration': 0.0,
+                'trajectory_func': lambda t: {'position': current_pos, 'rotation': current_rot},
                 'final_state': {'position': current_pos, 'rotation': current_rot}
             }
         
         target_pos = np.array([snapped_point.x, snapped_point.y, snapped_point.z])
         
-        # 计算移动步数
-        movement_steps = max(30, int(distance / self.linear_speed / self.time_step))
-        trajectory = []
+        # 计算真实移动耗时
+        actual_distance = np.linalg.norm(target_pos - current_pos)
+        duration = actual_distance / self.linear_speed
         
-        for step in range(movement_steps):
-            t = step / movement_steps if movement_steps > 0 else 1.0
-            interpolated_pos = current_pos + (target_pos - current_pos) * t
-            trajectory.append({
-                'position': interpolated_pos,
-                'rotation': current_rot.copy()
-            })
+        def trajectory_func(t: float) -> Dict[str, Any]:
+            """轨迹函数：根据绝对时间返回状态，确保平滑移动"""
+            if t <= 0:
+                return {'position': current_pos.copy(), 'rotation': current_rot.copy()}
+            elif t >= duration:
+                return {'position': target_pos.copy(), 'rotation': current_rot.copy()}
+            else:
+                # 线性插值移动，但使用平滑曲线
+                if duration > 0:
+                    t_norm = t / duration
+                    # 使用平滑的插值曲线
+                    t_norm = self._smooth_interpolation(t_norm)
+                    interpolated_pos = current_pos + (target_pos - current_pos) * t_norm
+                else:
+                    interpolated_pos = target_pos.copy()
+                return {'position': interpolated_pos, 'rotation': current_rot.copy()}
         
         return {
-            'total_steps': movement_steps,
-            'trajectory': trajectory,
+            'duration': duration,
+            'trajectory_func': trajectory_func,
             'final_state': {'position': target_pos, 'rotation': current_rot}
         }
-    
-    def _plan_rotation_trajectory(self, agent_state: AgentState, angle_deg: float) -> Dict[str, Any]:
-        """规划旋转动作的轨迹"""
+
+    def _plan_rotation_with_real_time(self, agent_state: AgentState, angle_deg: float) -> Dict[str, Any]:
+        """规划旋转动作的真实时间轨迹"""
         current_pos = agent_state.position
         current_rot = agent_state.rotation
         
         if abs(angle_deg) < 0.1:
             return {
-                'total_steps': 1,
-                'trajectory': [{'position': current_pos, 'rotation': current_rot}],
+                'duration': 0.0,
+                'trajectory_func': lambda t: {'position': current_pos, 'rotation': current_rot},
                 'final_state': {'position': current_pos, 'rotation': current_rot}
             }
-        
-        # 计算旋转步数
-        rotation_steps = max(15, int(abs(angle_deg) / self.angular_speed / self.time_step))
-        trajectory = []
         
         # 计算最终旋转
         current_quat = mn.Quaternion(mn.Vector3(current_rot[0], current_rot[1], current_rot[2]), current_rot[3])
@@ -1699,22 +1737,34 @@ class MultiAgentSimulator:
         final_quat = current_quat * rotation_delta
         final_rotation = np.array([final_quat.vector.x, final_quat.vector.y, final_quat.vector.z, final_quat.scalar])
         
-        for step in range(rotation_steps):
-            t = step / rotation_steps if rotation_steps > 0 else 1.0
-            interpolated_rot = self._interpolate_rotation(current_rot, final_rotation, t)
-            trajectory.append({
-                'position': current_pos.copy(),
-                'rotation': interpolated_rot
-            })
+        # 计算真实旋转耗时
+        duration = abs(angle_deg) / self.angular_speed  # 旋转耗时 = 角度 / 角速度
+        
+        def trajectory_func(t: float) -> Dict[str, Any]:
+            """轨迹函数：根据绝对时间返回状态，确保平滑旋转"""
+            if t <= 0:
+                return {'position': current_pos.copy(), 'rotation': current_rot.copy()}
+            elif t >= duration:
+                return {'position': current_pos.copy(), 'rotation': final_rotation.copy()}
+            else:
+                # 球面线性插值旋转，使用平滑曲线
+                if duration > 0:
+                    t_norm = t / duration
+                    # 使用平滑的插值曲线
+                    t_norm = self._smooth_interpolation(t_norm)
+                    interpolated_rot = self._interpolate_rotation(current_rot, final_rotation, t_norm)
+                else:
+                    interpolated_rot = final_rotation.copy()
+                return {'position': current_pos.copy(), 'rotation': interpolated_rot}
         
         return {
-            'total_steps': rotation_steps,
-            'trajectory': trajectory,
+            'duration': duration,
+            'trajectory_func': trajectory_func,
             'final_state': {'position': current_pos, 'rotation': final_rotation}
         }
-    
-    def _calculate_rotation_steps(self, current_rot: np.ndarray, target_rot: np.ndarray) -> int:
-        """计算旋转所需的步数"""
+
+    def _calculate_rotation_duration(self, current_rot: np.ndarray, target_rot: np.ndarray) -> float:
+        """计算旋转的真实物理耗时"""
         try:
             current_quat = mn.Quaternion(mn.Vector3(current_rot[0], current_rot[1], current_rot[2]), current_rot[3])
             target_quat = mn.Quaternion(mn.Vector3(target_rot[0], target_rot[1], target_rot[2]), target_rot[3])
@@ -1726,18 +1776,109 @@ class MultiAgentSimulator:
                          current_quat.scalar * target_quat.scalar)
             
             dot_product = max(-1.0, min(1.0, dot_product))
-            angle_diff = 2 * math.acos(abs(dot_product))
+            angle_diff_rad = 2 * math.acos(abs(dot_product))
+            angle_diff_deg = math.degrees(angle_diff_rad)
             
-            if angle_diff < math.radians(5):  # 小于5度
-                return 1
+            if angle_diff_deg < 5.0:  # 小于5度，忽略旋转时间
+                return 0.0
             
-            # 计算步数
-            duration = angle_diff / math.radians(self.angular_speed)
-            return max(20, int(duration / self.time_step))
+            # 计算真实旋转耗时
+            duration = angle_diff_deg / self.angular_speed
+            return duration
             
         except Exception as e:
-            logging.debug(f"Failed to calculate rotation steps: {e}")
-            return 20  # 默认值
+            logging.debug(f"Failed to calculate rotation duration: {e}")
+            return 0.0  # 默认值
+
+    def _get_agent_state_at_time(self, plan: Dict[str, Any], current_time: float) -> Dict[str, Any]:
+        """根据执行计划和当前绝对时间，计算智能体状态"""
+        if plan['trajectory_func'] is None:
+            return plan['final_state']
+        
+        try:
+            return plan['trajectory_func'](current_time)
+        except Exception as e:
+            logging.debug(f"Failed to get agent state at time {current_time}: {e}")
+            return plan['final_state']
+        
+    def explain_synchronization_difference(self):
+        """
+        详细解释新旧同步方式的区别
+        """
+        print("\n" + "="*80)
+        print("多智能体同步方式对比")
+        print("="*80)
+        
+        print("\n【错误的旧方式：动作时长同步】")
+        print("问题描述：")
+        print("  - 所有智能体的动作被强制拉伸到相同的帧数")
+        print("  - 例如：walker移动1米需要100帧，spinner旋转90度需要150帧")
+        print("  - 系统强制将walker的动作拉伸到150帧，使其变慢")
+        print("  - 结果：所有视频时长相同，但动作速度不真实")
+        
+        print("\n实现方式：")
+        print("  1. 计算每个动作的步数：walker=100步，spinner=150步")
+        print("  2. 使用最大步数：max_steps = 150")
+        print("  3. 计算速度缩放：walker的speed_scale = 100/150 = 0.67")
+        print("  4. 拉伸动作：walker的动作被人为放慢到150帧")
+        
+        print("\n【正确的新方式：绝对时间轴同步】")
+        print("核心概念：")
+        print("  - 所有智能体在t=0同时开始执行各自的动作")
+        print("  - 每个动作按照真实物理耗时执行（不人为拉伸）")
+        print("  - 视频的每一帧对应绝对时间轴上的精确时刻")
+        
+        print("\n实现方式：")
+        print("  1. 计算每个动作的真实耗时：")
+        print("     - walker移动1米：distance/speed = 1.0/2.0 = 0.5秒")
+        print("     - spinner旋转90度：angle/angular_speed = 90/45 = 2.0秒")
+        print("  2. 使用最大耗时确定视频长度：max_duration = 2.0秒")
+        print("  3. 在绝对时间轴上逐帧计算：")
+        print("     - t=0.0s：两个智能体都开始动作")
+        print("     - t=0.5s：walker完成移动，spinner仍在旋转")
+        print("     - t=1.0s：walker保持静止，spinner继续旋转")
+        print("     - t=2.0s：spinner完成旋转，两个智能体都静止")
+        
+        print("\n【关键区别】")
+        print("时间同步：")
+        print("  - 旧方式：视频第30帧 = walker动作的66%，spinner动作的20%")
+        print("  - 新方式：视频第30帧 = 绝对时间t=1.0秒时所有智能体的真实状态")
+        
+        print("\n真实性：")
+        print("  - 旧方式：动作速度被人为调整，不符合物理规律")
+        print("  - 新方式：每个动作保持真实的物理速度和耗时")
+        
+        print("\n应用场景：")
+        print("  - 旧方式：适合演示或教学，确保所有动作同时完成")
+        print("  - 新方式：适合仿真和研究，反映真实的多智能体交互")
+        
+        print("\n多智能体交互：")
+        print("  - 旧方式：无法准确模拟智能体间的实时交互")
+        print("  - 新方式：如果agent1在t=0.9s到达门口，agent2的视频第27帧")
+        print("           （假设30fps）会准确显示t=0.9s时看到agent1进门的场景")
+        
+        print("="*80)
+        
+        # 显示当前配置
+        print(f"\n【当前系统配置】")
+        print(f"线性速度: {self.linear_speed} m/s")
+        print(f"角速度: {self.angular_speed} 度/s")
+        print(f"时间步长: {self.time_step} s")
+        print(f"视频帧率: {self.video_config['fps']} fps")
+        print(f"启用碰撞检测: {self.collision_detector.enabled}")
+        print("="*80)
+        
+    def _smooth_interpolation(self, t: float) -> float:
+        """
+        平滑插值函数，使用ease-in-out曲线替代线性插值
+        这样可以避免突然的加速和减速，让运动看起来更自然
+        """
+        # 确保t在[0,1]范围内
+        t = max(0.0, min(1.0, t))
+        
+        # 使用三次贝塞尔曲线的ease-in-out效果
+        # 这个函数在t=0和t=1处的导数为0，产生平滑的开始和结束
+        return t * t * (3.0 - 2.0 * t)
     
     def _interpolate_rotation(self, start_rot: np.ndarray, end_rot: np.ndarray, t: float) -> np.ndarray:
         """插值旋转"""
@@ -1759,10 +1900,108 @@ class MultiAgentSimulator:
                 interpolated_rot = interpolated_rot / norm
             return interpolated_rot.astype(np.float32)
     
-    def _interpolate_action_state(self, plan: Dict[str, Any], step: int) -> Dict[str, Any]:
-        """根据执行计划和当前步骤，计算插值状态"""
-        if step >= len(plan['trajectory']):
-            # 如果超出轨迹长度，返回最终状态
-            return plan['final_state']
+    def _debug_trajectory_continuity(self, plan: Dict[str, Any], num_samples: int = 20):
+        """
+        调试轨迹连续性，检查是否有突跳
+        """
+        if plan['trajectory_func'] is None:
+            return
+        
+        duration = plan['duration']
+        if duration <= 0:
+            return
+        
+        logging.debug(f"Checking trajectory continuity for {plan['agent_id']} over {duration:.2f}s")
+        
+        prev_state = None
+        for i in range(num_samples + 1):
+            t = i * duration / num_samples
+            current_state = plan['trajectory_func'](t)
+            
+            if prev_state is not None:
+                pos_diff = np.linalg.norm(current_state['position'] - prev_state['position'])
+                if pos_diff > 0.2:  # 如果位置跳跃超过20cm
+                    logging.warning(f"Large position jump detected: {pos_diff:.3f}m at t={t:.2f}s")
+            
+            prev_state = current_state
+
+    def _interpolate_rotation(self, start_rot: np.ndarray, end_rot: np.ndarray, t: float) -> np.ndarray:
+        """插值旋转"""
+        try:
+            start_quat = mn.Quaternion(mn.Vector3(start_rot[0], start_rot[1], start_rot[2]), start_rot[3])
+            end_quat = mn.Quaternion(mn.Vector3(end_rot[0], end_rot[1], end_rot[2]), end_rot[3])
+            
+            interpolated_quat = mn.Math.slerp(start_quat, end_quat, t)
+            return np.array([
+                interpolated_quat.vector.x, interpolated_quat.vector.y,
+                interpolated_quat.vector.z, interpolated_quat.scalar
+            ], dtype=np.float32)
+            
+        except Exception as e:
+            # 如果slerp失败，使用线性插值
+            interpolated_rot = start_rot + t * (end_rot - start_rot)
+            norm = np.linalg.norm(interpolated_rot)
+            if norm > 0:
+                interpolated_rot = interpolated_rot / norm
+            return interpolated_rot.astype(np.float32)
+
+def main():
+    """主程序入口"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Multi-Agent Habitat Navigation System with Absolute Time Sync")
+    parser.add_argument("--config", required=True, help="Configuration JSON file")
+    parser.add_argument("--actions", required=True, help="Actions JSON file") 
+    parser.add_argument("--explain", action="store_true", help="显示同步方式的详细解释")
+    parser.add_argument("--demo", action="store_true", help="生成演示配置文件")
+    
+    args = parser.parse_args()
+    
+    if args.demo:
+        # 生成演示配置
+        from test_time_sync import main as demo_main
+        demo_main()
+        return
+    
+    try:
+        # 加载配置
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+        
+        # 创建多智能体模拟器
+        simulator = MultiAgentSimulator(config)
+        
+        if args.explain:
+            # 显示同步方式解释
+            simulator.explain_synchronization_difference()
+        
+        # 显示智能体状态
+        simulator.print_agent_status()
+        
+        # 加载动作序列
+        actions = simulator.load_actions_from_file(args.actions)
+        
+        # 执行动作序列（使用新的绝对时间轴同步）
+        print("\\n" + "="*60)
+        print("开始执行多智能体动作序列（绝对时间轴同步）")
+        print("="*60)
+        
+        success = simulator.execute_actions_sequence(actions)
+        
+        if success:
+            print("\\n✓ 多智能体动作序列执行完成")
+            print(f"视频文件已保存到: {config['video_output']['output_dir']}")
         else:
-            return plan['trajectory'][step]
+            print("\\n✗ 多智能体动作序列执行失败")
+        
+        # 关闭模拟器
+        simulator.close()
+        
+    except Exception as e:
+        print(f"执行失败: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
