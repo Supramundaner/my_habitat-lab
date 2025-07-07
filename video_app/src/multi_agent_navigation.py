@@ -1467,7 +1467,12 @@ class MultiAgentSimulator:
     
     def _execute_actions_parallel(self, step_actions: Dict[str, ActionCommand], 
                                  video_writers: Dict[str, cv2.VideoWriter]) -> bool:
-        """并行同步执行所有智能体的动作"""
+        """
+        并行独立执行所有智能体的动作，保持视频时间同步
+        
+        每个智能体执行自己的动作，不需要等待其他智能体完成
+        但视频帧保持时间同步 - 即所有视频的第N帧对应同一时刻
+        """
         try:
             # 1. 分析每个智能体的动作，计算执行时间和步数
             action_plans = {}
@@ -1479,28 +1484,38 @@ class MultiAgentSimulator:
                 action_plans[agent_id] = plan
                 max_steps = max(max_steps, plan['total_steps'])
             
-            logging.info(f"Parallel execution: {len(step_actions)} agents, max steps: {max_steps}")
+            logging.info(f"Parallel independent execution: {len(step_actions)} agents, max video frames: {max_steps}")
             
-            # 2. 同步执行所有智能体的动作
-            for step in range(max_steps):
-                # 在每个时间步，更新所有智能体的状态
+            # 2. 统一视频总帧数，计算每个智能体的动作速度缩放系数
+            # 这样所有智能体在视频中的动作会在相同的帧数内完成，确保时间同步
+            speed_scale = {}
+            for agent_id, plan in action_plans.items():
+                if plan['total_steps'] > 0:
+                    # 计算速度缩放系数：较长的动作速度提高，较短的动作速度降低
+                    speed_scale[agent_id] = plan['total_steps'] / max_steps if max_steps > 0 else 1.0
+                else:
+                    speed_scale[agent_id] = 1.0
+            
+            # 3. 生成统一数量的视频帧，每个智能体独立执行其动作
+            for frame in range(max_steps):
+                # 更新每个智能体的状态
                 for agent_id, plan in action_plans.items():
-                    if step < plan['total_steps']:
-                        # 计算当前步骤的插值状态
-                        current_state = self._interpolate_action_state(plan, step)
-                        
-                        # 更新智能体状态
-                        self._update_agent_pose(agent_id, current_state['position'], current_state['rotation'])
+                    # 计算实际的步骤索引，根据速度缩放
+                    # 对于动作较短的智能体，它们会在完成后保持最终状态
+                    scaled_step = min(int(frame * speed_scale[agent_id]), plan['total_steps'] - 1) if plan['total_steps'] > 0 else 0
+                    
+                    # 计算当前步骤的插值状态
+                    current_state = self._interpolate_action_state(plan, scaled_step)
+                    
+                    # 更新智能体状态
+                    self._update_agent_pose(agent_id, current_state['position'], current_state['rotation'])
                 
                 # 为所有智能体写入同步的视频帧
                 for agent_id in step_actions.keys():
                     if agent_id in video_writers:
                         self._write_video_frame(agent_id, video_writers[agent_id])
-                
-                # 控制帧率 - 可选的时间延迟
-                # time.sleep(self.time_step)  # 如果需要实时播放效果
             
-            # 3. 确保所有智能体都到达最终状态
+            # 4. 确保所有智能体都到达最终状态
             for agent_id, plan in action_plans.items():
                 final_state = plan['final_state']
                 self._update_agent_pose(agent_id, final_state['position'], final_state['rotation'])
@@ -1511,7 +1526,7 @@ class MultiAgentSimulator:
             return True
             
         except Exception as e:
-            logging.error(f"Parallel action execution failed: {e}")
+            logging.error(f"Parallel independent action execution failed: {e}")
             import traceback
             traceback.print_exc()
             return False
