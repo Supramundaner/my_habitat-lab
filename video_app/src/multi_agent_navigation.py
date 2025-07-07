@@ -11,15 +11,14 @@ import yaml
 import logging
 import time
 import math
+import traceback
 import numpy as np
 import cv2
-import traceback
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
 from dataclasses import dataclass
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
-import xml.etree.ElementTree as ET
 
 # 添加interactive_app的src路径以复用代码
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../src'))
@@ -1171,386 +1170,128 @@ class MultiAgentSimulator:
             except Exception as e:
                 logging.warning(f"Failed to sync robot {agent_id}: {e}")
     
-    def _get_robot_transform_matrix(self, robot_obj) -> Optional[np.ndarray]:
-        """安全地获取机器人的4x4变换矩阵"""
-        try:
-            # 方法1：尝试直接从transformation属性获取
-            transform_matrix = robot_obj.transformation
-            
-            # 尝试不同的方法来提取矩阵数据
-            try:
-                # 方法1：使用to_numpy()方法（如果存在）
-                if hasattr(transform_matrix, 'to_numpy'):
-                    return transform_matrix.to_numpy()
-                
-                # 方法2：手动提取矩阵元素
-                elif hasattr(transform_matrix, '__getitem__'):
-                    # Magnum Matrix4是4x4矩阵，按行主序或列主序存储
-                    matrix_data = np.zeros((4, 4))
-                    for i in range(4):
-                        for j in range(4):
-                            matrix_data[i, j] = transform_matrix[i, j]
-                    return matrix_data
-                
-                # 方法3：尝试直接转换为numpy数组
-                else:
-                    matrix_array = np.array(transform_matrix)
-                    if matrix_array.shape == (4, 4):
-                        return matrix_array
-                    elif matrix_array.shape == (16,):
-                        # 假设是列主序存储，需要reshape并转置
-                        return matrix_array.reshape(4, 4).T
-                    else:
-                        logging.warning(f"Unexpected matrix shape: {matrix_array.shape}")
-                        return None
-                        
-            except Exception as matrix_extract_error:
-                logging.warning(f"Failed to extract matrix data: {matrix_extract_error}")
-                
-                # 方法4：手动构建变换矩阵（从位置和旋转）
-                try:
-                    position = robot_obj.translation
-                    rotation = robot_obj.rotation
-                    
-                    # 构建变换矩阵
-                    transform = np.eye(4)
-                    
-                    # 设置旋转部分（3x3子矩阵）
-                    if hasattr(rotation, 'to_matrix'):
-                        rot_matrix = np.array(rotation.to_matrix())
-                        if rot_matrix.shape == (3, 3):
-                            transform[:3, :3] = rot_matrix
-                    
-                    # 设置平移部分
-                    if hasattr(position, 'x') and hasattr(position, 'y') and hasattr(position, 'z'):
-                        transform[0, 3] = position.x
-                        transform[1, 3] = position.y
-                        transform[2, 3] = position.z
-                    
-                    return transform
-                    
-                except Exception as manual_build_error:
-                    logging.error(f"Failed to manually build transform matrix: {manual_build_error}")
-                    return None
-        
-        except Exception as e:
-            logging.error(f"Failed to get robot transform matrix: {e}")
-            return None
-    
-    def _get_robot_camera_transform(self, agent_id: str, robot_transform: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """计算机器人摄像头的位置和朝向"""
-        try:
-            # 获取智能体配置中的URDF路径
-            agent_config = self.agent_configs_dict.get(agent_id)
-            if not agent_config:
-                return None, None
-            
-            urdf_path = agent_config.get("agent_model_path")
-            if not urdf_path or not os.path.exists(urdf_path):
-                return None, None
-            
-            # 创建URDF解析器
-            urdf_parser = URDFCameraParser(urdf_path)
-            
-            # 获取摄像头的位置和朝向
-            position, orientation = urdf_parser.get_camera_position_and_orientation(robot_transform)
-            
-            return position, orientation
-            
-        except Exception as e:
-            logging.warning(f"Failed to get robot camera transform for {agent_id}: {e}")
-            return None, None
-    
     def _get_robot_sensor_observation(self, agent_id: str, agent_state: AgentState) -> np.ndarray:
-        """从物理机器人的传感器获取第一人称观察"""
+        """从物理机器人的传感器位置获取观察"""
         try:
-            # 获取物理机器人对象
-            robot_obj = self.agent_robots.get(agent_id)
-            if robot_obj is None:
-                logging.warning(f"No physical robot for {agent_id}, using fallback")
-                return self._get_virtual_agent_observation(agent_id, agent_state)
-            
-            # 获取机器人的变换矩阵
-            robot_transform_matrix = self._get_robot_transform_matrix(robot_obj)
-            if robot_transform_matrix is None:
-                logging.warning(f"Failed to get robot transform matrix for {agent_id}")
-                return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
-            
-            # 获取摄像头的位置和朝向
-            camera_position, camera_orientation = self._get_robot_camera_transform(agent_id, robot_transform_matrix)
-            
-            if camera_position is None or camera_orientation is None:
-                logging.warning(f"Failed to calculate camera transform for {agent_id}")
-                return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
-            
-            # 设置虚拟智能体到摄像头位置并获取观察
-            agent = self.simulator.sim.get_agent(0)  # 获取默认智能体
-            
-            # 保存原始状态
-            original_state = agent.get_state()
-            
-            try:
-                # 创建新的智能体状态
-                new_state = habitat_sim.AgentState()
-                new_state.position = camera_position
-                new_state.rotation = camera_orientation  # quaternion [x, y, z, w]
+            # 如果有物理机器人，尝试添加传感器到机器人并获取观察
+            if agent_id in self.agent_robots:
+                robot_obj = self.agent_robots[agent_id]
                 
-                # 设置智能体到摄像头位置
-                agent.set_state(new_state)
-                
-                # 获取观察
-                observations = self.simulator.sim.get_sensor_observations()
-                color_obs = observations.get("color_sensor", observations.get("rgb", None))
-                
-                if color_obs is not None:
-                    # 确保图像格式正确
-                    if len(color_obs.shape) == 3 and color_obs.shape[2] == 3:
-                        # RGB format
-                        fpv_image = color_obs
-                    elif len(color_obs.shape) == 3 and color_obs.shape[2] == 4:
-                        # RGBA format, 移除alpha通道
-                        fpv_image = color_obs[:, :, :3]
-                    else:
-                        # 异常格式，创建默认图像
-                        fpv_image = np.zeros((480, 640, 3), dtype=np.uint8)
-                        logging.warning(f"Unexpected observation format for {agent_id}: {color_obs.shape}")
+                try:
+                    # 创建机器人头部传感器规格
+                    robot_sensor_id = f"{agent_id}_camera_sensor"
                     
-                    logging.info(f"✓ Got robot sensor observation for {agent_id}: {fpv_image.shape}")
-                    return fpv_image
-                else:
-                    logging.warning(f"No color observation available for {agent_id}")
-                    return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
+                    # 检查是否已经存在该传感器
+                    try:
+                        # 尝试直接从机器人获取观察
+                        robot_observations = self.simulator.sim.get_sensor_observations()
+                        if robot_sensor_id in robot_observations:
+                            return robot_observations[robot_sensor_id]
+                    except:
+                        pass
                     
-            finally:
-                # 恢复原始状态
-                agent.set_state(original_state)
+                    # 如果传感器不存在，则使用简化方法：从机器人位置获取观察
+                    robot_position = robot_obj.translation
+                    robot_pos_array = np.array([robot_position.x, robot_position.y, robot_position.z])
+                    
+                    # 获取机器人朝向
+                    try:
+                        transform_matrix = robot_obj.transformation
+                        rotation_matrix = transform_matrix.rotation()
+                        rotation_quat = mn.Quaternion.from_matrix(rotation_matrix)
+                        robot_rotation = np.array([rotation_quat.vector.x, rotation_quat.vector.y, 
+                                                 rotation_quat.vector.z, rotation_quat.scalar], dtype=np.float32)
+                    except Exception as rot_e:
+                        logging.debug(f"Failed to get robot rotation for {agent_id}: {rot_e}, using agent state rotation")
+                        robot_rotation = agent_state.rotation
+                    
+                    # 为摄像头位置添加一个偏移（模拟头部摄像头）
+                    forward_offset = 0.0
+                    height_offset = 0.0
+                    
+                    # 计算前进方向
+                    quat = mn.Quaternion(mn.Vector3(robot_rotation[0], robot_rotation[1], robot_rotation[2]), robot_rotation[3])
+                    forward_dir = quat.transform_vector(mn.Vector3(0, 0, -1))
+                    
+                    # 计算传感器位置
+                    sensor_position = robot_pos_array + np.array([forward_dir.x * forward_offset, height_offset, forward_dir.z * forward_offset])
+                    
+                    # 临时移动虚拟智能体到传感器位置获取观察
+                    original_state = self.simulator.agent.get_state()
+                    
+                    temp_agent_state = habitat_sim.AgentState()
+                    temp_agent_state.position = sensor_position
+                    # 确保四元数归一化
+                    quat_norm = np.linalg.norm(robot_rotation)
+                    if quat_norm > 0:
+                        robot_rotation = robot_rotation / quat_norm
+                    temp_agent_state.rotation = robot_rotation
+                    
+                    self.simulator.agent.set_state(temp_agent_state)
+                    observation = self.simulator.get_fpv_observation()
+                    self.simulator.agent.set_state(original_state)
+                    
+                    logging.debug(f"Got robot sensor observation from position: {sensor_position}")
+                    return observation
+                    
+                except Exception as pos_e:
+                    logging.warning(f"Failed to get robot position for {agent_id}: {pos_e}, using fallback method")
+                    return self._get_virtual_agent_observation(agent_state)
+            
+            else:
+                # 如果没有物理机器人，使用虚拟智能体位置
+                return self._get_virtual_agent_observation(agent_state)
                 
         except Exception as e:
-            logging.error(f"Failed to get robot sensor observation for {agent_id}: {e}")
-            logging.error(traceback.format_exc())
-            return self._get_robot_sensor_observation_fallback(agent_id, robot_obj)
+            logging.warning(f"Failed to get robot sensor observation for {agent_id}: {e}")
+            # 回退到虚拟智能体观察
+            return self._get_virtual_agent_observation(agent_state)
     
-    def _get_robot_sensor_observation_fallback(self, agent_id: str, robot_obj) -> np.ndarray:
-        """回退方法：使用简单的头部偏移来估计摄像头位置"""
+    def _get_virtual_agent_observation(self, agent_state: AgentState) -> np.ndarray:
+        """从虚拟智能体位置获取观察（回退方案）"""
         try:
-            # 获取机器人的当前位置和朝向
-            robot_position = robot_obj.translation
-            robot_rotation = robot_obj.rotation
+            # 设置虚拟智能体到指定位置
+            virtual_agent_state = habitat_sim.AgentState()
+            virtual_agent_state.position = agent_state.position
             
-            # 将Magnum对象转换为numpy
-            base_position = np.array([robot_position.x, robot_position.y, robot_position.z])
-            
-            # 估计头部摄像头相对于机器人基座的偏移
-            # 对于Fetch机器人，摄像头大约在基座上方1.3米，前方0.1米
-            head_offset_local = np.array([0.1, 1.3, 0.0])  # [前方, 上方, 右方]
-            
-            # 将局部偏移转换到世界坐标系
-            if hasattr(robot_rotation, 'transform_vector'):
-                head_offset_world = robot_rotation.transform_vector(mn.Vector3(head_offset_local))
-                head_offset_world = np.array([head_offset_world.x, head_offset_world.y, head_offset_world.z])
-            else:
-                # 如果无法获取旋转，假设机器人朝向前方
-                head_offset_world = head_offset_local
-            
-            # 计算摄像头位置
-            camera_position = base_position + head_offset_world
-            
-            # 设置智能体状态并获取观察
-            sensor_agent_state = habitat_sim.AgentState()
-            sensor_agent_state.position = mn.Vector3(camera_position)
-            
-            # 使用机器人的朝向作为摄像头朝向
-            if hasattr(robot_rotation, 'vector') and hasattr(robot_rotation, 'scalar'):
-                vec = robot_rotation.vector
-                sensor_orientation = np.array([vec.x, vec.y, vec.z, robot_rotation.scalar], dtype=np.float32)
-                quat_norm = np.linalg.norm(sensor_orientation)
+            # 安全地处理rotation
+            rotation = agent_state.rotation
+            if isinstance(rotation, np.ndarray) and len(rotation) == 4:
+                # rotation是numpy数组格式的quaternion [x, y, z, w]
+                quat_array = rotation.astype(np.float32)
+                quat_norm = np.linalg.norm(quat_array)
                 if quat_norm > 0:
-                    sensor_orientation = sensor_orientation / quat_norm
-                sensor_agent_state.rotation = sensor_orientation
+                    quat_array = quat_array / quat_norm
+                virtual_agent_state.rotation = quat_array
+            elif hasattr(rotation, 'vector') and hasattr(rotation, 'scalar'):
+                # rotation是magnum Quaternion对象
+                vec = rotation.vector
+                rotation_array = np.array([vec.x, vec.y, vec.z, rotation.scalar], dtype=np.float32)
+                quat_norm = np.linalg.norm(rotation_array)
+                if quat_norm > 0:
+                    rotation_array = rotation_array / quat_norm
+                virtual_agent_state.rotation = rotation_array
+            elif hasattr(rotation, '__len__') and len(rotation) == 4:
+                # 其他类型的4元素数组
+                quat_array = np.array(rotation, dtype=np.float32)
+                quat_norm = np.linalg.norm(quat_array)
+                if quat_norm > 0:
+                    quat_array = quat_array / quat_norm
+                virtual_agent_state.rotation = quat_array
             else:
                 # 使用默认朝向
-                sensor_agent_state.rotation = np.array([0, 0, 0, 1], dtype=np.float32)
+                virtual_agent_state.rotation = np.array([0, 0, 0, 1], dtype=np.float32)
             
-            # 临时设置智能体状态并获取观察
+            # 临时设置状态并获取观察
             original_state = self.simulator.agent.get_state()
-            self.simulator.agent.set_state(sensor_agent_state)
+            self.simulator.agent.set_state(virtual_agent_state)
             observation = self.simulator.get_fpv_observation()
             self.simulator.agent.set_state(original_state)
             
-            logging.info(f"Got fallback robot sensor observation for {agent_id} from estimated head position: {camera_position}")
             return observation
             
         except Exception as e:
-            logging.error(f"Failed to get fallback robot sensor observation for {agent_id}: {e}")
-            logging.debug(traceback.format_exc())
-            
-            # 最终回退：使用智能体状态
-            agent_state = self.agent_states.get(agent_id)
-            if agent_state:
-                return self._get_virtual_agent_observation(agent_state)
-            else:
-                # 返回黑色图像
-                resolution = self.agent_configs[0]["sensors"]["color_sensor"]["resolution"]
-                return np.zeros((resolution[0], resolution[1], 3), dtype=np.uint8)
-    
-
-class URDFCameraParser:
-    """解析URDF文件以获取机器人头部摄像头的真实位置和朝向"""
-    
-    def __init__(self, urdf_path: str):
-        self.urdf_path = urdf_path
-        self.tree = ET.parse(urdf_path)
-        self.root = self.tree.getroot()
-        self.joint_transforms = {}
-        self._parse_joints()
-    
-    def _parse_joints(self):
-        """解析所有关节的变换"""
-        for joint in self.root.findall('joint'):
-            joint_name = joint.get('name')
-            origin = joint.find('origin')
-            if origin is not None:
-                xyz = origin.get('xyz', '0 0 0').split()
-                rpy = origin.get('rpy', '0 0 0').split()
-                translation = np.array([float(x) for x in xyz])
-                rotation = np.array([float(x) for x in rpy])
-                
-                # 将RPY转换为旋转矩阵
-                rot_matrix = self._rpy_to_rotation_matrix(rotation)
-                
-                # 构建4x4变换矩阵
-                transform = np.eye(4)
-                transform[:3, :3] = rot_matrix
-                transform[:3, 3] = translation
-                
-                self.joint_transforms[joint_name] = {
-                    'transform': transform,
-                    'parent': joint.find('parent').get('link') if joint.find('parent') is not None else None,
-                    'child': joint.find('child').get('link') if joint.find('child') is not None else None
-                }
-    
-    def _rpy_to_rotation_matrix(self, rpy):
-        """将RPY角度转换为旋转矩阵"""
-        roll, pitch, yaw = rpy
-        
-        # 旋转矩阵 = Rz(yaw) * Ry(pitch) * Rx(roll)
-        R_x = np.array([[1, 0, 0],
-                        [0, np.cos(roll), -np.sin(roll)],
-                        [0, np.sin(roll), np.cos(roll)]])
-        
-        R_y = np.array([[np.cos(pitch), 0, np.sin(pitch)],
-                        [0, 1, 0],
-                        [-np.sin(pitch), 0, np.cos(pitch)]])
-        
-        R_z = np.array([[np.cos(yaw), -np.sin(yaw), 0],
-                        [np.sin(yaw), np.cos(yaw), 0],
-                        [0, 0, 1]])
-        
-        return R_z @ R_y @ R_x
-    
-    def get_camera_transform_chain(self, camera_link='head_camera_rgb_frame'):
-        """获取从base_link到摄像头的完整变换链"""
-        # 定义Fetch机器人的运动链：base_link -> torso_lift_link -> head_pan_link -> head_tilt_link -> head_camera_link -> head_camera_rgb_frame
-        chain = [
-            'torso_lift_joint',    # base_link -> torso_lift_link
-            'head_pan_joint',      # torso_lift_link -> head_pan_link  
-            'head_tilt_joint',     # head_pan_link -> head_tilt_link
-            'head_camera_joint',   # head_tilt_link -> head_camera_link
-            'head_camera_rgb_joint' # head_camera_link -> head_camera_rgb_frame
-        ]
-        
-        # 计算累积变换
-        cumulative_transform = np.eye(4)
-        for joint_name in chain:
-            if joint_name in self.joint_transforms:
-                cumulative_transform = cumulative_transform @ self.joint_transforms[joint_name]['transform']
-            else:
-                logging.warning(f"Joint '{joint_name}' not found in URDF")
-        
-        return cumulative_transform
-    
-    def get_camera_position_and_orientation(self, robot_transform):
-        """
-        获取摄像头在世界坐标系中的位置和朝向
-        
-        Args:
-            robot_transform: 机器人base_link在世界坐标系中的4x4变换矩阵
-            
-        Returns:
-            tuple: (position, orientation_quaternion)
-        """
-        try:
-            # 获取从base_link到摄像头的变换
-            camera_local_transform = self.get_camera_transform_chain()
-            
-            # 计算摄像头在世界坐标系中的变换
-            camera_world_transform = robot_transform @ camera_local_transform
-            
-            # 提取位置
-            position = camera_world_transform[:3, 3]
-            
-            # 提取旋转矩阵并转换为四元数
-            rotation_matrix = camera_world_transform[:3, :3]
-            
-            try:
-                # 尝试使用scipy进行旋转矩阵到四元数的转换
-                from scipy.spatial.transform import Rotation as R
-                rotation = R.from_matrix(rotation_matrix)
-                orientation_quaternion = rotation.as_quat()  # [x, y, z, w]
-            except ImportError:
-                # 如果scipy不可用，使用手动计算四元数的方法
-                logging.warning("scipy not available, using manual quaternion calculation")
-                orientation_quaternion = self._rotation_matrix_to_quaternion(rotation_matrix)
-            
-            return position, orientation_quaternion
-            
-        except Exception as e:
-            logging.error(f"Failed to get camera position and orientation: {e}")
-            return None, None
-    
-    def _rotation_matrix_to_quaternion(self, rotation_matrix):
-        """手动将旋转矩阵转换为四元数 [x, y, z, w]"""
-        try:
-            # 从旋转矩阵计算四元数的Shepperd方法
-            R = rotation_matrix
-            trace = R[0, 0] + R[1, 1] + R[2, 2]
-            
-            if trace > 0:
-                s = np.sqrt(trace + 1.0) * 2  # s = 4 * qw
-                qw = 0.25 * s
-                qx = (R[2, 1] - R[1, 2]) / s
-                qy = (R[0, 2] - R[2, 0]) / s
-                qz = (R[1, 0] - R[0, 1]) / s
-            elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-                s = np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2  # s = 4 * qx
-                qw = (R[2, 1] - R[1, 2]) / s
-                qx = 0.25 * s
-                qy = (R[0, 1] + R[1, 0]) / s
-                qz = (R[0, 2] + R[2, 0]) / s
-            elif R[1, 1] > R[2, 2]:
-                s = np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2  # s = 4 * qy
-                qw = (R[0, 2] - R[2, 0]) / s
-                qx = (R[0, 1] + R[1, 0]) / s
-                qy = 0.25 * s
-                qz = (R[1, 2] + R[2, 1]) / s
-            else:
-                s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2  # s = 4 * qz
-                qw = (R[1, 0] - R[0, 1]) / s
-                qx = (R[0, 2] + R[2, 0]) / s
-                qy = (R[1, 2] + R[2, 1]) / s
-                qz = 0.25 * s
-            
-            # 返回[x, y, z, w]格式
-            quaternion = np.array([qx, qy, qz, qw])
-            
-            # 归一化四元数
-            quat_norm = np.linalg.norm(quaternion)
-            if quat_norm > 0:
-                quaternion = quaternion / quat_norm
-            
-            return quaternion
-            
-        except Exception as e:
-            logging.error(f"Failed to convert rotation matrix to quaternion: {e}")
-            # 返回单位四元数
-            return np.array([0, 0, 0, 1])
+            logging.error(f"Failed to get virtual agent observation: {e}")
+            # 返回默认的黑色图像
+            resolution = self.agent_configs[0]["sensors"]["color_sensor"]["resolution"]
+            return np.zeros((resolution[0], resolution[1], 3), dtype=np.uint8)
