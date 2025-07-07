@@ -1029,7 +1029,7 @@ class HabitatVideoGenerator:
             return True
             
         except Exception as e:
-            print(f"    Direct movement failed: {e}")
+            print(f"    Direct movement失败: {e}")
             return False
     
     def _execute_path_movement(self, path: List[np.ndarray]) -> bool:
@@ -1879,3 +1879,29 @@ class CustomHabitatSimulator(HabitatSimulator):
         except Exception as e:
             print(f"Warning: Failed to move robot to position: {e}")
             return False
+
+    def set_agent_state(self, position: np.ndarray, rotation: np.ndarray):
+        """设置智能体状态（位置和旋转）"""
+        try:
+            # 创建AgentState对象
+            agent_state = habitat_sim.AgentState()
+            agent_state.position = position
+            
+            # 处理旋转 - 确保是正确的四元数格式
+            if len(rotation) == 4:
+                # 四元数格式 [x, y, z, w]
+                quat = mn.Quaternion(mn.Vector3(rotation[0], rotation[1], rotation[2]), rotation[3])
+                agent_state.rotation = quat
+            else:
+                # 默认旋转
+                agent_state.rotation = mn.Quaternion()
+            
+            # 设置智能体状态
+            self.agent.set_state(agent_state)
+            
+        except Exception as e:
+            print(f"Warning: Failed to set agent state: {e}")
+
+    def move_agent_to(self, position: np.ndarray, rotation: np.ndarray):
+        """移动智能体到指定位置（兼容性方法）"""
+        self.set_agent_state(position, rotation)
