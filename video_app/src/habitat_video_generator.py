@@ -73,35 +73,50 @@ class HabitatSimulator:
         temp_agent_cfg.sensor_specifications = [temp_sensor]
         
         temp_sim = habitat_sim.Simulator(habitat_sim.Configuration(backend_cfg, [temp_agent_cfg]))
-        temp_bounds = temp_sim.pathfinder.get_bounds()
-        world_size_x = temp_bounds[1][0] - temp_bounds[0][0]
-        world_size_z = temp_bounds[1][2] - temp_bounds[0][2]
+        
+        # 确保导航网格已加载
+        if not temp_sim.pathfinder.is_loaded:
+            navmesh_settings = habitat_sim.NavMeshSettings()
+            navmesh_settings.set_defaults()
+            temp_sim.recompute_navmesh(temp_sim.pathfinder, navmesh_settings)
+        
+        # 使用导航网格顶点计算场景边界（更可靠）
+        navmesh_vertices = np.array(temp_sim.pathfinder.build_navmesh_vertices())
+        if len(navmesh_vertices) == 0:
+            print("警告：无法获取导航网格顶点，使用默认场景边界")
+            world_size_x = 10.0
+            world_size_z = 10.0
+        else:
+            min_bounds = navmesh_vertices.min(axis=0)
+            max_bounds = navmesh_vertices.max(axis=0)
+            world_size_x = max_bounds[0] - min_bounds[0]
+            world_size_z = max_bounds[2] - min_bounds[2]
+            print(f"场景导航区域尺寸: {world_size_x:.2f} x {world_size_z:.2f}")
+        
         temp_sim.close()
         
-        # 计算保持纵横比的地图分辨率
-        max_resolution = 1024
-        aspect_ratio = world_size_x / world_size_z
+        # 确保尺寸不为零
+        if world_size_x <= 0:
+            world_size_x = 10.0
+        if world_size_z <= 0:
+            world_size_z = 10.0
         
-        if aspect_ratio > 1:
-            # 宽度大于高度
-            map_width = max_resolution
-            map_height = int(max_resolution / aspect_ratio)
-        else:
-            # 高度大于宽度
-            map_height = max_resolution
-            map_width = int(max_resolution * aspect_ratio)
+        # 使用TopV.py的成功配置 - 固定4096x4096分辨率
+        print(f"场景尺寸: {world_size_x:.2f} x {world_size_z:.2f}")
         
-        print(f"场景尺寸比: {world_size_x:.2f} x {world_size_z:.2f} (比例: {aspect_ratio:.2f})")
-        print(f"地图分辨率: {map_width} x {map_height}")
-        
-        # 配置正交传感器（用于生成俯视地图）
-        # 注意：habitat-sim的分辨率格式是[height, width]
+        # 配置正交传感器（完全模仿TopV.py的配置）
         ortho_sensor_spec = habitat_sim.CameraSensorSpec()
-        ortho_sensor_spec.uuid = "ortho_sensor"
+        ortho_sensor_spec.resolution = [4096, 4096]  # TopV.py使用的固定高分辨率
         ortho_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
-        ortho_sensor_spec.resolution = [map_height, map_width]  # [height, width]
-        ortho_sensor_spec.position = mn.Vector3(0, 0, 0)
         ortho_sensor_spec.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
+        ortho_sensor_spec.far = 1000.0
+        ortho_sensor_spec.near = 0.01
+        ortho_sensor_spec.hfov = 90
+        ortho_sensor_spec.ortho_scale = 0.05  # TopV.py的关键参数
+        ortho_sensor_spec.clear_color = [0., 0., 0., 0.]
+        # 不设置uuid，使用默认传感器名称（与TopV.py一致）
+        
+        print(f"正交传感器配置: 4096x4096, ortho_scale=0.05")
         
         # 配置智能体 - 设置基本参数
         agent_cfg = habitat_sim.agent.AgentConfiguration()
@@ -131,9 +146,25 @@ class HabitatSimulator:
         self.agent = self.sim.get_agent(0)
         
         # 获取场景边界信息
-        self.scene_bounds = self.sim.pathfinder.get_bounds()
-        self.scene_center = (self.scene_bounds[0] + self.scene_bounds[1]) / 2.0
-        self.scene_size = self.scene_bounds[1] - self.scene_bounds[0]
+        # 使用导航网格顶点计算边界（更可靠）
+        if not self.sim.pathfinder.is_loaded:
+            navmesh_settings = habitat_sim.NavMeshSettings()
+            navmesh_settings.set_defaults()
+            self.sim.recompute_navmesh(self.sim.pathfinder, navmesh_settings)
+        
+        navmesh_vertices = np.array(self.sim.pathfinder.build_navmesh_vertices())
+        if len(navmesh_vertices) == 0:
+            print("警告：无法获取导航网格顶点，使用默认场景边界")
+            # 使用默认边界
+            min_bounds = [-5.0, 0.0, -5.0]
+            max_bounds = [5.0, 3.0, 5.0]
+        else:
+            min_bounds = navmesh_vertices.min(axis=0).tolist()
+            max_bounds = navmesh_vertices.max(axis=0).tolist()
+        
+        self.scene_bounds = (min_bounds, max_bounds)
+        self.scene_center = ((np.array(min_bounds) + np.array(max_bounds)) / 2.0).tolist()
+        self.scene_size = (np.array(max_bounds) - np.array(min_bounds)).tolist()
         self.ortho_scale = max(self.scene_size[0], self.scene_size[2]) / 2.0
         
         print(f"场景边界: {self.scene_bounds}")
@@ -142,8 +173,17 @@ class HabitatSimulator:
     
     def _generate_base_map(self):
         """生成带坐标系的基础俯视地图"""
-        # 设置正交相机位置和参数
-        camera_height = self.scene_bounds[1][1] + 5.0
+        # 参考TopV.py的相机位置设置方式
+        # 使用场景中心位置，高度设置为合理的俯视高度
+        navmesh_vertices = np.array(self.sim.pathfinder.build_navmesh_vertices())
+        if len(navmesh_vertices) > 0:
+            # 使用导航网格的平均高度 + 适当的俯视距离
+            mean_height = navmesh_vertices[:, 1].mean()
+            camera_height = mean_height + 5.0  # 在平均高度上方5米
+        else:
+            # 备选方案：使用场景边界
+            camera_height = self.scene_bounds[1][1] + 5.0
+        
         camera_position = mn.Vector3(self.scene_center[0], camera_height, self.scene_center[2])
         
         # 设置智能体状态以获取俯视图
@@ -152,12 +192,28 @@ class HabitatSimulator:
         agent_state.rotation = np.array([-0.7071068, 0, 0, 0.7071068])  # 朝下看
         self.agent.set_state(agent_state)
         
+        print(f"正交相机位置: {camera_position}")
+        print(f"相机高度: {camera_height:.2f}m")
+        
         # 正交传感器已在初始化时配置为ORTHOGRAPHIC类型
         # 这里不需要重新配置sensor_subtype
         
-        # 获取俯视图
+        # 获取俯视图 - 使用默认传感器名称（与TopV.py一致）
         observations = self.sim.get_sensor_observations()
-        ortho_img = observations["ortho_sensor"]
+        # 由于我们没有设置uuid，使用默认的COLOR传感器名称
+        # 在多传感器配置中，需要确定正确的传感器名称
+        print(f"Available sensors: {list(observations.keys())}")
+        
+        # 尝试不同的传感器名称
+        if "rgba_camera" in observations:
+            ortho_img = observations["rgba_camera"]
+        elif "color_sensor" in observations:
+            ortho_img = observations["color_sensor"]
+        else:
+            # 使用第一个可用的传感器
+            sensor_name = list(observations.keys())[0]
+            ortho_img = observations[sensor_name]
+            print(f"Using sensor: {sensor_name}")
         
         # 转换为PIL图像
         base_image = Image.fromarray(ortho_img[..., :3], "RGB")
@@ -1640,29 +1696,50 @@ class CustomHabitatSimulator(HabitatSimulator):
         temp_agent_cfg.sensor_specifications = [temp_sensor]
         
         temp_sim = habitat_sim.Simulator(habitat_sim.Configuration(backend_cfg, [temp_agent_cfg]))
-        temp_bounds = temp_sim.pathfinder.get_bounds()
-        world_size_x = temp_bounds[1][0] - temp_bounds[0][0]
-        world_size_z = temp_bounds[1][2] - temp_bounds[0][2]
+        
+        # 确保导航网格已加载
+        if not temp_sim.pathfinder.is_loaded:
+            navmesh_settings = habitat_sim.NavMeshSettings()
+            navmesh_settings.set_defaults()
+            temp_sim.recompute_navmesh(temp_sim.pathfinder, navmesh_settings)
+        
+        # 使用导航网格顶点计算场景边界（更可靠）
+        navmesh_vertices = np.array(temp_sim.pathfinder.build_navmesh_vertices())
+        if len(navmesh_vertices) == 0:
+            print("警告：无法获取导航网格顶点，使用默认场景边界")
+            world_size_x = 10.0
+            world_size_z = 10.0
+        else:
+            min_bounds = navmesh_vertices.min(axis=0)
+            max_bounds = navmesh_vertices.max(axis=0)
+            world_size_x = max_bounds[0] - min_bounds[0]
+            world_size_z = max_bounds[2] - min_bounds[2]
+            print(f"场景导航区域尺寸: {world_size_x:.2f} x {world_size_z:.2f}")
+        
         temp_sim.close()
         
-        # 计算地图分辨率
-        max_resolution = 1024
-        aspect_ratio = world_size_x / world_size_z
+        # 确保尺寸不为零
+        if world_size_x <= 0:
+            world_size_x = 10.0
+        if world_size_z <= 0:
+            world_size_z = 10.0
         
-        if aspect_ratio > 1:
-            map_width = max_resolution
-            map_height = int(max_resolution / aspect_ratio)
-        else:
-            map_height = max_resolution
-            map_width = int(max_resolution * aspect_ratio)
+        # 使用TopV.py的成功配置 - 固定4096x4096分辨率
+        print(f"场景尺寸: {world_size_x:.2f} x {world_size_z:.2f}")
         
-        # 配置正交传感器
+        # 配置正交传感器（完全模仿TopV.py的配置）
         ortho_sensor_spec = habitat_sim.CameraSensorSpec()
-        ortho_sensor_spec.uuid = "ortho_sensor"
+        ortho_sensor_spec.resolution = [4096, 4096]  # TopV.py使用的固定高分辨率
         ortho_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
-        ortho_sensor_spec.resolution = [map_height, map_width]
-        ortho_sensor_spec.position = mn.Vector3(0, 0, 0)
         ortho_sensor_spec.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
+        ortho_sensor_spec.far = 1000.0
+        ortho_sensor_spec.near = 0.01
+        ortho_sensor_spec.hfov = 90
+        ortho_sensor_spec.ortho_scale = 0.05  # TopV.py的关键参数
+        ortho_sensor_spec.clear_color = [0., 0., 0., 0.]
+        # 不设置uuid，使用默认传感器名称（与TopV.py一致）
+        
+        print(f"正交传感器配置: 4096x4096, ortho_scale=0.05")
         
         # 配置智能体
         agent_cfg = habitat_sim.agent.AgentConfiguration()
@@ -1749,9 +1826,25 @@ class CustomHabitatSimulator(HabitatSimulator):
                 self.robot_object = None
         
         # 获取场景信息
-        self.scene_bounds = self.sim.pathfinder.get_bounds()
-        self.scene_center = (self.scene_bounds[0] + self.scene_bounds[1]) / 2.0
-        self.scene_size = self.scene_bounds[1] - self.scene_bounds[0]
+        # 使用导航网格顶点计算边界（更可靠）
+        if not self.sim.pathfinder.is_loaded:
+            navmesh_settings = habitat_sim.NavMeshSettings()
+            navmesh_settings.set_defaults()
+            self.sim.recompute_navmesh(self.sim.pathfinder, navmesh_settings)
+        
+        navmesh_vertices = np.array(self.sim.pathfinder.build_navmesh_vertices())
+        if len(navmesh_vertices) == 0:
+            print("警告：无法获取导航网格顶点，使用默认场景边界")
+            # 使用默认边界
+            min_bounds = [-5.0, 0.0, -5.0]
+            max_bounds = [5.0, 3.0, 5.0]
+        else:
+            min_bounds = navmesh_vertices.min(axis=0).tolist()
+            max_bounds = navmesh_vertices.max(axis=0).tolist()
+        
+        self.scene_bounds = (min_bounds, max_bounds)
+        self.scene_center = ((np.array(min_bounds) + np.array(max_bounds)) / 2.0).tolist()
+        self.scene_size = (np.array(max_bounds) - np.array(min_bounds)).tolist()
         self.ortho_scale = max(self.scene_size[0], self.scene_size[2]) / 2.0
         
         print(f"Custom simulator initialized with GPU device {self.gpu_device_id}")
