@@ -111,8 +111,8 @@ def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> np.ndarray:
     
     Args:
         roll: 滚转角 (绕X轴旋转)
-        pitch: 俯仰角 (绕Y轴旋转)  
-        yaw: 偏航角 (绕Z轴旋转)
+        pitch: 俯仰角 (绕Z轴旋转)  
+        yaw: 偏航角 (绕Y轴旋转) - 这是机器人导航中的主要旋转轴
     
     Returns:
         四元数 [x, y, z, w]
@@ -130,11 +130,11 @@ def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> np.ndarray:
     cy = np.cos(yaw * 0.5)
     sy = np.sin(yaw * 0.5)
     
-    # 计算四元数分量
-    w = cr * cp * cy + sr * sp * sy
-    x = sr * cp * cy - cr * sp * sy
-    y = cr * sp * cy + sr * cp * sy
-    z = cr * cp * sy - sr * sp * cy
+    # 计算四元数分量 - 调整为Y轴偏航
+    w = cr * cp * cy - sr * sp * sy
+    x = sr * cp * cy + cr * sp * sy
+    y = cr * cp * sy + sr * sp * cy  # Y分量对应绕Y轴的旋转
+    z = cr * sp * cy - sr * cp * sy
     
     return np.array([x, y, z, w], dtype=np.float32)
 
@@ -147,6 +147,9 @@ def euler_from_quaternion(quat: np.ndarray) -> Tuple[float, float, float]:
     
     Returns:
         (roll, pitch, yaw) 欧拉角（度）
+        roll: 绕X轴旋转
+        pitch: 绕Z轴旋转
+        yaw: 绕Y轴旋转（机器人导航中的主要旋转轴）
     """
     x, y, z, w = quat
     
@@ -155,15 +158,15 @@ def euler_from_quaternion(quat: np.ndarray) -> Tuple[float, float, float]:
     cosr_cosp = 1 - 2 * (x * x + y * y)
     roll = np.arctan2(sinr_cosp, cosr_cosp)
     
-    # Pitch (绕Y轴旋转)
-    sinp = 2 * (w * y - z * x)
+    # Pitch (绕Z轴旋转)
+    sinp = 2 * (w * z - x * y)
     if abs(sinp) >= 1:
         pitch = np.copysign(np.pi / 2, sinp)  # 使用90度如果超出范围
     else:
         pitch = np.arcsin(sinp)
     
-    # Yaw (绕Z轴旋转)
-    siny_cosp = 2 * (w * z + x * y)
+    # Yaw (绕Y轴旋转) - 这是机器人导航中的主要旋转轴
+    siny_cosp = 2 * (w * y + x * z)
     cosy_cosp = 1 - 2 * (y * y + z * z)
     yaw = np.arctan2(siny_cosp, cosy_cosp)
     
