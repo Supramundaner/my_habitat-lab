@@ -161,7 +161,7 @@ class ActionProcessor:
             True表示成功
         """
         angle = params['angle']
-        return self._handle_turn(-angle)  # 左转为负角度
+        return self._handle_turn(angle)  # 左转为正角度（修复方向）
     
     def _handle_turn_right(self, params: Dict[str, Any]) -> bool:
         """
@@ -174,7 +174,7 @@ class ActionProcessor:
             True表示成功
         """
         angle = params['angle']
-        return self._handle_turn(angle)  # 右转为正角度
+        return self._handle_turn(-angle)  # 右转为负角度（修复方向）
     
     def _handle_turn(self, angle_degrees: float) -> bool:
         """
