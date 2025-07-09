@@ -571,8 +571,6 @@ if __name__ == '__main__':
     #hm3d_scene_path = "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/apartment_1.glb"
     hm3d_scene_path ="/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb"
     output_path_with_coords = "/home/yaoaa/habitat-lab/TopDownVIew.png"
-    
-    print("=== 渲染带坐标系的俯视图 ===")
     result_with_coords, corner_info = render_topdown_views(
         hm3d_scene_path, 
         draw_coordinates=True
