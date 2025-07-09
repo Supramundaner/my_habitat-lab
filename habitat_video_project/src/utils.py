@@ -107,36 +107,27 @@ def convert_to_numpy_quat(quat: mn.Quaternion) -> np.ndarray:
 
 
 def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> np.ndarray:
-    """从欧拉角创建四元数
+    """从欧拉角创建四元数（适配Habitat坐标系）
     
     Args:
-        roll: 滚转角 (绕X轴旋转)
-        pitch: 俯仰角 (绕Z轴旋转)  
-        yaw: 偏航角 (绕Y轴旋转) - 这是机器人导航中的主要旋转轴
+        roll: 滚转角 (绕X轴旋转，度)
+        pitch: 俯仰角 (绕X轴旋转，度) - 注意：在Habitat中主要使用偏航角
+        yaw: 偏航角 (绕Y轴旋转，度) - 这是机器人导航中的主要旋转轴
     
     Returns:
         四元数 [x, y, z, w]
     """
     # 转换为弧度
-    roll = np.radians(roll)
-    pitch = np.radians(pitch)
-    yaw = np.radians(yaw)
+    yaw_rad = np.radians(yaw)
     
-    # 计算各轴的半角
-    cr = np.cos(roll * 0.5)
-    sr = np.sin(roll * 0.5)
-    cp = np.cos(pitch * 0.5)
-    sp = np.sin(pitch * 0.5)
-    cy = np.cos(yaw * 0.5)
-    sy = np.sin(yaw * 0.5)
-    
-    # 计算四元数分量 - 调整为Y轴偏航
-    w = cr * cp * cy - sr * sp * sy
-    x = sr * cp * cy + cr * sp * sy
-    y = cr * cp * sy + sr * sp * cy  # Y分量对应绕Y轴的旋转
-    z = cr * sp * cy - sr * cp * sy
-    
-    return np.array([x, y, z, w], dtype=np.float32)
+    # 对于机器人导航，主要使用绕Y轴的偏航角
+    # 简化为只处理偏航角，与habitat_video_generator.py中的实现一致
+    return np.array([
+        0.0,
+        np.sin(yaw_rad / 2.0),
+        0.0,
+        np.cos(yaw_rad / 2.0)
+    ], dtype=np.float32)
 
 
 def euler_from_quaternion(quat: np.ndarray) -> Tuple[float, float, float]:
@@ -225,8 +216,9 @@ def quaternion_to_direction_yaw(position: np.ndarray, target_position: np.ndarra
     dx = target_position[0] - position[0]
     dz = target_position[2] - position[2]
     
-    # 计算偏航角
-    yaw = np.arctan2(dx, dz)
+    # 在Habitat中，-Z轴是前方，所以计算朝向-Z方向的角度
+    # 修复：使用正确的atan2参数顺序和轴方向
+    yaw = np.arctan2(dx, -dz)  # 注意这里是 -dz，因为-Z是前方
     
     # 转换为四元数（只绕Y轴旋转）
     return quaternion_from_euler(0, 0, np.degrees(yaw))

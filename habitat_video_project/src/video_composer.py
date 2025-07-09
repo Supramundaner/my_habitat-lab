@@ -5,12 +5,13 @@ VideoComposer - 视频合成和绘制类 (View)
 
 import cv2
 import numpy as np
+import magnum as mn
 from PIL import Image, ImageDraw
 from typing import Dict, Any, Optional
 import math
 
 from .simulator import HabitatSimulator
-from .utils import euler_from_quaternion
+from .utils import euler_from_quaternion, convert_to_magnum_quat
 
 
 class VideoComposer:
@@ -220,39 +221,38 @@ class VideoComposer:
             arrow_length: 箭头长度
         """
         try:
-            # 从四元数提取偏航角
-            roll, pitch, yaw = euler_from_quaternion(rotation_quat)
+            # 使用Magnum四元数来获取正确的前向向量
+            quat = convert_to_magnum_quat(rotation_quat)
             
-            # 计算箭头终点（注意坐标系转换）
-            # 在地图中，Y轴向下为正，所以需要调整角度
-            yaw_rad = math.radians(yaw)
+            # 在Habitat中，-Z轴是前方，计算前向向量
+            forward_vec = quat.transform_vector(mn.Vector3(0, 0, -1))
             
-            # 计算前向向量（在地图坐标系中）
-            dx = math.sin(yaw_rad) * arrow_length
-            dy = -math.cos(yaw_rad) * arrow_length  # 负号因为Y轴向下
+            # 转换到地图坐标系：X轴向右，Z轴向下
+            # 在地图上：X对应水平向右，Z对应垂直向下
+            dx = forward_vec.x * arrow_length
+            dz = forward_vec.z * arrow_length  # 注意：这里是Z，不是Y
             
             end_x = center_x + int(dx)
-            end_y = center_y + int(dy)
+            end_y = center_y + int(dz)  # Z轴对应地图的Y轴
             
             # 绘制主箭头线
             draw.line([(center_x, center_y), (end_x, end_y)], fill=(255, 255, 0), width=3)
             
-            # 绘制箭头头部
+            # 计算箭头头部的方向
+            arrow_angle = math.atan2(dz, dx)
             arrow_head_length = arrow_length * 0.3
             arrow_head_angle = math.radians(30)
             
             # 左侧箭头线
-            left_dx = math.sin(yaw_rad - arrow_head_angle) * arrow_head_length
-            left_dy = -math.cos(yaw_rad - arrow_head_angle) * arrow_head_length
-            left_x = end_x - int(left_dx)
-            left_y = end_y - int(left_dy)
+            left_angle = arrow_angle + math.pi - arrow_head_angle
+            left_x = end_x + int(math.cos(left_angle) * arrow_head_length)
+            left_y = end_y + int(math.sin(left_angle) * arrow_head_length)
             draw.line([(end_x, end_y), (left_x, left_y)], fill=(255, 255, 0), width=2)
             
             # 右侧箭头线
-            right_dx = math.sin(yaw_rad + arrow_head_angle) * arrow_head_length
-            right_dy = -math.cos(yaw_rad + arrow_head_angle) * arrow_head_length
-            right_x = end_x - int(right_dx)
-            right_y = end_y - int(right_dy)
+            right_angle = arrow_angle + math.pi + arrow_head_angle
+            right_x = end_x + int(math.cos(right_angle) * arrow_head_length)
+            right_y = end_y + int(math.sin(right_angle) * arrow_head_length)
             draw.line([(end_x, end_y), (right_x, right_y)], fill=(255, 255, 0), width=2)
             
         except Exception as e:
