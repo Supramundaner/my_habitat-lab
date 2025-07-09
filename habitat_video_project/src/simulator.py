@@ -97,7 +97,70 @@ class HabitatSimulator:
         self.sim = habitat_sim.Simulator(cfg)
         self.agent = self.sim.get_agent(0)
         
+        # 检查并重新计算navmesh（参考TopDownViewGenerator.py的robust_load_ortho_sim函数）
+        self._ensure_navmesh_loaded()
+        
         print("模拟器初始化完成")
+    
+    def _ensure_navmesh_loaded(self):
+        """
+        确保导航网格已加载，如果没有则重新计算
+        参考TopDownViewGenerator.py的robust_load_ortho_sim函数实现
+        """
+        try:
+            if not self.sim.pathfinder.is_loaded:
+                print("警告: 导航网格未加载，正在重新计算...")
+                navmesh_settings = habitat_sim.NavMeshSettings()
+                navmesh_settings.set_defaults()
+                
+                # 可以根据需要调整navmesh设置
+                # 这些设置会影响导航网格的精度和性能
+                navmesh_settings.cell_size = 0.05  # 网格单元大小（米）- 较小值提高精度但降低性能
+                navmesh_settings.cell_height = 0.2  # 网格单元高度（米）
+                navmesh_settings.agent_height = 1.5  # 智能体高度（米）
+                navmesh_settings.agent_radius = 0.1  # 智能体半径（米）
+                navmesh_settings.agent_max_climb = 0.2  # 最大攀爬高度（米）
+                navmesh_settings.agent_max_slope = 45.0  # 最大坡度（度）
+                
+                print(f"导航网格设置:")
+                print(f"  cell_size: {navmesh_settings.cell_size}m")
+                print(f"  cell_height: {navmesh_settings.cell_height}m")
+                print(f"  agent_height: {navmesh_settings.agent_height}m")
+                print(f"  agent_radius: {navmesh_settings.agent_radius}m")
+                print(f"  agent_max_climb: {navmesh_settings.agent_max_climb}m")
+                print(f"  agent_max_slope: {navmesh_settings.agent_max_slope}°")
+                
+                # 重新计算导航网格
+                success = self.sim.recompute_navmesh(self.sim.pathfinder, navmesh_settings)
+                
+                if success:
+                    print("导航网格重新计算成功")
+                    # 验证导航网格是否真的加载了
+                    if self.sim.pathfinder.is_loaded:
+                        navmesh_vertices = np.array(self.sim.pathfinder.build_navmesh_vertices())
+                        print(f"导航网格顶点数: {len(navmesh_vertices)}")
+                        if len(navmesh_vertices) > 0:
+                            print("导航网格验证通过")
+                        else:
+                            print("警告: 导航网格加载但无顶点")
+                    else:
+                        print("警告: 导航网格计算成功但未正确加载")
+                else:
+                    print("错误: 导航网格重新计算失败")
+                    print("可能的原因:")
+                    print("  1. 场景文件格式不支持")
+                    print("  2. 场景中没有可导航的区域")
+                    print("  3. 导航网格参数设置不当")
+            else:
+                print("导航网格已存在，无需重新计算")
+                
+        except Exception as e:
+            print(f"检查/重新计算导航网格时出错: {e}")
+            print("提示: 可能需要检查场景文件是否正确或场景是否支持导航")
+            # 提供更详细的错误信息
+            import traceback
+            print("详细错误信息:")
+            traceback.print_exc()
     
     def setup_scene_and_agent(self, initial_state: Dict[str, Any]):
         """
@@ -106,6 +169,9 @@ class HabitatSimulator:
         Args:
             initial_state: 初始状态配置，包含position和rotation
         """
+        # 打印导航网格信息用于调试
+        self.print_navmesh_info()
+        
         # 1. 生成topdown地图
         self._generate_topdown_map()
         
@@ -139,8 +205,11 @@ class HabitatSimulator:
         """生成topdown地图 - 参考TopViewGenerator.py的实现"""
         # 确保导航网格已加载
         if not self.sim.pathfinder.is_loaded:
-            print("警告: 导航网格未加载")
-            return
+            print("警告: 导航网格未加载，尝试重新计算...")
+            self._ensure_navmesh_loaded()
+            if not self.sim.pathfinder.is_loaded:
+                print("错误: 无法加载或重新计算导航网格，无法生成topdown地图")
+                return
         
         # 使用导航网格顶点计算场景边界
         navmesh_vertices = np.array(self.sim.pathfinder.build_navmesh_vertices())
@@ -263,6 +332,14 @@ class HabitatSimulator:
             Y坐标或None（如果不可导航）
         """
         try:
+            # 确保导航网格已加载
+            if not self.sim.pathfinder.is_loaded:
+                print("警告: 导航网格未加载，尝试重新计算...")
+                self._ensure_navmesh_loaded()
+                if not self.sim.pathfinder.is_loaded:
+                    print("错误: 无法加载导航网格")
+                    return None
+            
             test_point = mn.Vector3(x, 0.0, z)
             snapped_point = self.sim.pathfinder.snap_point(test_point)
             
@@ -289,6 +366,14 @@ class HabitatSimulator:
             True表示会发生碰撞，False表示路径安全
         """
         try:
+            # 确保导航网格已加载
+            if not self.sim.pathfinder.is_loaded:
+                print("警告: 导航网格未加载，尝试重新计算...")
+                self._ensure_navmesh_loaded()
+                if not self.sim.pathfinder.is_loaded:
+                    print("错误: 无法加载导航网格，无法进行碰撞检测")
+                    return True  # 保守策略，无法检测时认为会碰撞
+            
             # 计算路径方向和总距离
             direction = end_pos - start_pos
             total_distance = np.linalg.norm(direction)
@@ -510,3 +595,127 @@ class HabitatSimulator:
         if self.sim:
             self.sim.close()
             print("模拟器已关闭")
+    
+    def get_navmesh_info(self) -> Dict[str, Any]:
+        """
+        获取导航网格信息
+        
+        Returns:
+            包含导航网格状态和统计信息的字典
+        """
+        try:
+            info = {
+                'is_loaded': self.sim.pathfinder.is_loaded,
+                'navmesh_vertices_count': 0,
+                'navigable_area': 0.0,
+                'bounds': None
+            }
+            
+            if self.sim.pathfinder.is_loaded:
+                # 获取导航网格顶点
+                navmesh_vertices = np.array(self.sim.pathfinder.build_navmesh_vertices())
+                info['navmesh_vertices_count'] = len(navmesh_vertices)
+                
+                if len(navmesh_vertices) > 0:
+                    # 计算边界
+                    min_bounds = navmesh_vertices.min(axis=0)
+                    max_bounds = navmesh_vertices.max(axis=0)
+                    info['bounds'] = {
+                        'min': min_bounds.tolist(),
+                        'max': max_bounds.tolist(),
+                        'size': (max_bounds - min_bounds).tolist()
+                    }
+                    
+                    # 估算可导航面积（粗略计算）
+                    x_range = max_bounds[0] - min_bounds[0]
+                    z_range = max_bounds[2] - min_bounds[2]
+                    info['navigable_area'] = x_range * z_range
+            
+            return info
+            
+        except Exception as e:
+            print(f"获取导航网格信息失败: {e}")
+            return {
+                'is_loaded': False,
+                'navmesh_vertices_count': 0,
+                'navigable_area': 0.0,
+                'bounds': None,
+                'error': str(e)
+            }
+    
+    def print_navmesh_info(self):
+        """打印导航网格信息"""
+        info = self.get_navmesh_info()
+        print("=== 导航网格信息 ===")
+        print(f"是否已加载: {info['is_loaded']}")
+        print(f"顶点数量: {info['navmesh_vertices_count']}")
+        print(f"可导航面积: {info['navigable_area']:.2f} 平方米")
+        
+        if info['bounds']:
+            bounds = info['bounds']
+            print(f"边界范围:")
+            print(f"  X: {bounds['min'][0]:.2f} ~ {bounds['max'][0]:.2f} (宽度: {bounds['size'][0]:.2f}m)")
+            print(f"  Y: {bounds['min'][1]:.2f} ~ {bounds['max'][1]:.2f} (高度: {bounds['size'][1]:.2f}m)")
+            print(f"  Z: {bounds['min'][2]:.2f} ~ {bounds['max'][2]:.2f} (深度: {bounds['size'][2]:.2f}m)")
+        
+        if 'error' in info:
+            print(f"错误信息: {info['error']}")
+        
+        print("=" * 25)
+    
+    def force_recompute_navmesh(self, custom_settings: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        强制重新计算导航网格
+        
+        Args:
+            custom_settings: 自定义navmesh设置字典，可包含以下键:
+                - cell_size: 网格单元大小（米）
+                - cell_height: 网格单元高度（米）
+                - agent_height: 智能体高度（米）
+                - agent_radius: 智能体半径（米）
+                - agent_max_climb: 最大攀爬高度（米）
+                - agent_max_slope: 最大坡度（度）
+        
+        Returns:
+            是否成功重新计算导航网格
+        """
+        try:
+            print("强制重新计算导航网格...")
+            navmesh_settings = habitat_sim.NavMeshSettings()
+            navmesh_settings.set_defaults()
+            
+            # 应用自定义设置
+            if custom_settings:
+                if 'cell_size' in custom_settings:
+                    navmesh_settings.cell_size = custom_settings['cell_size']
+                if 'cell_height' in custom_settings:
+                    navmesh_settings.cell_height = custom_settings['cell_height']
+                if 'agent_height' in custom_settings:
+                    navmesh_settings.agent_height = custom_settings['agent_height']
+                if 'agent_radius' in custom_settings:
+                    navmesh_settings.agent_radius = custom_settings['agent_radius']
+                if 'agent_max_climb' in custom_settings:
+                    navmesh_settings.agent_max_climb = custom_settings['agent_max_climb']
+                if 'agent_max_slope' in custom_settings:
+                    navmesh_settings.agent_max_slope = custom_settings['agent_max_slope']
+                
+                print("使用自定义导航网格设置:")
+                for key, value in custom_settings.items():
+                    print(f"  {key}: {value}")
+            
+            # 重新计算导航网格
+            success = self.sim.recompute_navmesh(self.sim.pathfinder, navmesh_settings)
+            
+            if success:
+                print("导航网格强制重新计算成功")
+                self.print_navmesh_info()  # 打印新的navmesh信息
+                return True
+            else:
+                print("导航网格强制重新计算失败")
+                return False
+                
+        except Exception as e:
+            print(f"强制重新计算导航网格失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
