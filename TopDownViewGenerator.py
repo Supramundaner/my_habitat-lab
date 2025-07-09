@@ -108,6 +108,7 @@ def get_floor_navigable_extents(hsim: habitat_sim.Simulator, num_points_to_sampl
 
     return floor_extents
 
+
 def calculate_scene_bounds(hsim: habitat_sim.Simulator):
     """计算场景可导航区域的边界以确定合适的正交投影比例"""
     navmesh_vertices = np.array(hsim.pathfinder.build_navmesh_vertices())
@@ -132,7 +133,7 @@ def calculate_scene_bounds(hsim: habitat_sim.Simulator):
 
 def calculate_ortho_scale(scene_size, target_coverage=0.9):
     """根据场景大小计算合适的正交投影比例"""
-    base_scene_size = 18.0
+    base_scene_size = 20.0
     base_ortho_scale = 0.05
     
     calculated_scale = (base_ortho_scale * base_scene_size) / (scene_size / target_coverage)
@@ -205,6 +206,7 @@ def get_coordinate_grid_interval(scene_size):
     else:
         return 10.0
 
+
 def calculate_corner_coordinates(scene_bounds, ortho_scale):
     """
     计算图像四角对应的世界坐标信息
@@ -271,6 +273,8 @@ def print_corner_coordinates(corner_coords):
     print(f"视野范围: {corner_coords['view_range'][0]:.2f}m × {corner_coords['view_range'][1]:.2f}m")
     print(f"网格间隔: {corner_coords['grid_interval']:.1f}m")
     print("=" * 30)
+
+
 def draw_coordinate_system(image, scene_bounds, ortho_scale):
     """
     在俯视图上绘制世界坐标系
@@ -564,37 +568,18 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
 
 if __name__ == '__main__':
     # 使用示例
-    hm3d_scene_path = "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/apartment_1.glb"
-    output_path = "/home/yaoaa/habitat-lab/big_topdown_floors.png"
-    output_path_with_coords = "/home/yaoaa/habitat-lab/big_topdown_floors_with_coordinates.png"
+    #hm3d_scene_path = "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/apartment_1.glb"
+    hm3d_scene_path ="/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb"
+    output_path_with_coords = "/home/yaoaa/habitat-lab/TopDownVIew.png"
     
-    # 测试1：不带坐标系的渲染（仍然会输出角坐标信息）
-    print("=== 渲染不带坐标系的俯视图 ===")
-    result_without_coords, corner_info1 = render_topdown_views(
-        hm3d_scene_path, 
-        draw_coordinates=False
-    )
-    print(f"生成的俯视图尺寸: {result_without_coords.shape}")
-    
-    # 保存不带坐标系的图像
-    if result_without_coords.shape[-1] == 4:
-        result_rgb = result_without_coords[..., :3]
-    else:
-        result_rgb = result_without_coords
-    cv2.imwrite(output_path, cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR))
-    print(f"不带坐标系的俯视图已保存到: {output_path}")
-    
-    print("\n" + "="*60 + "\n")
-    
-    # 测试2：带坐标系的渲染
     print("=== 渲染带坐标系的俯视图 ===")
-    result_with_coords, corner_info2 = render_topdown_views(
+    result_with_coords, corner_info = render_topdown_views(
         hm3d_scene_path, 
         draw_coordinates=True
     )
     print(f"生成的带注释俯视图尺寸: {result_with_coords.shape}")
     
-    # 保存带坐标系的图像
+    # 保存图像
     if result_with_coords.shape[-1] == 4:
         result_coords_rgb = result_with_coords[..., :3]
     else:
