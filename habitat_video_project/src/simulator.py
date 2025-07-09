@@ -57,7 +57,7 @@ class HabitatSimulator:
         fpv_sensor_spec.uuid = "color_sensor"
         fpv_sensor_spec.sensor_type = habitat_sim.SensorType.COLOR
         fpv_sensor_spec.resolution = [512, 512]  # 临时分辨率，后续会调整
-        fpv_sensor_spec.position = mn.Vector3(0, self.config['agent']['sensor_height'], 0)
+        fpv_sensor_spec.position = mn.Vector3(0, 0, 0)  # 不设置高度offset，让传感器在agent位置
         fpv_sensor_spec.hfov = 90.0
         
         # 正交传感器配置（用于生成topdown地图）
@@ -202,7 +202,7 @@ class HabitatSimulator:
             print("错误: 无法将智能体放置到指定初始位置")
     
     def _generate_topdown_map(self) -> None:
-        """生成topdown地图 - 参考TopViewGenerator.py的实现"""
+        """生成topdown地图 - 完全参考TopViewGenerator.py的实现"""
         # 确保导航网格已加载
         if not self.sim.pathfinder.is_loaded:
             print("警告: 导航网格未加载，尝试重新计算...")
@@ -217,56 +217,185 @@ class HabitatSimulator:
             print("错误: 无法获取导航网格顶点")
             return
         
-        # 计算场景边界
+        # 计算场景边界和尺寸（参照TopDownViewGenerator.py的calculate_scene_bounds）
+        x_min, x_max = navmesh_vertices[:, 0].min(), navmesh_vertices[:, 0].max()
+        z_min, z_max = navmesh_vertices[:, 2].min(), navmesh_vertices[:, 2].max()
+        y_min, y_max = navmesh_vertices[:, 1].min(), navmesh_vertices[:, 1].max()
+        
+        scene_width = x_max - x_min
+        scene_depth = z_max - z_min
+        scene_size = max(scene_width, scene_depth)
+        
+        # 保存场景信息
         min_bounds = navmesh_vertices.min(axis=0)
         max_bounds = navmesh_vertices.max(axis=0)
-        
         self.scene_bounds = (min_bounds.tolist(), max_bounds.tolist())
-        self.scene_center = ((min_bounds + max_bounds) / 2.0).tolist()
-        self.scene_size = (max_bounds - min_bounds).tolist()
         
-        print(f"场景边界: {self.scene_bounds}")
+        # 计算场景中心（参照TopDownViewGenerator.py）
+        x_center = (x_min + x_max) / 2.0
+        z_center = (z_min + z_max) / 2.0
+        y_center = (y_min + y_max) / 2.0
+        self.scene_center = [x_center, y_center, z_center]
+        self.scene_size = [scene_width, y_max - y_min, scene_depth]
+        
+        print(f"场景边界: X[{x_min:.2f}, {x_max:.2f}], Y[{y_min:.2f}, {y_max:.2f}], Z[{z_min:.2f}, {z_max:.2f}]")
         print(f"场景中心: {self.scene_center}")
         print(f"场景尺寸: {self.scene_size}")
+        print(f"最大维度: {scene_size:.2f}m")
         
-        # 设置相机位置 - 使用场景中心上方的合理高度
-        camera_height = max_bounds[1] + max(self.scene_size[0], self.scene_size[2]) * 0.5
-        camera_position = mn.Vector3(self.scene_center[0], camera_height, self.scene_center[2])
+        # 计算正交投影比例（参照TopDownViewGenerator.py的calculate_ortho_scale）
+        base_scene_size = 20.0
+        base_ortho_scale = 0.05
+        target_coverage = 0.9
         
-        # 设置智能体状态以获取俯视图
-        agent_state = habitat_sim.AgentState()
-        agent_state.position = camera_position
-        agent_state.rotation = np.array([-0.7071068, 0, 0, 0.7071068])  # 朝下看
-        self.agent.set_state(agent_state)
+        calculated_scale = (base_ortho_scale * base_scene_size) / (scene_size / target_coverage)
+        safety_margin = 1.2
+        ortho_scale = calculated_scale / safety_margin
+        ortho_scale = max(0.01, min(0.2, ortho_scale))
         
-        print(f"正交相机位置: {camera_position}")
-        print(f"相机高度: {camera_height:.2f}m")
+        print(f"计算的正交投影比例: {ortho_scale:.4f}")
         
-        # 获取俯视图
-        observations = self.sim.get_sensor_observations()
+        # 使用楼层检测简化版本（只获取主要楼层）
+        floor_extents = self._get_simplified_floor_extents(navmesh_vertices)
         
-        if "ortho_sensor" in observations:
-            ortho_img = observations["ortho_sensor"]
-        else:
-            print(f"可用传感器: {list(observations.keys())}")
-            print("错误: 未找到正交传感器")
+        # 设置正交传感器的ortho_scale
+        self._update_ortho_sensor_scale(ortho_scale)
+        
+        # 渲染各楼层（参照TopDownViewGenerator.py）
+        floor_images = []
+        for fext in floor_extents:
+            # 过滤当前楼层的navmesh顶点
+            mask = (
+                (navmesh_vertices[:, 1] <= fext['max'] + 0.25) & 
+                (navmesh_vertices[:, 1] >= fext['min'] - 0.25)
+            )
+            if mask.any():
+                fcent = np.median(navmesh_vertices[mask, :], axis=0).tolist()
+            else:
+                fcent = [x_center, fext['mean'], z_center]
+            
+            # 设置智能体状态 - 参照TopDownViewGenerator.py
+            agent_position = [x_center, fcent[1] + 1.0, z_center]  # 楼层中心上方1米
+            agent_rotation = np.array([-0.7071068, 0, 0, 0.7071068])  # 向下看的四元数
+            
+            agent_state = habitat_sim.AgentState()
+            agent_state.position = agent_position
+            agent_state.rotation = agent_rotation
+            self.agent.set_state(agent_state)
+            
+            print(f"楼层 {len(floor_images)+1}: 相机位置 {agent_position}, 高度范围 [{fext['min']:.2f}, {fext['max']:.2f}]")
+            
+            # 获取俯视图
+            observations = self.sim.get_sensor_observations()
+            if "ortho_sensor" in observations:
+                floor_images.append(observations["ortho_sensor"])
+            else:
+                print(f"错误: 未找到正交传感器，可用传感器: {list(observations.keys())}")
+                return
+        
+        if not floor_images:
+            print("错误: 未能获取任何楼层图像")
             return
         
+        # 垂直拼接图像（如果有多个楼层）
+        if len(floor_images) > 1:
+            floor_images = np.concatenate(floor_images, axis=0)
+        else:
+            floor_images = floor_images[0]
+        
         # 转换为PIL图像
-        self.base_map_image = Image.fromarray(ortho_img[..., :3], "RGB")
+        self.base_map_image = Image.fromarray(floor_images[..., :3], "RGB")
         
         # 保存地图尺寸和坐标转换参数
         self.map_width, self.map_height = self.base_map_image.size
         
-        # 计算世界坐标到地图坐标的缩放因子
-        world_width = self.scene_bounds[1][0] - self.scene_bounds[0][0]
-        world_height = self.scene_bounds[1][2] - self.scene_bounds[0][2]
+        # 计算世界坐标到地图坐标的缩放因子（修正版本）
+        # 基于正交投影的视野范围计算
+        base_scene_size = 18.0  # 基准场景尺寸
+        base_ortho_scale = 0.05  # 基准正交比例
+        current_view_size = base_scene_size * (base_ortho_scale / ortho_scale)
+        view_half_width = current_view_size / 2.0
+        view_half_height = view_half_width
         
-        self.world_to_map_scale_x = self.map_width / world_width
-        self.world_to_map_scale_z = self.map_height / world_height
+        # 计算实际覆盖的世界坐标范围
+        world_coverage_x = view_half_width * 2
+        world_coverage_z = view_half_height * 2
+        
+        self.world_to_map_scale_x = self.map_width / world_coverage_x
+        self.world_to_map_scale_z = self.map_height / world_coverage_z
         
         print(f"地图尺寸: {self.map_width} x {self.map_height}")
+        print(f"世界坐标覆盖范围: {world_coverage_x:.2f}m x {world_coverage_z:.2f}m")
         print(f"坐标缩放因子: X={self.world_to_map_scale_x:.2f}, Z={self.world_to_map_scale_z:.2f}")
+    
+    def _get_simplified_floor_extents(self, navmesh_vertices):
+        """获取简化的楼层范围信息"""
+        try:
+            # 简单的楼层检测 - 基于Y坐标聚类
+            y_coords = navmesh_vertices[:, 1]
+            y_range = y_coords.max() - y_coords.min()
+            
+            if y_range < 1.5:  # 单层建筑
+                floor_extents = [{
+                    'min': y_coords.min().item(),
+                    'max': y_coords.max().item(),
+                    'mean': y_coords.mean().item()
+                }]
+            else:  # 多层建筑 - 简单分层
+                floor_extents = []
+                y_sorted = np.sort(y_coords)
+                # 使用分位数分层
+                for i in range(0, 100, 33):  # 每33%分位数作为一层
+                    if i + 33 <= 100:
+                        start_idx = int(len(y_sorted) * i / 100)
+                        end_idx = int(len(y_sorted) * (i + 33) / 100) - 1
+                        if end_idx >= len(y_sorted):
+                            end_idx = len(y_sorted) - 1
+                        
+                        floor_min = y_sorted[start_idx].item()
+                        floor_max = y_sorted[end_idx].item()
+                        
+                        # 避免重复的楼层
+                        if not floor_extents or abs(floor_min - floor_extents[-1]['min']) > 0.5:
+                            floor_extents.append({
+                                'min': floor_min,
+                                'max': floor_max,
+                                'mean': (floor_min + floor_max) / 2.0
+                            })
+            
+            print(f"检测到 {len(floor_extents)} 个楼层")
+            for i, fext in enumerate(floor_extents):
+                print(f"  楼层 {i+1}: Y范围 [{fext['min']:.2f}, {fext['max']:.2f}], 平均高度 {fext['mean']:.2f}")
+            
+            return floor_extents
+            
+        except Exception as e:
+            print(f"楼层检测失败: {e}")
+            # 返回默认单楼层
+            y_coords = navmesh_vertices[:, 1]
+            return [{
+                'min': y_coords.min().item(),
+                'max': y_coords.max().item(),
+                'mean': y_coords.mean().item()
+            }]
+    
+    def _update_ortho_sensor_scale(self, ortho_scale):
+        """更新正交传感器的比例"""
+        try:
+            # 获取智能体配置
+            agent_config = self.sim.agents[0].agent_config
+            
+            # 查找并更新正交传感器
+            for sensor_spec in agent_config.sensor_specifications:
+                if sensor_spec.uuid == "ortho_sensor":
+                    sensor_spec.ortho_scale = ortho_scale
+                    print(f"更新正交传感器比例为: {ortho_scale:.4f}")
+                    break
+            else:
+                print("警告: 未找到正交传感器，无法更新比例")
+                
+        except Exception as e:
+            print(f"更新正交传感器比例失败: {e}")
     
     def _load_physical_robot(self, model_path: str, initial_position: np.ndarray) -> Optional[Any]:
         """
@@ -477,7 +606,7 @@ class HabitatSimulator:
             robot_position = robot_transform.translation
             robot_rotation = mn.Quaternion.from_matrix(robot_transform.rotation())
             
-            # 计算传感器位置（假设传感器在机器人头部）
+            # 计算传感器位置（只有物理机器人时才添加传感器高度偏移）
             sensor_offset = mn.Vector3(0, self.config['agent']['sensor_height'], 0)
             sensor_position = robot_position + robot_transform.transform_vector(sensor_offset)
             
@@ -550,6 +679,7 @@ class HabitatSimulator:
     def world_to_map_coords(self, world_pos: np.ndarray) -> Tuple[int, int]:
         """
         将3D世界坐标转换为2D地图像素坐标
+        参考TopDownViewGenerator.py的坐标转换逻辑
         
         Args:
             world_pos: 世界坐标 [x, y, z]
@@ -560,9 +690,18 @@ class HabitatSimulator:
         if self.base_map_image is None:
             return (0, 0)
         
-        # 将世界坐标映射到地图坐标
-        map_x = (world_pos[0] - self.scene_bounds[0][0]) * self.world_to_map_scale_x
-        map_y = (world_pos[2] - self.scene_bounds[0][2]) * self.world_to_map_scale_z
+        # 获取场景中心
+        world_center_x = self.scene_center[0]
+        world_center_z = self.scene_center[2]
+        
+        # 计算相对于场景中心的坐标
+        rel_x = world_pos[0] - world_center_x
+        rel_z = world_pos[2] - world_center_z
+        
+        # 将相对坐标转换为地图像素坐标
+        # 地图中心对应图像中心
+        map_x = self.map_width / 2 + rel_x * self.world_to_map_scale_x
+        map_y = self.map_height / 2 + rel_z * self.world_to_map_scale_z
         
         # 转换为整数像素坐标并确保在范围内
         map_x = max(0, min(int(map_x), self.map_width - 1))
@@ -573,6 +712,7 @@ class HabitatSimulator:
     def _yaw_to_quaternion(self, yaw_degrees: float) -> np.ndarray:
         """
         将偏航角（度）转换为四元数
+        偏航角是绕Y轴（垂直/高度轴）的旋转
         
         Args:
             yaw_degrees: 偏航角（度）
@@ -585,7 +725,7 @@ class HabitatSimulator:
         # 绕Y轴旋转的四元数
         return np.array([
             0.0,
-            math.sin(yaw_rad / 2.0),
+            math.sin(yaw_rad / 2.0),  # Y分量
             0.0,
             math.cos(yaw_rad / 2.0)
         ], dtype=np.float32)
