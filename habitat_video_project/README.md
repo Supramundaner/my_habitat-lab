@@ -140,7 +140,7 @@ python main.py --config configs/default_config.json --actions configs/example_ac
 python main.py
 
 # 指定自定义配置和动作
-python main.py --config my_config.json --actions my_actions.json
+python main.py --config /home/yaoaa/habitat-lab/habitat_video_project/configs/default_config.json --actions /home/yaoaa/habitat-lab/habitat_video_project/configs/example_actions.json
 
 # 指定输出目录
 python main.py --output-dir /path/to/output
