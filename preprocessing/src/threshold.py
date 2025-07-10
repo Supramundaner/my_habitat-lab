@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import os
 
-def threshold(image_path, output_mask_path, threshold_value=10):
+def threshold(image_path, output_mask_path, threshold_value=5):
 
     img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
 

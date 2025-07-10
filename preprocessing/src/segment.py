@@ -16,8 +16,7 @@ except ImportError:
 
 
 # --- 过滤和合并参数 ---
-MIN_MASK_AREA = 400
-MAX_MASK_AREA = 10000
+
 MERGE_IOU_THRESHOLD = 0.1
 MERGE_DISTANCE_THRESHOLD = 10
 MERGE_COLOR_SIMILARITY_THRESHOLD = 0.95
@@ -272,7 +271,7 @@ def process_and_save_masks(image_np, masks, base_output_dir, padding_pixels):
     print(f"Mask files saved in: {masks_dir}")
     print(f"Metadata saved to: {metadata_filepath}")
 
-def segment(base_dir, file_name):
+def segment(base_dir, file_name, MIN_MASK_AREA, MAX_MASK_AREA):
     IMAGE_PATH = os.path.join(base_dir, "data", "top_down", file_name + ".png")
     OUTPUT_DIR = os.path.join(base_dir, "data", "processed", file_name)
     SEGMENTATION_MODEL_PATH = "facebook/sam2-hiera-large"
@@ -304,6 +303,7 @@ def segment(base_dir, file_name):
     
     print(f"\n--- Step 2: Merging Masks ---")
     raw_masks = [m for m in raw_masks if m['area'] >= MIN_MASK_AREA and m['area'] <= MAX_MASK_AREA]
+    print(f"Kept {len(raw_masks)} masks after filtering.")
 
     merged_masks = merge_masks_robust(image_np, raw_masks, iou_threshold=MERGE_IOU_THRESHOLD, distance_threshold=MERGE_DISTANCE_THRESHOLD,color_similarity_threshold=MERGE_COLOR_SIMILARITY_THRESHOLD)
     print(f"Resulted in {len(merged_masks)} final masks after merging.")
