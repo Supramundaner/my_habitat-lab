@@ -5,6 +5,7 @@ import numpy as np
 import habitat_sim
 from sklearn.cluster import DBSCAN
 from PIL import Image, ImageDraw, ImageFont
+import json
 
 
 def get_floor_navigable_extents(hsim: habitat_sim.Simulator, num_points_to_sample: int = 20000):
@@ -153,7 +154,7 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=None):
 
     if habitat_sim.__version__ == "0.1.7":
         sensor_cfg = habitat_sim.SensorSpec()
-        sensor_cfg.resolution = [4096, 4096]
+        sensor_cfg.resolution = [2048, 2048]
         sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
         sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
         sensor_cfg.parameters['far'] = '1000'
@@ -162,7 +163,7 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=None):
         sensor_cfg.parameters['ortho_scale'] = str(ortho_scale)
     else:
         sensor_cfg = habitat_sim.CameraSensorSpec()
-        sensor_cfg.resolution = [4096, 4096]
+        sensor_cfg.resolution = [2048, 2048]
         sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
         sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
         sensor_cfg.far = 1000.0
@@ -547,9 +548,17 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
     
     # 计算角坐标信息（总是计算）
     corner_coords = calculate_corner_coordinates(scene_bounds, optimal_ortho_scale)
-    
-    # 输出角坐标信息（总是输出）
-    print_corner_coordinates(corner_coords)
+    spacing = corner_coords['view_range'][0] / 2048
+    pixel_offset_x_content = (0-corner_coords['top_left'][0]) / spacing
+    pixel_offset_y_content = (0-corner_coords['top_left'][1]) / spacing
+    print(f"Pixel offset x content: {pixel_offset_x_content}")
+    print(f"Pixel offset y content: {pixel_offset_y_content}")
+    meta_data = {
+        "image_size": [2048, 2048],
+        "origin_x": pixel_offset_x_content,
+        "origin_y": pixel_offset_y_content,
+        "spacing": spacing
+    }
     
     # 如果需要绘制坐标系
     if draw_coordinates:
@@ -563,17 +572,17 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
             alpha_channel = np.ones((floor_images.shape[0], floor_images.shape[1], 1), dtype=floor_images.dtype) * 255
             floor_images = np.concatenate([floor_images, alpha_channel], axis=2)
 
-    return floor_images, corner_coords
-
-
+    return floor_images, corner_coords, meta_data
 if __name__ == '__main__':
     # 使用示例
     #hm3d_scene_path = "/home/yaoaa/habitat-lab/data/scene_datasets/habitat-test-scenes/apartment_1.glb"
-    hm3d_scene_path ="/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb"
-    output_path_with_coords = "/home/yaoaa/habitat-lab/TopDownVIew.png"
-    result_with_coords, corner_info = render_topdown_views(
+    hm3d_scene_path ="/home/awangas/my_habitat-lab/data/versioned_data/habitat_test_scenes/apartment_1.glb"
+    output_path_with_coords = "preprocessing/data/top_down/apartment_1.png"
+    os.makedirs("preprocessing/data/processed/apartment_1", exist_ok=True)
+    output_meta_data_path = "preprocessing/data/processed/apartment_1/spacing.json"
+    result_with_coords, corner_info, meta_data = render_topdown_views(
         hm3d_scene_path, 
-        draw_coordinates=True
+        draw_coordinates=False
     )
     print(f"生成的带注释俯视图尺寸: {result_with_coords.shape}")
     
@@ -584,3 +593,7 @@ if __name__ == '__main__':
         result_coords_rgb = result_with_coords
     cv2.imwrite(output_path_with_coords, cv2.cvtColor(result_coords_rgb, cv2.COLOR_RGB2BGR))
     print(f"带坐标系的俯视图已保存到: {output_path_with_coords}")
+
+    with open(output_meta_data_path, "w") as f:
+        json.dump(meta_data, f, indent=4)
+    print(f"Spacingdata已保存到: {output_meta_data_path}")
