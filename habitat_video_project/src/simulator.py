@@ -35,11 +35,8 @@ class HabitatSimulator:
         self.scene_size = None
         self.base_map_image = None
         
-        # 坐标转换参数
-        self.map_width = None
-        self.map_height = None
-        self.world_to_map_scale_x = None
-        self.world_to_map_scale_z = None
+        # 新的坐标转换参数 - 基于unproject方法
+        self.map_metadata = None
         
         self._initialize_sim()
     
@@ -293,10 +290,10 @@ class HabitatSimulator:
                 
                 # 获取观察 - 使用正交传感器
                 obs = ortho_sim.get_sensor_observations()
-                if 'ortho_sensor' in obs:
-                    floor_images.append(obs['ortho_sensor'])
-                elif 'rgba_camera' in obs:  # 兼容TopDownViewGenerator.py的命名
+                if 'rgba_camera' in obs:  # 参照TopDownViewGenerator.py的命名
                     floor_images.append(obs['rgba_camera'])
+                elif 'ortho_sensor' in obs:  # 兼容我们之前的命名
+                    floor_images.append(obs['ortho_sensor'])
                 else:
                     print(f"错误: 未找到正交传感器，可用传感器: {list(obs.keys())}")
                     break
@@ -313,28 +310,17 @@ class HabitatSimulator:
             # 第九步：保存为PIL图像
             self.base_map_image = Image.fromarray(floor_images[..., :3], "RGB")
             
-            # 第十步：计算坐标转换参数 - 参照TopDownViewGenerator.py的calculate_corner_coordinates
-            self.map_width, self.map_height = self.base_map_image.size
+            # 第十步：使用unproject获取精确的坐标元数据 - 参照TopDownViewGenerator.py
+            corner_coords = self._get_unprojected_world_coords(ortho_sim)
+            self.map_metadata = self._calculate_map_metadata(corner_coords)
             
-            # 计算视野范围 - 基于正交投影参数
-            base_scene_size_for_view = 18.0  # TopDownViewGenerator.py中使用的基准
-            base_ortho_scale = 0.05
-            current_view_size = base_scene_size_for_view * (base_ortho_scale / optimal_ortho_scale)
-            view_half_width = current_view_size / 2.0
-            view_half_height = view_half_width
-            
-            # 计算世界坐标覆盖范围
-            world_coverage_x = view_half_width * 2
-            world_coverage_z = view_half_height * 2
-            
-            # 保存转换参数
-            self.world_to_map_scale_x = self.map_width / world_coverage_x
-            self.world_to_map_scale_z = self.map_height / world_coverage_z
-            self.view_range = (world_coverage_x, world_coverage_z)
-            
-            print(f"地图尺寸: {self.map_width} x {self.map_height}")
-            print(f"视野覆盖范围: {world_coverage_x:.2f}m x {world_coverage_z:.2f}m")
-            print(f"坐标缩放因子: X={self.world_to_map_scale_x:.2f}, Z={self.world_to_map_scale_z:.2f}")
+            print("Unprojected world coordinate info:")
+            print(f"  Top-Left: X={corner_coords['top_left'][0]:.2f}, Z={corner_coords['top_left'][1]:.2f}")
+            print(f"  View Range: {corner_coords['view_range'][0]:.2f}m x {corner_coords['view_range'][1]:.2f}m")
+            print("Map metadata calculated:")
+            print(f"  Image Size: {self.map_metadata['image_size']}")
+            print(f"  Origin Pixel: ({self.map_metadata['origin_x_pixel']:.2f}, {self.map_metadata['origin_y_pixel']:.2f})")
+            print(f"  Spacing (m/px): {self.map_metadata['spacing_in_meters_per_pixel']:.4f}")
             
             print("topdown地图生成完成")
             
@@ -381,7 +367,7 @@ class HabitatSimulator:
             # 正交传感器配置 - 参照TopDownViewGenerator.py
             if habitat_sim.__version__ == "0.1.7":
                 sensor_cfg = habitat_sim.SensorSpec()
-                sensor_cfg.resolution = [4096, 4096]
+                sensor_cfg.resolution = [2048, 2048]  # 与TopDownViewGenerator.py保持一致
                 sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
                 sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
                 sensor_cfg.parameters['far'] = '1000'
@@ -390,8 +376,8 @@ class HabitatSimulator:
                 sensor_cfg.parameters['ortho_scale'] = str(ortho_scale)
             else:
                 sensor_cfg = habitat_sim.CameraSensorSpec()
-                sensor_cfg.uuid = "ortho_sensor"  # 确保UUID一致
-                sensor_cfg.resolution = [4096, 4096]
+                # 注意：不设置uuid，让它使用默认的"rgba_camera"
+                sensor_cfg.resolution = [2048, 2048]  # 与TopDownViewGenerator.py保持一致
                 sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
                 sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
                 sensor_cfg.far = 1000.0
@@ -757,42 +743,47 @@ class HabitatSimulator:
         """
         return self.base_map_image
     
-    def world_to_map_coords(self, world_pos: np.ndarray) -> Tuple[int, int]:
+    def world_to_map_coords(self, world_pos: np.ndarray) -> Optional[Tuple[int, int]]:
         """
         将3D世界坐标转换为2D地图像素坐标
-        完全参照TopDownViewGenerator.py的坐标转换逻辑
+        完全参照TopDownViewGenerator.py的world_to_pixel实现
         
         Args:
             world_pos: 世界坐标 [x, y, z]
         
         Returns:
-            地图像素坐标 (map_x, map_y)
+            地图像素坐标 (map_x, map_y) 或 None（如果超出地图范围）
         """
-        if self.base_map_image is None or not hasattr(self, 'view_range'):
-            return (0, 0)
+        if self.map_metadata is None:
+            return None
         
-        # 获取场景中心
-        world_center_x = self.scene_center[0]
-        world_center_z = self.scene_center[2]
+        world_x, _, world_z = world_pos
         
-        # 计算相对于场景中心的坐标
-        rel_x = world_pos[0] - world_center_x
-        rel_z = world_pos[2] - world_center_z
+        # 获取地图边界坐标 - 从map_metadata重建corner_coords
+        img_width, img_height = self.map_metadata['image_size']
+        spacing = self.map_metadata['spacing_in_meters_per_pixel']
+        origin_x_pixel = self.map_metadata['origin_x_pixel']
+        origin_z_pixel = self.map_metadata['origin_y_pixel']  # 注意：这里是Z对应Y
         
-        # 计算视野范围
-        view_half_width = self.view_range[0] / 2.0
-        view_half_height = self.view_range[1] / 2.0
+        # 重建四角坐标
+        tl_x = 0.0 - origin_x_pixel * spacing
+        tl_z = 0.0 - origin_z_pixel * spacing
+        tr_x = tl_x + img_width * spacing
+        bl_z = tl_z + img_height * spacing
         
-        # 将相对坐标转换为地图像素坐标 - 参照TopDownViewGenerator.py
-        # 地图中心对应图像中心
-        pixel_x = self.map_width / 2 + (rel_x / view_half_width) * (self.map_width / 2)
-        pixel_y = self.map_height / 2 + (rel_z / view_half_height) * (self.map_height / 2)
+        # 使用TopDownViewGenerator.py的world_to_pixel逻辑
+        # 计算在世界坐标范围内的相对位置 (0.0 to 1.0)
+        fx = (world_x - tl_x) / (tr_x - tl_x)
+        fz = (world_z - tl_z) / (bl_z - tl_z)  # Z轴方向是从上到下增加
         
-        # 转换为整数像素坐标并确保在范围内
-        map_x = max(0, min(int(pixel_x), self.map_width - 1))
-        map_y = max(0, min(int(pixel_y), self.map_height - 1))
+        # 将相对位置映射到像素坐标
+        pixel_x = fx * img_width
+        pixel_y = fz * img_height
         
-        return (map_x, map_y)
+        # 检查是否在地图范围内
+        if 0 <= pixel_x < img_width and 0 <= pixel_y < img_height:
+            return (int(pixel_x), int(pixel_y))
+        return None
     
     def _yaw_to_quaternion(self, yaw_degrees: float) -> np.ndarray:
         """
@@ -944,3 +935,93 @@ class HabitatSimulator:
             import traceback
             traceback.print_exc()
             return False
+    
+    def _get_unprojected_world_coords(self, sim: habitat_sim.Simulator) -> Dict[str, Any]:
+        """
+        计算正交投影相机视图的世界坐标范围。
+        完全参照TopDownViewGenerator.py的get_unprojected_world_coords实现。
+        """
+        # 获取agent和相机传感器
+        agent = sim.get_agent(0)
+        # 注意：在TopDownViewGenerator.py中使用的是"rgba_camera"
+        camera_sensor = agent.scene_node.node_sensor_suite.get("rgba_camera")
+        
+        # 获取相机分辨率和规格
+        sensor_spec = agent.agent_config.sensor_specifications[0]  # 假设第一个传感器是相机
+        width, height = sensor_spec.resolution[0], sensor_spec.resolution[1]
+        ortho_scale = sensor_spec.ortho_scale
+        
+        # 获取相机位置
+        render_camera = camera_sensor.render_camera
+        cam_pos = render_camera.node.absolute_translation
+        
+        # 对于正交投影，视图范围由ortho_scale决定
+        # ortho_scale表示从相机中心到视图边缘的距离
+        view_half_width = ortho_scale * width / 2
+        view_half_height = ortho_scale * height / 2
+        
+        # 计算世界坐标中的四个角点
+        # 对于俯视图（向下看），X轴是水平方向，Z轴是垂直方向
+        tl_world = np.array([cam_pos[0] - view_half_width, cam_pos[1], cam_pos[2] - view_half_height])
+        tr_world = np.array([cam_pos[0] + view_half_width, cam_pos[1], cam_pos[2] - view_half_height])
+        bl_world = np.array([cam_pos[0] - view_half_width, cam_pos[1], cam_pos[2] + view_half_height])
+        br_world = np.array([cam_pos[0] + view_half_width, cam_pos[1], cam_pos[2] + view_half_height])
+        
+        # 场景尺寸
+        scene_width = tr_world[0] - tl_world[0]
+        scene_depth = bl_world[2] - tl_world[2]
+
+        return {
+            'top_left': (tl_world[0], tl_world[2]),
+            'top_right': (tr_world[0], tr_world[2]),
+            'bottom_left': (bl_world[0], bl_world[2]),
+            'bottom_right': (br_world[0], br_world[2]),
+            'center': (cam_pos[0], cam_pos[2]),
+            'view_range': (scene_width, scene_depth),
+            'image_size': (width, height)
+        }
+
+    def _calculate_map_metadata(self, corner_coords: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        根据unprojected坐标计算元数据（像素间距和原点位置）
+        完全参照TopDownViewGenerator.py的calculate_metadata实现。
+        """
+        tl_x, tl_z = corner_coords['top_left']
+        tr_x, _ = corner_coords['top_right']
+        img_width, img_height = corner_coords['image_size']
+        
+        # 像素间距 (米/像素)
+        spacing = (tr_x - tl_x) / img_width
+        
+        # 世界坐标原点(0,0)在图像中的像素位置 (相对于图像左上角)
+        origin_pixel_x = (0.0 - tl_x) / spacing
+        origin_pixel_y = (0.0 - tl_z) / spacing
+        
+        return {
+            "image_size": [img_width, img_height],
+            "origin_x_pixel": origin_pixel_x,
+            "origin_y_pixel": origin_pixel_y,
+            "spacing_in_meters_per_pixel": spacing
+        }
+    
+    def _get_coordinate_grid_interval(self, scene_size: float) -> float:
+        """
+        根据场景大小确定合适的坐标网格间隔
+        完全参照TopDownViewGenerator.py的get_coordinate_grid_interval实现
+        
+        Args:
+            scene_size: 场景大小（最大维度）
+        
+        Returns:
+            坐标网格间隔
+        """
+        if scene_size <= 3: 
+            return 0.5
+        elif scene_size <= 8: 
+            return 1.0
+        elif scene_size <= 15: 
+            return 2.0
+        elif scene_size <= 30: 
+            return 5.0
+        else: 
+            return 10.0
