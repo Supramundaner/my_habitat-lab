@@ -438,7 +438,7 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
     for i, fext in enumerate(floor_extents):
         print(f"Rendering floor {i} at height ~{fext['mean']:.2f}m...")
         # 将相机放在视觉中心上方
-        agent_position = [x_center, fext['mean'] + 10.0, z_center] # 增加高度以避免被高处物体遮挡
+        agent_position = [x_center, fext['mean'] + 1.5, z_center] # 增加高度以避免被高处物体遮挡
         agent_rotation = get_downward_quaternion()
         
         agent = sim.get_agent(0)
