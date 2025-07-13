@@ -223,10 +223,14 @@ class HabitatSimulator:
             print("错误: 无法获取导航网格顶点")
             return
         
-        x_min, x_max = navmesh_vertices[:, 0].min(), navmesh_vertices[:, 0].max()
-        z_min, z_max = navmesh_vertices[:, 2].min(), navmesh_vertices[:, 2].max()
+        #x_min, x_max = navmesh_vertices[:, 0].min(), navmesh_vertices[:, 0].max()
+        #z_min, z_max = navmesh_vertices[:, 2].min(), navmesh_vertices[:, 2].max()
         y_min, y_max = navmesh_vertices[:, 1].min(), navmesh_vertices[:, 1].max()
-        
+        scene_root_node = self.sim.get_active_scene_graph().get_root_node()
+        scene_bb = scene_root_node.cumulative_bb
+    
+        x_min, x_max = scene_bb.min[0], scene_bb.max[0]
+        z_min, z_max = scene_bb.min[2], scene_bb.max[2]
         scene_width = x_max - x_min
         scene_depth = z_max - z_min
         scene_size = max(scene_width, scene_depth)
@@ -279,7 +283,7 @@ class HabitatSimulator:
                     fcent = [x_center, fext['mean'], z_center]
                 
                 # 设置智能体状态 - 完全按照TopDownViewGenerator.py
-                agent_position = [x_center, fcent[1] + 1.0, z_center]
+                agent_position = [x_center, fcent[1]+1.5, z_center]
                 agent_rotation = np.array([-0.7071067, 0.0, 0.0, 0.7071067])  # get_downward_quaternion()
                 
                 ortho_agent = ortho_sim.get_agent(0)
@@ -317,9 +321,7 @@ class HabitatSimulator:
             self.map_width, self.map_height = self.base_map_image.size
             
             # 计算视野范围 - 基于正交投影参数
-            base_scene_size_for_view = 18.0  # TopDownViewGenerator.py中使用的基准
-            base_ortho_scale = 0.05
-            current_view_size = base_scene_size_for_view * (base_ortho_scale / optimal_ortho_scale)
+            current_view_size = 1.0 / (optimal_ortho_scale)
             view_half_width = current_view_size / 2.0
             view_half_height = view_half_width
             
@@ -342,7 +344,7 @@ class HabitatSimulator:
             # 清理正交投影模拟器
             ortho_sim.close()
     
-    def _calculate_ortho_scale(self, scene_size: float, target_coverage: float = 0.9) -> float:
+    def _calculate_ortho_scale(self, scene_size: float, target_coverage: float = 0.9,safety_margin=1) -> float:
         """
         根据场景大小计算合适的正交投影比例 - 完全按照TopDownViewGenerator.py
         
@@ -353,15 +355,17 @@ class HabitatSimulator:
         Returns:
             正交投影比例
         """
-        base_scene_size = 20.0
-        base_ortho_scale = 0.05
-        
+        #base_scene_size = 20.0
+        #base_ortho_scale = 0.05
+        desired_view_size = scene_size / target_coverage * safety_margin
+        calculated_scale = 1.0 / desired_view_size
+        return max(0.01, calculated_scale)
+    """
         calculated_scale = (base_ortho_scale * base_scene_size) / (scene_size / target_coverage)
         safety_margin = 1.2
         ortho_scale = calculated_scale / safety_margin
-        
         return max(0.01, min(0.2, ortho_scale))
-    
+    """ 
     def _create_ortho_simulator(self, scene_path: str, ortho_scale: float):
         """
         创建专用的正交投影模拟器 - 参照TopDownViewGenerator.py的make_ortho_habitat_configuration
@@ -399,6 +403,7 @@ class HabitatSimulator:
                 sensor_cfg.hfov = 90
                 sensor_cfg.ortho_scale = ortho_scale
                 sensor_cfg.clear_color = [0., 0., 0., 0.]
+                sensor_cfg.position = [0.0, 0.0, 0.0] 
             
             # 智能体配置
             agent_cfg = habitat_sim.agent.AgentConfiguration()
@@ -774,7 +779,6 @@ class HabitatSimulator:
         # 获取场景中心
         world_center_x = self.scene_center[0]
         world_center_z = self.scene_center[2]
-        
         # 计算相对于场景中心的坐标
         rel_x = world_pos[0] - world_center_x
         rel_z = world_pos[2] - world_center_z
@@ -786,6 +790,7 @@ class HabitatSimulator:
         # 将相对坐标转换为地图像素坐标 - 参照TopDownViewGenerator.py
         # 地图中心对应图像中心
         pixel_x = self.map_width / 2 + (rel_x / view_half_width) * (self.map_width / 2)
+        # Z轴方向是从上到下增加
         pixel_y = self.map_height / 2 + (rel_z / view_half_height) * (self.map_height / 2)
         
         # 转换为整数像素坐标并确保在范围内

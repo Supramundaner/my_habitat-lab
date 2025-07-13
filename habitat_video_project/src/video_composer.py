@@ -183,14 +183,13 @@ class VideoComposer:
             rotation_quat: 四元数旋转
         """
         draw = ImageDraw.Draw(map_image)
-        
+        #print(f"绘制智能体位置: {position}, 朝向: {rotation_quat}")
         # 转换世界坐标到地图坐标
         original_map_x, original_map_y = self.simulator.world_to_map_coords(position)
-        
         # 转换到当前缩放的地图坐标系
         scaled_map_x = int(original_map_x * self.map_scale + self.map_x_offset)
         scaled_map_y = int(original_map_y * self.map_scale + self.map_y_offset)
-        
+        #print(f"map_x_offset: {self.map_x_offset}, map_y_offset: {self.map_y_offset}")
         # 确保坐标在图像范围内
         scaled_map_x = max(0, min(scaled_map_x, self.map_width - 1))
         scaled_map_y = max(0, min(scaled_map_y, self.video_height - 1))

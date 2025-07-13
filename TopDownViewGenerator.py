@@ -7,9 +7,7 @@ from sklearn.cluster import DBSCAN
 from PIL import Image, ImageDraw, ImageFont
 import json
 
-# ==============================================================================
-# 楼层和场景边界计算 (未修改，这些函数是前置步骤，逻辑正确)
-# ==============================================================================
+
 
 def get_floor_navigable_extents(hsim: habitat_sim.Simulator, num_points_to_sample: int = 20000):
     """
@@ -107,9 +105,7 @@ def get_floor_navigable_extents(hsim: habitat_sim.Simulator, num_points_to_sampl
     return floor_extents
 
 
-# ==============================================================================
-# 核心修正：使用视觉边界框代替NavMesh边界框
-# ==============================================================================
+
 
 def calculate_scene_bounds_from_visuals(sim: habitat_sim.Simulator):
     """
@@ -119,11 +115,6 @@ def calculate_scene_bounds_from_visuals(sim: habitat_sim.Simulator):
     scene_root_node = sim.get_active_scene_graph().get_root_node()
     scene_bb = scene_root_node.cumulative_bb
     
-    # --- 核心修正点 ---
-    # 旧代码 (错误): if not scene_bb.is_valid():
-    # 新代码 (正确):
-
-
     x_min, x_max = scene_bb.min[0], scene_bb.max[0]
     z_min, z_max = scene_bb.min[2], scene_bb.max[2]
     
@@ -181,6 +172,7 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
     sensor_cfg.hfov = 90
     sensor_cfg.ortho_scale = ortho_scale
     sensor_cfg.clear_color = [0., 0., 0., 0.]
+    sensor_cfg.position = [0.0, 0.0, 0.0] 
 
     agent_cfg = habitat_sim.agent.AgentConfiguration()
     agent_cfg.sensor_specifications = [sensor_cfg]
@@ -203,11 +195,7 @@ def get_downward_quaternion():
     """获取向下看的四元数旋转 (绕X轴旋转-90度)"""
     return [-0.7071067, 0.0, 0.0, 0.7071067]
 
-# ==============================================================================
-# 核心修改部分：使用正确的公式获取世界坐标
-# ==============================================================================
 
-# --- 核心修正 2: 重写 get_unprojected_world_coords ---
 def get_unprojected_world_coords(sim: habitat_sim.Simulator):
     """
     使用正确的公式计算正交相机视图的世界坐标范围。
@@ -318,7 +306,9 @@ def draw_coordinate_system(image: np.ndarray, corner_coords: dict, ortho_scale: 
         # 将相对位置映射到画布上的像素坐标
         pixel_x = img_area_x0 + fx * img_width
         pixel_y = img_area_y0 + fz * img_height
+        #print(f"World ({world_x:.2f}, {world_z:.2f}) -> Pixel ({pixel_x:.2f}, {pixel_y:.2f})")
         return int(pixel_x), int(pixel_y)
+
     
     # ... (其余绘图代码逻辑不变，因为它依赖于正确的world_to_pixel)
     x_start = math.ceil(tl_x / grid_interval) * grid_interval
@@ -438,8 +428,9 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
     for i, fext in enumerate(floor_extents):
         print(f"Rendering floor {i} at height ~{fext['mean']:.2f}m...")
         # 将相机放在视觉中心上方
-        agent_position = [x_center, fext['mean'] + 1.5, z_center] # 增加高度以避免被高处物体遮挡
         agent_rotation = get_downward_quaternion()
+        agent_position = [x_center, fext['mean'] + 1.5, z_center] # 增加高度以避免被高处物体遮挡
+        
         
         agent = sim.get_agent(0)
         new_state = agent.get_state()
@@ -452,6 +443,19 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
         
         if i == 0:
             unprojected_coords = get_unprojected_world_coords(sim)
+            print("agent position:", agent_position)
+            agent = sim.get_agent(0)
+            camera_sensor = agent.scene_node.node_sensor_suite.get("rgba_camera")
+            sensor_spec = agent.agent_config.sensor_specifications[0]
+
+            # 获取相机参数
+            width, height = sensor_spec.resolution
+            ortho_scale = sensor_spec.ortho_scale
+            cam_pos = camera_sensor.render_camera.node.absolute_translation
+            print(f"Camera position: {cam_pos}")
+            #它们并不相等
+            #为什么呢？
+            
             print_corner_coordinates(unprojected_coords)
     
     sim.close()
@@ -483,7 +487,8 @@ if __name__ == '__main__':
     # --- 配置 ---
     try:
         # 尝试使用环境变量，方便在不同机器上运行
-        hm3d_scene_path = os.environ.get("HM3D_SCENE_PATH", "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb")
+        #hm3d_scene_path = os.environ.get("HM3D_SCENE_PATH", "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb")
+        hm3d_scene_path = "/home/yaoaa/habitat-lab/data/versioned_data/habitat_test_scenes/apartment_1.glb"
         if not os.path.exists(hm3d_scene_path):
              raise FileNotFoundError(f"Scene file not found at: {hm3d_scene_path}. Please check the path or set the HM3D_SCENE_PATH environment variable.")
     except Exception as e:
@@ -498,7 +503,7 @@ if __name__ == '__main__':
     # --- 执行 ---
     result_image, corner_info, meta_data = render_topdown_views(
         hm3d_scene_path, 
-        custom_ortho_scale=0.02, # 取消注释以手动覆盖自动计算的值
+        custom_ortho_scale=None,
         draw_coordinates=True
     )
     
