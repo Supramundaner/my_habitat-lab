@@ -135,16 +135,16 @@ class ActionProcessor:
         target_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
         
         # 3. 碰撞预检
-        if self.simulator.check_straight_path_collision(current_pos, target_pos):
-            print(f"检测到从 {current_pos} 到 {target_pos} 的路径会发生碰撞")
-            return False
+
         
         # 4. 计算朝向目标的旋转
         target_rotation = quaternion_to_direction_yaw(current_pos, target_pos)
         
         # 5. 执行转向动画
         self._animate_rotation(current_rot, target_rotation)
-        
+        if self.simulator.check_straight_path_collision(current_pos, target_pos):
+            print(f"检测到从 {current_pos} 到 {target_pos} 的路径会发生碰撞")
+            return False
         # 6. 执行移动动画
         self._animate_movement(current_pos, target_pos)
         

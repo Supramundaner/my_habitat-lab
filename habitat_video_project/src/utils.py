@@ -9,7 +9,7 @@ import magnum as mn
 from datetime import datetime
 from typing import Dict, Tuple, Any
 import os
-
+import numpy as np
 
 def load_json_config(filepath: str) -> Dict[str, Any]:
     """安全地加载和解析JSON文件"""
@@ -202,8 +202,10 @@ def calculate_direction_vector(start_pos: np.ndarray, end_pos: np.ndarray) -> np
     return direction / distance
 
 
+
+
 def quaternion_to_direction_yaw(position: np.ndarray, target_position: np.ndarray) -> np.ndarray:
-    """计算朝向目标位置所需的偏航角四元数
+    """计算朝向目标位置所需的偏航角四元数。
     
     Args:
         position: 当前位置 [x, y, z]
@@ -212,16 +214,22 @@ def quaternion_to_direction_yaw(position: np.ndarray, target_position: np.ndarra
     Returns:
         表示偏航角的四元数 [x, y, z, w]
     """
-    # 计算XZ平面上的方向向量
-    dx = target_position[0] - position[0]
-    dz = target_position[2] - position[2]
+    direction_vector = target_position - position
+    dx = direction_vector[0]
+    dz = direction_vector[2]
+    if np.isclose(dx, 0) and np.isclose(dz, 0):
+        return np.array([0., 0., 0., 1.])
+    yaw = np.arctan2(dx, -dz)
+    half_yaw = yaw / 2.0
+
+    q = np.array([
+        0,                 
+        -np.sin(half_yaw),  
+        0,                 
+        np.cos(half_yaw)   
+    ])
     
-    # 在Habitat中，-Z轴是前方，所以计算朝向-Z方向的角度
-    # 修复：使用正确的atan2参数顺序和轴方向
-    yaw = np.arctan2(dx, -dz)  # 注意这里是 -dz，因为-Z是前方
-    
-    # 转换为四元数（只绕Y轴旋转）
-    return quaternion_from_euler(0, 0, np.degrees(yaw))
+    return q
 
 
 def validate_config(config: Dict[str, Any]) -> bool:
