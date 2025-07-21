@@ -107,8 +107,6 @@ class ActionProcessor:
         else:
             print(f"未知动作类型: {action_type}")
             return False
-    
-    def _handle_move_to(self, params: Dict[str, Any]) -> bool:
         """
         处理移动到指定位置的动作
         
@@ -118,6 +116,8 @@ class ActionProcessor:
         Returns:
             True表示成功，False表示碰撞
         """
+    """def _handle_move_to(self, params: Dict[str, Any]) -> bool:
+
         target_x = params['x']
         target_z = params['z']
         
@@ -148,6 +148,57 @@ class ActionProcessor:
         # 6. 执行移动动画
         self._animate_movement(current_pos, target_pos)
         
+        return True"""
+    def _handle_move_to(self, params: Dict[str, Any]) -> bool:
+        """
+        处理移动到指定位置的动作（使用路径规划）。
+        
+        Args:
+            params: 参数字典，包含x和z坐标
+        
+        Returns:
+            True表示成功，False表示失败（目标不可达或无路径）
+        """
+        target_x = params['x']
+        target_z = params['z']
+        
+        # 1. 获取当前机器人状态
+        current_state = self.simulator.get_robot_state()
+        start_pos = current_state['position']
+        
+        # 2. 检查目标点是否可导航并获取其3D坐标
+        target_y = self.simulator.get_navigable_y(target_x, target_z)
+        if target_y is None:
+            print(f"错误: 目标位置 ({target_x}, {target_z}) 不在可导航区域。")
+            return False # 动作失败，但不是碰撞，所以返回True让序列继续？这里我们定义为False，表示动作无法执行
+        
+        end_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
+        
+        # 3. 调用路径规划器获取路径
+        path_waypoints = self.simulator.plan_path(start_pos, end_pos)
+        
+        if path_waypoints is None:
+            print(f"错误: 无法规划到目标位置 ({target_x}, {target_z}) 的路径。")
+            return False
+            
+        # 4. 沿着路径的每个分段进行动画
+        # 路径的第一个点是起点，所以我们从第二个点开始作为目标
+        for i in range(len(path_waypoints) - 1):
+            segment_start_pos = self.simulator.get_robot_state()['position']
+            segment_end_pos = path_waypoints[i+1]
+            
+            print(f"  移动到航点 {i+1}/{len(path_waypoints)-1}: {segment_end_pos}")
+            
+            # a. 计算并执行朝向下一个航点的旋转
+            current_rot = self.simulator.get_robot_state()['rotation']
+            target_rotation = quaternion_to_direction_yaw(segment_start_pos, segment_end_pos)
+            self._animate_rotation(current_rot, target_rotation)
+            
+            # b. 执行到下一个航点的直线移动
+            # 注意: 此时的 segment_start_pos 已经是动画旋转后的最新位置了
+            current_pos_after_rotation = self.simulator.get_robot_state()['position']
+            self._animate_movement(current_pos_after_rotation, segment_end_pos)
+
         return True
     
     def _handle_turn_left(self, params: Dict[str, Any]) -> bool:

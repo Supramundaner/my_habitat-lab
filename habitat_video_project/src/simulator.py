@@ -7,7 +7,7 @@ import numpy as np
 import magnum as mn
 import habitat_sim
 from PIL import Image
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional, Any, List # 确保 List 已导入
 import math
 import os
 
@@ -102,6 +102,41 @@ class HabitatSimulator:
         self._ensure_navmesh_loaded()
         
         print("模拟器初始化完成")
+    
+    def plan_path(self, start_pos: np.ndarray, end_pos: np.ndarray) -> Optional[List[np.ndarray]]:
+        """
+        使用Habitat的pathfinder规划从起点到终点的路径。
+        
+        Args:
+            start_pos: 起始位置 [x, y, z]
+            end_pos: 终点位置 [x, y, z]
+            
+        Returns:
+            一个包含路径上所有航点(waypoint)的列表，如果无路径则返回None。
+        """
+        path = habitat_sim.ShortestPath()
+        path.requested_start = start_pos
+        path.requested_end = end_pos
+        
+        # 尝试找到路径
+        found_path = self.sim.pathfinder.find_path(path)
+        
+        # 检查路径是否有效
+        if not found_path or path.geodesic_distance == math.inf:
+            print(f"警告: 无法找到从 {start_pos} 到 {end_pos} 的路径。")
+            return None
+            
+        # 路径点少于2个也意味着无效
+        if len(path.points) < 2:
+            print(f"警告: 路径点过少，无法形成有效路径。")
+            return None
+
+        print(f"路径规划成功，共 {len(path.points)} 个航点，总长 {path.geodesic_distance:.2f} 米。")
+        
+        # 将路径点转换为numpy数组列表返回
+        return [np.array(p) for p in path.points]
+    
+    
     
     def _ensure_navmesh_loaded(self):
         """

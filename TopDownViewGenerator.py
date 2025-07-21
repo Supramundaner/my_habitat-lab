@@ -163,7 +163,8 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
     backend_cfg.scene_id = scene_path
 
     sensor_cfg = habitat_sim.CameraSensorSpec()
-    sensor_cfg.resolution = [2048, 2048] # 方形传感器，简化计算
+    #sensor_cfg.resolution = [2048, 2048] # 方形传感器，简化计算
+    sensor_cfg.resolution = [4096, 4096] # 方形传感器，简化计算
     sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
     sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
     sensor_cfg.far = 1000.0
@@ -487,8 +488,8 @@ if __name__ == '__main__':
     # --- 配置 ---
     try:
         # 尝试使用环境变量，方便在不同机器上运行
-        #hm3d_scene_path = os.environ.get("HM3D_SCENE_PATH", "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb")
-        hm3d_scene_path = "/home/yaoaa/habitat-lab/data/versioned_data/habitat_test_scenes/apartment_1.glb"
+        hm3d_scene_path = os.environ.get("HM3D_SCENE_PATH", "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/example/00770-NBg5UqG3di3/NBg5UqG3di3.glb")
+        #hm3d_scene_path = "/home/yaoaa/habitat-lab/data/versioned_data/habitat_test_scenes/apartment_1.glb"
         if not os.path.exists(hm3d_scene_path):
              raise FileNotFoundError(f"Scene file not found at: {hm3d_scene_path}. Please check the path or set the HM3D_SCENE_PATH environment variable.")
     except Exception as e:
@@ -504,7 +505,7 @@ if __name__ == '__main__':
     result_image, corner_info, meta_data = render_topdown_views(
         hm3d_scene_path, 
         custom_ortho_scale=None,
-        draw_coordinates=True
+        draw_coordinates=False
     )
     
     print(f"\nGenerated annotated top-down view with shape: {result_image.shape}")
