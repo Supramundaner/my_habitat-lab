@@ -10,7 +10,7 @@ from create_final_mask import create_unwalkable_map
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
 BASE_DIR = "/home/awangas/my_habitat-lab/preprocessing"
-FILE_NAME = "apartment_1"
+FILE_NAME = "sample_0"
 USE_QWEN = False
 
 def main():
@@ -21,8 +21,8 @@ def main():
 
     MIN_MASK_AREA = 0.01 / (spacing['spacing'] * spacing['spacing'] )
     MAX_MASK_AREA = 100 / (spacing['spacing'] * spacing['spacing'] )
-    segment(BASE_DIR, FILE_NAME, MIN_MASK_AREA, MAX_MASK_AREA)
-    threshold(input_image_name, output_mask_name)
+    # segment(BASE_DIR, FILE_NAME, MIN_MASK_AREA, MAX_MASK_AREA)
+    #threshold(input_image_name, output_mask_name)
     if USE_QWEN:
         MODEL_PATH = "Qwen/Qwen2.5-VL-7B-Instruct"
         model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
