@@ -12,9 +12,9 @@ from tqdm import tqdm
 
 
 # --- Gemini API 调用函数 (重构后) ---
-def classify_image_with_gemini(image_path: str):
+def classify_image_with_gemini(image_path: str, base_image_path: str):
     """
-    Calls the Gemini 1.5 Pro API using the client/types.Part style.
+    Calls the Gemini 2.5 flash API using the client/types.Part style.
     
     Args:
         image_path: Path to the contextual crop image.
@@ -26,6 +26,8 @@ def classify_image_with_gemini(image_path: str):
         # 读取图片为二进制数据
         with open(image_path, 'rb') as f:
             image_bytes = f.read()
+        with open(base_image_path, 'rb') as f:
+            base_image_bytes = f.read()
     except FileNotFoundError:
         print(f"Error: Image not found at {image_path}")
         return None
@@ -37,18 +39,21 @@ def classify_image_with_gemini(image_path: str):
 
     # 精心设计的Prompt
     system_prompt_text = """
-    You are an expert robot perception assistant. Your task is to determine if an object in a top-down view of a room is an obstacle for a wheeled cleaning robot.
+    You are an expert robot perception assistant. Your task is to determine if an object in a top-down view of a room is an obstacle for a wheeled cleaning robot. 
+    
+    You're given a global view of the room and a local view of the object for you to decide. The object was highlighted in semi-transparent red.
+
     An 'obstacle' is something the robot CANNOT or SHOULD NOT drive over. This includes furniture, walls, large objects, fragile items, or things that could entangle the robot.
+
     A 'non-obstacle' is something the robot CAN safely drive over. This primarily includes flat floor coverings like rugs, carpets, or doormats.
 
     **The image given is a flat room, no raised platform or steps/stairs exist. Then you can safely classify the connection or different rooms as not an obstacle.**
-    
-    The user will provide an image where the object in question is highlighted in semi-transparent red.
 
     The selection criteria are:
-    1. The obstacles appears in the indoor scene are the usual furniture (chair, table, sofa, etc.), walls, large objects, fragile items, or things that could entangle the robot. **Only if you consider the given object is a furniture, you should classify it as an obstacle.**
+    1. The obstacles appears in the indoor scene are the usual furniture, walls, large objects, fragile items, or things that could entangle the robot. **Only if you consider the given object is a furniture, you should classify it as an obstacle.**
     2. If you are not confident about the object, you should classify it as not an obstacle.
     3. For the connection parts between different rooms. even the colors are not the same, you *should not* classify it as an obstacle. If the area seems to be next to a door, you *should not* classify it as an obstacle.
+    4. If the object seems to be a part of the room, you *should not* classify it as an obstacle.
 
     
     You MUST respond in a valid JSON format with two keys:
@@ -61,10 +66,10 @@ def classify_image_with_gemini(image_path: str):
       "reason": "This is a chair, which is a piece of furniture that a robot cannot drive over."
     }
     
-    Example response for a rug:
+    Example response for a room:
     {
       "is_obstacle": false,
-      "reason": "This is a flat rug on the floor, which a robot can safely traverse."
+      "reason": "This is a flat room. Then you can safely classify the connection or different rooms as not an obstacle."
     }
     """
     
@@ -72,15 +77,20 @@ def classify_image_with_gemini(image_path: str):
     # --- 【核心修改】 ---
     # 使用 types.Part 来构建请求内容
     # 文件上传主要用于多轮对话中复用，对于单次请求，直接传入bytes更高效
-    image_part = types.Part.from_bytes(
+    image_part_local = types.Part.from_bytes(
         data=image_bytes,
+        mime_type='image/png' # 明确指定MIME类型
+    )
+    image_part_global = types.Part.from_bytes(
+        data=base_image_bytes,
         mime_type='image/png' # 明确指定MIME类型
     )
     
     prompt_parts = [
         system_prompt_text,
         user_prompt_text,
-        image_part
+        image_part_local,
+        image_part_global
     ]
     # --- 【修改结束】 ---
 
@@ -119,6 +129,7 @@ def classify_image_with_gemini(image_path: str):
 def chat(base_dir, file_name):
     INPUT_METADATA_PATH = os.path.join(base_dir, "data", "processed", file_name, "metadata.json")
     BASE_INPUT_DIR = os.path.join(base_dir, "data", "processed", file_name)
+    ORIGIN_IMAGE_PATH = os.path.join(base_dir, "data", "top_down", file_name+".png")
     OUTPUT_METADATA_PATH = os.path.join(base_dir, "data", "processed", file_name, "metadata_with_obstacles.json")
     
     print(f"--- Step 1: Loading Metadata ---")
@@ -162,7 +173,7 @@ def chat(base_dir, file_name):
     # 使用tqdm创建进度条
     for item in tqdm(unclassified_objects, desc="Classifying Objects"):
         crop_path = os.path.join(BASE_INPUT_DIR, item['crop_image_path'])
-        classification_result = classify_image_with_gemini(crop_path)
+        classification_result = classify_image_with_gemini(crop_path, ORIGIN_IMAGE_PATH)
         
         if classification_result:
             item['classification'] = classification_result
