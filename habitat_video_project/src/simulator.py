@@ -60,6 +60,14 @@ class HabitatSimulator:
         fpv_sensor_spec.position = mn.Vector3(0, 0, 0)  # 不设置高度offset，让传感器在agent位置
         fpv_sensor_spec.hfov = 90.0
         
+        # 深度传感器配置
+        depth_sensor_spec = habitat_sim.CameraSensorSpec()
+        depth_sensor_spec.uuid = "depth_sensor"
+        depth_sensor_spec.resolution = [512, 512]
+        depth_sensor_spec.position = mn.Vector3(0, 0, 0)
+        depth_sensor_spec.sensor_type = habitat_sim.SensorType.DEPTH
+        depth_sensor_spec.hfov = 90.0
+        
         # 正交传感器配置（用于生成topdown地图）
         # 注意：ortho_scale将在_generate_topdown_map中根据场景大小动态设置
         ortho_sensor_spec = habitat_sim.CameraSensorSpec()
@@ -75,7 +83,7 @@ class HabitatSimulator:
         
         # 智能体配置
         agent_cfg = habitat_sim.agent.AgentConfiguration()
-        agent_cfg.sensor_specifications = [fpv_sensor_spec, ortho_sensor_spec]
+        agent_cfg.sensor_specifications = [fpv_sensor_spec, depth_sensor_spec, ortho_sensor_spec]
         
         # 动作空间配置
         agent_cfg.action_space = {
@@ -754,6 +762,73 @@ class HabitatSimulator:
             # 回退到虚拟智能体
             observations = self.sim.get_sensor_observations()
             return observations["color_sensor"]
+    
+    def get_observation(self) -> Dict[str, np.ndarray]:
+        """
+        获取完整的传感器观测数据，包括RGB和深度
+        
+        Returns:
+            包含 'rgb' 和 'depth' 键的观测字典
+        """
+        try:
+            # 如果有物理机器人，从其传感器位置获取观察
+            if self.robot_object is not None:
+                return self._get_robot_full_observation()
+            else:
+                # 否则直接从虚拟智能体获取
+                observations = self.sim.get_sensor_observations()
+                return {
+                    'rgb': observations["color_sensor"],
+                    'depth': observations["depth_sensor"]
+                }
+                
+        except Exception as e:
+            print(f"获取完整观察失败: {e}")
+            return {
+                'rgb': np.zeros((512, 512, 3), dtype=np.uint8),
+                'depth': np.zeros((512, 512), dtype=np.float32)
+            }
+    
+    def _get_robot_full_observation(self) -> Dict[str, np.ndarray]:
+        """从物理机器人的传感器位置获取完整观察"""
+        try:
+            # 获取机器人当前变换
+            robot_transform = self.robot_object.transformation
+            robot_position = robot_transform.translation
+            robot_rotation = mn.Quaternion.from_matrix(robot_transform.rotation())
+            
+            # 计算传感器位置
+            sensor_offset = mn.Vector3(0, self.config['agent']['sensor_height'], 0)
+            sensor_position = robot_position + robot_transform.transform_vector(sensor_offset)
+            
+            # 临时设置虚拟智能体到传感器位置
+            temp_agent_state = habitat_sim.AgentState()
+            temp_agent_state.position = np.array([sensor_position.x, sensor_position.y, sensor_position.z])
+            temp_agent_state.rotation = convert_to_numpy_quat(robot_rotation)
+            
+            # 保存当前状态
+            original_state = self.agent.get_state()
+            
+            # 设置临时状态并获取观察
+            self.agent.set_state(temp_agent_state)
+            observations = self.sim.get_sensor_observations()
+            
+            # 恢复原状态
+            self.agent.set_state(original_state)
+            
+            return {
+                'rgb': observations["color_sensor"],
+                'depth': observations["depth_sensor"]
+            }
+            
+        except Exception as e:
+            print(f"从机器人传感器获取完整观察失败: {e}")
+            # 回退到虚拟智能体
+            observations = self.sim.get_sensor_observations()
+            return {
+                'rgb': observations["color_sensor"],
+                'depth': observations["depth_sensor"]
+            }
     
     def get_robot_state(self) -> Dict[str, np.ndarray]:
         """

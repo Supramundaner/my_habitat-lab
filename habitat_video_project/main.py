@@ -15,6 +15,7 @@ sys.path.insert(0, project_root)
 from src.simulator import HabitatSimulator
 from src.video_composer import VideoComposer
 from src.action_processor import ActionProcessor
+from src.map_builder import OccupancyMapBuilder
 from src.utils import (
     load_json_config, 
     write_json_report, 
@@ -110,6 +111,10 @@ def main():
         
         print("7. 初始化动作处理器...")
         processor = ActionProcessor(simulator, composer, config)
+
+        print("7.5. 初始化占用地图构建器...")
+        map_builder = OccupancyMapBuilder(config['OCCUPANCY_MAP'])
+        composer.set_map_builder(map_builder)
         
         # 8. 添加初始帧
         print("8. 添加初始帧...")
