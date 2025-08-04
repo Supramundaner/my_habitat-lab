@@ -54,6 +54,7 @@ class VideoComposer:
             print("警告: 无法获取基础地图，使用黑色占位图")
         
         self.frame_count = 0
+        self.map_builder = None
         print(f"视频合成器初始化完成: {self.video_width}x{self.video_height} @ {self.fps}fps")
     
     def _resize_map_for_video(self, map_image: Image.Image) -> Image.Image:
@@ -98,36 +99,60 @@ class VideoComposer:
         
         return result
     
-    def add_frame(self):
+    def add_frame(self, robot_state: Optional[Dict[str, Any]] = None, 
+                  observation: Optional[Dict[str, Any]] = None):
         """
         添加一帧到视频
-        合成FPV图像和带智能体标记的地图
+        
+        Args:
+            robot_state: 机器人状态
+            observation: 模拟器观察结果
         """
-        try:
-            # 1. 获取FPV图像和机器人状态
-            fpv_image = self.simulator.get_fpv_observation()
+        if robot_state is None:
             robot_state = self.simulator.get_robot_state()
-            
-            # 2. 处理FPV图像
-            fpv_pil = self._process_fpv_image(fpv_image)
-            
-            # 3. 创建带智能体标记的地图
-            annotated_map = self._create_annotated_map(robot_state)
-            
-            # 4. 合成最终帧
-            final_frame = self._compose_final_frame(fpv_pil, annotated_map)
-            
-            # 5. 写入视频
-            final_frame_cv2 = cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGB2BGR)
-            self.video_writer.write(final_frame_cv2)
-            
-            self.frame_count += 1
-            
-            if self.frame_count % 30 == 0:  # 每秒打印一次进度
-                print(f"已处理 {self.frame_count} 帧")
-            
-        except Exception as e:
-            print(f"添加帧失败: {e}")
+        
+        if observation is None:
+            observation = self.simulator.get_observation()
+        
+        # 1. 获取第一人称视角
+        fpv_image = self._process_fpv_image(observation['rgb'])
+        
+        # 2. 获取全局鸟瞰图
+        top_down_map = self._create_annotated_map(robot_state)
+
+        # 3. 获取并更新占用地图
+        if self.map_builder:
+            self.map_builder.update_map(
+                observation['depth'],
+                robot_state,
+                self.config['OCCUPANCY_MAP']['HFOV']
+            )
+            occupancy_map_img = self.map_builder.get_map_image(
+                robot_state,
+                (self.map_width, self.map_width)
+            )
+            # Convert to PIL for consistency
+            occupancy_map_pil = Image.fromarray(cv2.cvtColor(occupancy_map_img, cv2.COLOR_BGR2RGB))
+        else:
+            occupancy_map_pil = Image.new('RGB', (self.map_width, self.map_width), (10, 10, 10))
+
+        # 4. 调整图像尺寸
+        right_panel_height = self.video_height // 2
+        occupancy_map_resized = occupancy_map_pil.resize((self.map_width, right_panel_height))
+        top_down_map_resized = top_down_map.resize((self.map_width, right_panel_height))
+
+        # 5. 拼接右侧面板
+        right_panel = Image.new('RGB', (self.map_width, self.video_height))
+        right_panel.paste(occupancy_map_resized, (0, 0))
+        right_panel.paste(top_down_map_resized, (0, right_panel_height))
+
+        # 6. 拼接最终帧
+        final_frame = self._compose_final_frame(fpv_image, right_panel)
+        
+        # 7. 写入视频
+        self.video_writer.write(cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGB2BGR))
+        self.frame_count += 1
+        #print(f"已添加第 {self.frame_count} 帧")
     
     def _process_fpv_image(self, fpv_array: np.ndarray) -> Image.Image:
         """
@@ -294,3 +319,7 @@ class VideoComposer:
     def get_frame_count(self) -> int:
         """获取当前帧数"""
         return self.frame_count
+    
+    def set_map_builder(self, map_builder):
+        """设置地图构建器"""
+        self.map_builder = map_builder
