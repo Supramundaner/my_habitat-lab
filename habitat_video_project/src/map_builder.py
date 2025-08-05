@@ -157,51 +157,43 @@ class OccupancyMapBuilder:
         # 将所有可见点转换到地图坐标
         map_coords = self._world_to_map_coords(points_world)
         
-        # 首先，为每个可见点从智能体位置到该点绘制光线，标记路径为空闲
-        for x, y in map_coords:
-            if 0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0]:
-                # 绘制从智能体到这个点的路径，标记为空闲
-                self._draw_line_as_free(agent_map_coords[0], agent_map_coords[1], x, y)
+        # 过滤掉超出地图边界的点
+        valid_mask = ((map_coords[:, 0] >= 0) & (map_coords[:, 0] < self.map_shape[1]) &
+                     (map_coords[:, 1] >= 0) & (map_coords[:, 1] < self.map_shape[0]))
         
-        # 然后，根据高度信息决定终点是障碍物还是可达空间
+        valid_map_coords = map_coords[valid_mask]
+        valid_points_world = points_world[valid_mask]
+        
+        if len(valid_map_coords) == 0:
+            return
+        
+        # 批量使用OpenCV绘制光线，这比逐个调用Bresenham算法快得多
+        temp_map = np.zeros_like(self.grid_map)
+        agent_pt = (agent_map_coords[0], agent_map_coords[1])
+        
+        for x, y in valid_map_coords:
+            cv2.line(temp_map, agent_pt, (x, y), 255, 1)
+        
+        # 只更新未知区域为空闲
+        free_mask = (temp_map == 255) & (self.grid_map == 128)
+        self.grid_map[free_mask] = 255
+        
+        # 批量处理终点状态
         min_h, max_h = self.height_filter_range
-        for i, (x, y) in enumerate(map_coords):
-            if 0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0]:
-                point_height = points_world[i, 1]
-                
-                # 如果点的高度在障碍物范围内，标记为占用
-                if min_h <= point_height <= max_h:
-                    self.grid_map[y, x] = 0  # 黑色: 占用(障碍物)
-                else:
-                    # 否则标记为可达的空闲空间(比如地面或天花板)
-                    self.grid_map[y, x] = 255  # 白色: 空闲
-
-    def _draw_line_as_free(self, x0: int, y0: int, x1: int, y1: int):
-        """使用 Bresenham 算法在地图上绘制直线，将路径标记为空闲区域"""
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        x, y = x0, y0
-        x_inc = 1 if x1 > x0 else -1
-        y_inc = 1 if y1 > y0 else -1
-        error = dx - dy
+        heights = valid_points_world[:, 1]
         
-        while True:
-            # 标记当前点为空闲，但不包括终点(终点会在后面根据高度单独处理)
-            if (0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0] and 
-                not (x == x1 and y == y1)):  # 不处理终点
-                if self.grid_map[y, x] == 128:  # 只更新未知区域
-                    self.grid_map[y, x] = 255  # 白色: 空闲
-            
-            if x == x1 and y == y1:
-                break
-                
-            e2 = 2 * error
-            if e2 > -dy:
-                error -= dy
-                x += x_inc
-            if e2 < dx:
-                error += dx
-                y += y_inc
+        # 创建掩码来批量处理
+        obstacle_mask = (heights >= min_h) & (heights <= max_h)
+        
+        # 批量标记障碍物
+        obstacle_coords = valid_map_coords[obstacle_mask]
+        if len(obstacle_coords) > 0:
+            self.grid_map[obstacle_coords[:, 1], obstacle_coords[:, 0]] = 0
+        
+        # 批量标记其他可见区域为空闲
+        free_coords = valid_map_coords[~obstacle_mask]
+        if len(free_coords) > 0:
+            self.grid_map[free_coords[:, 1], free_coords[:, 0]] = 255
 
     def _trace_rays_to_obstacles(self, agent_coords: np.ndarray, obstacle_coords: np.ndarray):
         """从智能体位置到障碍物之间的光线追踪，标记空闲区域"""
