@@ -99,6 +99,40 @@ class VideoComposer:
         
         return result
     
+    def _resize_with_aspect_ratio(self, image: Image.Image, target_width: int, target_height: int) -> Image.Image:
+        """
+        调整图像尺寸，保持纵横比并用黑色填充多余空间
+        
+        Args:
+            image: 原始图像
+            target_width: 目标宽度
+            target_height: 目标高度
+        
+        Returns:
+            调整后的图像
+        """
+        original_width, original_height = image.size
+        
+        # 计算缩放比例，保持纵横比
+        scale_x = target_width / original_width
+        scale_y = target_height / original_height
+        scale = min(scale_x, scale_y)
+        
+        # 计算新尺寸
+        new_width = int(original_width * scale)
+        new_height = int(original_height * scale)
+        
+        # 缩放图像
+        resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # 创建黑色背景并居中放置
+        result = Image.new('RGB', (target_width, target_height), (0, 0, 0))
+        x_offset = (target_width - new_width) // 2
+        y_offset = (target_height - new_height) // 2
+        result.paste(resized_image, (x_offset, y_offset))
+        
+        return result
+    
     def add_frame(self, robot_state: Optional[Dict[str, Any]] = None, 
                   observation: Optional[Dict[str, Any]] = None):
         """
@@ -136,10 +170,18 @@ class VideoComposer:
         else:
             occupancy_map_pil = Image.new('RGB', (self.map_width, self.map_width), (10, 10, 10))
 
-        # 4. 调整图像尺寸
+        # 4. 调整图像尺寸 - 保持纵横比
         right_panel_height = self.video_height // 2
-        occupancy_map_resized = occupancy_map_pil.resize((self.map_width, right_panel_height))
-        top_down_map_resized = top_down_map.resize((self.map_width, right_panel_height))
+        
+        # 为occupancy map保持纵横比
+        occupancy_map_resized = self._resize_with_aspect_ratio(
+            occupancy_map_pil, self.map_width, right_panel_height
+        )
+        
+        # 为top-down map保持纵横比
+        top_down_map_resized = self._resize_with_aspect_ratio(
+            top_down_map, self.map_width, right_panel_height
+        )
 
         # 5. 拼接右侧面板
         right_panel = Image.new('RGB', (self.map_width, self.video_height))
