@@ -90,9 +90,36 @@ class OccupancyMapBuilder:
             vis_map = cv2.resize(vis_map, output_size, interpolation=cv2.INTER_NEAREST)
 
         return vis_map
+    
+    def _preprocess_depth_data(self, depth: np.ndarray) -> np.ndarray:
+        """预处理深度数据，过滤异常值"""
+        # 1. 中值滤波 - 去除孤立噪声点
+        depth_filtered = cv2.medianBlur(depth.astype(np.float32), 5)
+        
+        # 2. 检测异常跳变 - 识别透视/反射
+        # 计算深度梯度
+        grad_x = cv2.Sobel(depth_filtered, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(depth_filtered, cv2.CV_32F, 0, 1, ksize=3)
+        gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+        
+        # 3. 过滤异常梯度区域（可能是透视或反射）
+        gradient_threshold = 0.5  # 米/像素
+        anomaly_mask = gradient_magnitude > gradient_threshold
+        
+        # 4. 形态学操作，扩大异常区域
+        kernel = np.ones((5,5), np.uint8)
+        anomaly_mask = cv2.dilate(anomaly_mask.astype(np.uint8), kernel, iterations=1)
+        
+        # 5. 将异常区域设为无效
+        depth_filtered[anomaly_mask > 0] = 0
+        
+        return depth_filtered
+
+
 
     def _depth_to_point_cloud(self, depth: np.ndarray, hfov: float) -> np.ndarray:
         """从深度图计算相机坐标系下的点云。"""
+        depth = self._preprocess_depth_data(depth)
         h, w = depth.shape
         hfov_rad = np.deg2rad(hfov)
         
@@ -146,7 +173,7 @@ class OccupancyMapBuilder:
         return world_points
 
     def _project_to_map(self, points_world: np.ndarray, agent_pos: np.ndarray):
-        """将世界坐标系的点云投影到2D栅格地图上。"""
+        """OpenCV划线 + 障碍物放置 + 向量化后处理移除穿越射线"""
         if len(points_world) == 0:
             return
 
@@ -154,12 +181,10 @@ class OccupancyMapBuilder:
         agent_map_coords = self._world_to_map_coords(agent_pos.reshape(1, 3))[0]
         self.agent_map_coords = (agent_map_coords[0], agent_map_coords[1])
         
-        # 将所有可见点转换到地图坐标
+        # 坐标转换和边界检查
         map_coords = self._world_to_map_coords(points_world)
-        
-        # 过滤掉超出地图边界的点
         valid_mask = ((map_coords[:, 0] >= 0) & (map_coords[:, 0] < self.map_shape[1]) &
-                     (map_coords[:, 1] >= 0) & (map_coords[:, 1] < self.map_shape[0]))
+                    (map_coords[:, 1] >= 0) & (map_coords[:, 1] < self.map_shape[0]))
         
         valid_map_coords = map_coords[valid_mask]
         valid_points_world = points_world[valid_mask]
@@ -167,68 +192,148 @@ class OccupancyMapBuilder:
         if len(valid_map_coords) == 0:
             return
         
-        # 批量使用OpenCV绘制光线，这比逐个调用Bresenham算法快得多
+        # === Step 1: 先用OpenCV批量划线 ===
         temp_map = np.zeros_like(self.grid_map)
         agent_pt = (agent_map_coords[0], agent_map_coords[1])
         
         for x, y in valid_map_coords:
             cv2.line(temp_map, agent_pt, (x, y), 255, 1)
         
-        # 只更新未知区域为空闲
-        free_mask = (temp_map == 255) & (self.grid_map == 128)
-        self.grid_map[free_mask] = 255
-        
-        # 批量处理终点状态
+        # === Step 2: 放置障碍物 ===
         min_h, max_h = self.height_filter_range
         heights = valid_points_world[:, 1]
-        
-        # 创建掩码来批量处理
         obstacle_mask = (heights >= min_h) & (heights <= max_h)
         
-        # 批量标记障碍物
-        obstacle_coords = valid_map_coords[obstacle_mask]
-        if len(obstacle_coords) > 0:
-            self.grid_map[obstacle_coords[:, 1], obstacle_coords[:, 0]] = 0
+        # 累积障碍物点（解决覆盖问题）
+        occupancy_accum = np.zeros(self.map_shape, dtype=np.float32)
+        for i, (x, y) in enumerate(valid_map_coords):
+            if obstacle_mask[i]:
+                occupancy_accum[y, x] += 1.0
         
-        # 批量标记其他可见区域为空闲
-        free_coords = valid_map_coords[~obstacle_mask]
-        if len(free_coords) > 0:
-            self.grid_map[free_coords[:, 1], free_coords[:, 0]] = 255
+        # 标记障碍物
+        occupied_mask = occupancy_accum >= 1.0
+        self.grid_map[occupied_mask] = 0
+        
+        # === Step 3: 向量化后处理 - 移除穿越障碍物的射线 ===
+        self._vectorized_remove_blocked_rays(temp_map, agent_pt)
+        
+        # === Step 4: 更新空闲区域 ===
+        free_from_rays = (temp_map == 255) & (self.grid_map == 128)
+        self.grid_map[free_from_rays] = 255
 
-    def _trace_rays_to_obstacles(self, agent_coords: np.ndarray, obstacle_coords: np.ndarray):
-        """从智能体位置到障碍物之间的光线追踪，标记空闲区域"""
-        agent_x, agent_y = agent_coords
+    def _vectorized_remove_blocked_rays(self, temp_map: np.ndarray, agent_pt: tuple):
+        """向量化移除被障碍物阻挡的射线段"""
+        agent_x, agent_y = agent_pt
         
-        for obs_x, obs_y in obstacle_coords:
-            if 0 <= obs_x < self.map_shape[1] and 0 <= obs_y < self.map_shape[0]:
-                # 使用 Bresenham 算法绘制从智能体到障碍物的直线
-                self._draw_line(agent_x, agent_y, obs_x, obs_y)
-    
-    def _draw_line(self, x0: int, y0: int, x1: int, y1: int):
-        """使用 Bresenham 算法在地图上绘制直线，标记空闲区域"""
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        x, y = x0, y0
-        x_inc = 1 if x1 > x0 else -1
-        y_inc = 1 if y1 > y0 else -1
-        error = dx - dy
+        # === 向量化处理所有射线点 ===
         
-        while True:
-            # 只标记未知区域为空闲，不覆盖已知的占用区域
-            if (0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0] and 
-                self.grid_map[y, x] == 128):  # 只标记未知区域
-                self.grid_map[y, x] = 255  # 白色: 空闲
-            
-            if x == x1 and y == y1:
-                break
+        # 1. 获取所有射线点的坐标
+        ray_coords = np.where(temp_map == 255)
+        ray_y, ray_x = ray_coords[0], ray_coords[1]
+        
+        if len(ray_x) == 0:
+            return
+        
+        # 2. 向量化计算所有点的距离和角度
+        dx = ray_x - agent_x
+        dy = ray_y - agent_y
+        distances = np.sqrt(dx*dx + dy*dy)
+        angles = np.arctan2(dy, dx)
+        
+        # 3. 向量化找出所有障碍物点
+        obstacle_coords = np.where(self.grid_map == 0)
+        if len(obstacle_coords[0]) == 0:
+            return  # 没有障碍物，不需要处理
+        
+        obs_y, obs_x = obstacle_coords[0], obstacle_coords[1]
+        obs_dx = obs_x - agent_x
+        obs_dy = obs_y - agent_y
+        obs_distances = np.sqrt(obs_dx*obs_dx + obs_dy*obs_dy)
+        obs_angles = np.arctan2(obs_dy, obs_dx)
+        
+        # 4. 向量化处理：对每个角度区间，找到最近的障碍物距离
+        angle_resolution = np.radians(3)  # 3度角度精度
+        quantized_angles = np.round(angles / angle_resolution) * angle_resolution
+        obs_quantized_angles = np.round(obs_angles / angle_resolution) * angle_resolution
+        
+        # 获取所有唯一角度
+        unique_angles = np.unique(quantized_angles)
+        
+        # 5. 向量化标记需要清除的射线点
+        points_to_clear = np.zeros(len(ray_x), dtype=bool)
+        
+        for angle in unique_angles:
+            # 找到这个角度的所有射线点
+            ray_angle_mask = np.abs(quantized_angles - angle) < angle_resolution/2
+            if not np.any(ray_angle_mask):
+                continue
                 
-            e2 = 2 * error
-            if e2 > -dy:
-                error -= dy
-                x += x_inc
-            if e2 < dx:
-                error += dx
-                y += y_inc
+            # 找到这个角度的所有障碍物点
+            obs_angle_mask = np.abs(obs_quantized_angles - angle) < angle_resolution/2
+            
+            if np.any(obs_angle_mask):
+                # 找到这个角度最近的障碍物距离
+                min_obstacle_distance = np.min(obs_distances[obs_angle_mask])
+                
+                # 标记这个角度上距离大于最近障碍物的射线点
+                ray_indices = np.where(ray_angle_mask)[0]
+                blocked_mask = distances[ray_indices] > min_obstacle_distance
+                points_to_clear[ray_indices[blocked_mask]] = True
+        
+        # 6. 批量清除被阻挡的射线点
+        if np.any(points_to_clear):
+            blocked_y = ray_y[points_to_clear]
+            blocked_x = ray_x[points_to_clear]
+            temp_map[blocked_y, blocked_x] = 0
+
+    def _vectorized_remove_blocked_rays_optimized(self, temp_map: np.ndarray, agent_pt: tuple):
+        """进一步优化的向量化版本 - 使用广播操作"""
+        agent_x, agent_y = agent_pt
+        
+        # 获取射线点和障碍物点
+        ray_coords = np.where(temp_map == 255)
+        obs_coords = np.where(self.grid_map == 0)
+        
+        if len(ray_coords[0]) == 0 or len(obs_coords[0]) == 0:
+            return
+        
+        ray_y, ray_x = ray_coords[0], ray_coords[1]
+        obs_y, obs_x = obs_coords[0], obs_coords[1]
+        
+        # 计算射线点的极坐标
+        ray_dx = ray_x - agent_x
+        ray_dy = ray_y - agent_y
+        ray_distances = np.sqrt(ray_dx*ray_dx + ray_dy*ray_dy)
+        ray_angles = np.arctan2(ray_dy, ray_dx)
+        
+        # 计算障碍物点的极坐标
+        obs_dx = obs_x - agent_x
+        obs_dy = obs_y - agent_y
+        obs_distances = np.sqrt(obs_dx*obs_dx + obs_dy*obs_dy)
+        obs_angles = np.arctan2(obs_dy, obs_dx)
+        
+        # 使用广播计算角度差异矩阵
+        angle_diff = np.abs(ray_angles[:, None] - obs_angles[None, :])
+        angle_diff = np.minimum(angle_diff, 2*np.pi - angle_diff)  # 处理角度环绕
+        
+        # 找到每个射线点最近的同方向障碍物
+        angle_threshold = np.radians(5)  # 5度阈值
+        same_direction = angle_diff < angle_threshold
+        
+        # 对每个射线点，找到同方向的最近障碍物
+        points_to_clear = np.zeros(len(ray_x), dtype=bool)
+        
+        for i in range(len(ray_x)):
+            same_dir_obstacles = same_direction[i, :]
+            if np.any(same_dir_obstacles):
+                min_obs_distance = np.min(obs_distances[same_dir_obstacles])
+                if ray_distances[i] > min_obs_distance:
+                    points_to_clear[i] = True
+        
+        # 批量清除
+        if np.any(points_to_clear):
+            temp_map[ray_y[points_to_clear], ray_x[points_to_clear]] = 0
+
 
     def _world_to_map_coords(self, world_coords: np.ndarray) -> np.ndarray:
         """将世界坐标 (X, Z) 转换为地图栅格坐标 (map_x, map_y)。"""
