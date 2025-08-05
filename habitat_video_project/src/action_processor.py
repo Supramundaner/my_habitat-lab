@@ -296,7 +296,7 @@ class ActionProcessor:
         
         # 计算动画时长和帧数
         duration = angle_diff / self.angular_speed
-        num_frames = max(1, int(duration * self.fps))
+        num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
         
         print(f"旋转动画: {angle_diff:.1f}度, {duration:.2f}秒, {num_frames}帧")
         
@@ -304,9 +304,9 @@ class ActionProcessor:
         current_state = self.simulator.get_robot_state()
         current_pos = current_state['position']
         
-        # 逐帧插值
-        for frame in range(num_frames + 1):
-            t = frame / num_frames if num_frames > 0 else 1.0
+        # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
+        for frame in range(1, num_frames + 1):
+            t = frame / num_frames
             
             # 使用球面线性插值
             interpolated_rot = slerp(start_rot, end_rot, t)
@@ -328,7 +328,7 @@ class ActionProcessor:
         # 计算距离和动画时长
         distance = np.linalg.norm(end_pos - start_pos)
         duration = distance / self.linear_speed
-        num_frames = max(1, int(duration * self.fps))
+        num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
         
         print(f"移动动画: {distance:.2f}米, {duration:.2f}秒, {num_frames}帧")
         
@@ -336,9 +336,9 @@ class ActionProcessor:
         current_state = self.simulator.get_robot_state()
         current_rot = current_state['rotation']
         
-        # 逐帧插值
-        for frame in range(num_frames + 1):
-            t = frame / num_frames if num_frames > 0 else 1.0
+        # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
+        for frame in range(1, num_frames + 1):
+            t = frame / num_frames
             
             # 线性插值位置
             interpolated_pos = start_pos + (end_pos - start_pos) * t
