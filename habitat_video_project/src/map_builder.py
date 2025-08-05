@@ -105,9 +105,9 @@ class OccupancyMapBuilder:
         ones = np.ones((h, w))
         pixel_coords = np.stack((x, y, ones), axis=2).reshape(-1, 3) # (H*W, 3)
         
-        # 滤除无效深度值
+        # 滤除无效深度值 - 放宽范围以获取更多可见信息
         depth_flat = depth.flatten()
-        valid_depth_mask = (depth_flat > 0.1) & (depth_flat < 5.0)
+        valid_depth_mask = (depth_flat > 0.01) & (depth_flat < 10.0)  # 扩大有效深度范围
 
         # 计算相机坐标
         camera_coords = K_inv @ pixel_coords[valid_depth_mask].T # (3, N)
@@ -147,28 +147,61 @@ class OccupancyMapBuilder:
 
     def _project_to_map(self, points_world: np.ndarray, agent_pos: np.ndarray):
         """将世界坐标系的点云投影到2D栅格地图上。"""
-        # 高度过滤
-        min_h, max_h = self.height_filter_range
-        height_mask = (points_world[:, 1] > min_h) & (points_world[:, 1] < max_h)
-        points_to_project = points_world[height_mask]
-
-        if len(points_to_project) == 0:
+        if len(points_world) == 0:
             return
-
-        # 转换到地图坐标
-        map_coords = self._world_to_map_coords(points_to_project)
-        
-        # 标记占用栅格
-        for x, y in map_coords:
-            if 0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0]:
-                self.grid_map[y, x] = 0  # 黑色: 占用
 
         # 更新智能体位置
         agent_map_coords = self._world_to_map_coords(agent_pos.reshape(1, 3))[0]
         self.agent_map_coords = (agent_map_coords[0], agent_map_coords[1])
         
-        # 简单的光线追踪标记空闲区域
-        self._trace_rays_to_obstacles(agent_map_coords, map_coords)
+        # 将所有可见点转换到地图坐标
+        map_coords = self._world_to_map_coords(points_world)
+        
+        # 首先，为每个可见点从智能体位置到该点绘制光线，标记路径为空闲
+        for x, y in map_coords:
+            if 0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0]:
+                # 绘制从智能体到这个点的路径，标记为空闲
+                self._draw_line_as_free(agent_map_coords[0], agent_map_coords[1], x, y)
+        
+        # 然后，根据高度信息决定终点是障碍物还是可达空间
+        min_h, max_h = self.height_filter_range
+        for i, (x, y) in enumerate(map_coords):
+            if 0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0]:
+                point_height = points_world[i, 1]
+                
+                # 如果点的高度在障碍物范围内，标记为占用
+                if min_h <= point_height <= max_h:
+                    self.grid_map[y, x] = 0  # 黑色: 占用(障碍物)
+                else:
+                    # 否则标记为可达的空闲空间(比如地面或天花板)
+                    self.grid_map[y, x] = 255  # 白色: 空闲
+
+    def _draw_line_as_free(self, x0: int, y0: int, x1: int, y1: int):
+        """使用 Bresenham 算法在地图上绘制直线，将路径标记为空闲区域"""
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        x, y = x0, y0
+        x_inc = 1 if x1 > x0 else -1
+        y_inc = 1 if y1 > y0 else -1
+        error = dx - dy
+        
+        while True:
+            # 标记当前点为空闲，但不包括终点(终点会在后面根据高度单独处理)
+            if (0 <= x < self.map_shape[1] and 0 <= y < self.map_shape[0] and 
+                not (x == x1 and y == y1)):  # 不处理终点
+                if self.grid_map[y, x] == 128:  # 只更新未知区域
+                    self.grid_map[y, x] = 255  # 白色: 空闲
+            
+            if x == x1 and y == y1:
+                break
+                
+            e2 = 2 * error
+            if e2 > -dy:
+                error -= dy
+                x += x_inc
+            if e2 < dx:
+                error += dx
+                y += y_inc
 
     def _trace_rays_to_obstacles(self, agent_coords: np.ndarray, obstacle_coords: np.ndarray):
         """从智能体位置到障碍物之间的光线追踪，标记空闲区域"""
