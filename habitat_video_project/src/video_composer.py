@@ -363,5 +363,18 @@ class VideoComposer:
         return self.frame_count
     
     def set_map_builder(self, map_builder):
-        """设置地图构建器"""
+        """设置地图构建器并同步坐标系"""
         self.map_builder = map_builder
+        
+        # 获取topdown地图的元数据
+        topdown_metadata = self.simulator.get_topdown_metadata()
+        
+        if topdown_metadata and not map_builder.global_reference_set:
+            # 同步occupancy map的坐标系到topdown view
+            map_builder.set_global_reference(
+                scene_center=np.array(topdown_metadata['scene_center']),
+                topdown_map_bounds=topdown_metadata['map_bounds'],
+                topdown_spacing=topdown_metadata['spacing'],
+                topdown_map_size=topdown_metadata['map_size']
+            )
+            print("成功同步occupancy map坐标系到topdown view")
