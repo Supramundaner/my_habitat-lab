@@ -109,18 +109,27 @@ class OccupancyMapBuilder:
         """
         vis_map = cv2.cvtColor(self.grid_map, cv2.COLOR_GRAY2BGR)
 
-        # 绘制智能体 - 使用与topdown view相同的标注逻辑
+        # 绘制智能体 - 使用基于分辨率的动态大小调整
         if self.agent_map_coords:
-            # 计算相对于地图尺寸的固定标注大小
-            # 参考topdown view的实现：dot_radius = max(4, int(8 * self.map_scale))
+            # 计算agent标注的合适大小，考虑地图分辨率和物理尺寸
+            # 目标：agent标注应该代表现实中约0.3-0.5米的尺寸（agent的肩宽）
+            
+            # 方法1：基于物理尺寸计算
+            agent_physical_size = 0.4  # 米，agent的典型肩宽
+            dot_radius_physical = int(agent_physical_size / (2 * self.map_resolution))  # 半径对应物理尺寸
+            
+            # 方法2：基于地图尺寸的相对比例（作为备选）
             map_min_size = min(self.map_shape)
-            base_scale = map_min_size / 400.0  # 以400像素为基准
+            dot_radius_relative = max(2, int(map_min_size * 0.01))  # 地图最小边的1%
             
-            # 圆点半径：相对于地图大小的固定比例
-            dot_radius = max(4, int(8 * base_scale))
+            # 使用两种方法的较小值，确保标注不会过大
+            dot_radius = min(max(2, dot_radius_physical), dot_radius_relative, 100)  # 限制在2-8像素
             
-            # 箭头长度：圆点半径的2倍
-            arrow_length = dot_radius * 2
+            # 箭头长度：相对于agent大小，表示agent的朝向
+            arrow_length = max(dot_radius * 2, 12)  # 至少12像素长的箭头
+            
+            #print(f"Debug: 地图分辨率={self.map_resolution:.3f}m/px, 物理半径={dot_radius_physical}px, "
+            #      f"相对半径={dot_radius_relative}px, 最终半径={dot_radius}px")
             
             # 绘制位置点（红色圆点）
             cv2.circle(vis_map, self.agent_map_coords, dot_radius, (0, 0, 255), -1)
@@ -160,8 +169,8 @@ class OccupancyMapBuilder:
             end_x = center_x + int(dx)
             end_y = center_y + int(dz)  # Z轴对应地图的Y轴
             
-            # 绘制主箭头线（黄色，与topdown view一致）
-            cv2.line(vis_map, (center_x, center_y), (end_x, end_y), (0, 255, 255), 3)
+            # 绘制主箭头线（绿色）
+            cv2.line(vis_map, (center_x, center_y), (end_x, end_y), (0, 255, 0), 3)
             
             # 计算箭头头部的方向
             arrow_angle = np.arctan2(dz, dx)
