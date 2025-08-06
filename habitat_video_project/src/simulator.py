@@ -377,9 +377,19 @@ class HabitatSimulator:
             self.world_to_map_scale_z = self.map_height / world_coverage_z
             self.view_range = (world_coverage_x, world_coverage_z)
             
+            # 计算topdown地图边界（用于与occupancy map同步）
+            self.topdown_spacing = world_coverage_x / self.map_width  # 米/像素
+            self.topdown_map_bounds = {
+                'top_left': (x_center - view_half_width, z_center - view_half_height),
+                'bottom_right': (x_center + view_half_width, z_center + view_half_height),
+                'view_range': (world_coverage_x, world_coverage_z),
+                'image_size': (self.map_width, self.map_height)
+            }
+            
             print(f"地图尺寸: {self.map_width} x {self.map_height}")
             print(f"视野覆盖范围: {world_coverage_x:.2f}m x {world_coverage_z:.2f}m")
             print(f"坐标缩放因子: X={self.world_to_map_scale_x:.2f}, Z={self.world_to_map_scale_z:.2f}")
+            print(f"像素间距: {self.topdown_spacing:.6f} m/pixel")
             
             print("topdown地图生成完成")
             
@@ -871,6 +881,23 @@ class HabitatSimulator:
             PIL图像对象
         """
         return self.base_map_image
+
+    def get_topdown_metadata(self) -> Optional[Dict]:
+        """
+        获取topdown地图的元数据，用于与occupancy map同步坐标系
+        
+        Returns:
+            包含场景中心、地图边界、像素间距等信息的字典
+        """
+        if not hasattr(self, 'topdown_map_bounds') or not hasattr(self, 'scene_center'):
+            return None
+            
+        return {
+            'scene_center': self.scene_center,
+            'map_bounds': self.topdown_map_bounds,
+            'spacing': self.topdown_spacing,
+            'map_size': (self.map_width, self.map_height)
+        }
     
     def world_to_map_coords(self, world_pos: np.ndarray) -> Tuple[int, int]:
         """

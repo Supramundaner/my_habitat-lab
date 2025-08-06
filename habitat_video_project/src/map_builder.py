@@ -37,6 +37,38 @@ class OccupancyMapBuilder:
         # 初始化一个空的地图数组。 128: 未知, 255: 空闲, 0: 占用
         self.grid_map = np.full(self.map_shape, 128, dtype=np.uint8)
         self.agent_map_coords = None
+        
+        # 用于与topdown view坐标系同步的参数（将在set_global_reference中设置）
+        self.global_reference_set = False
+        self.scene_center = None
+        self.world_to_map_scale = None
+        self.topdown_map_bounds = None
+
+    def set_global_reference(self, scene_center: np.ndarray, topdown_map_bounds: Dict[str, float], 
+                           topdown_spacing: float, topdown_map_size: Tuple[int, int]):
+        """
+        设置与topdown view相同的全局坐标系参考
+        
+        Args:
+            scene_center: 场景中心坐标 [x, y, z]
+            topdown_map_bounds: topdown地图的世界坐标边界
+            topdown_spacing: topdown地图的像素间距（米/像素）
+            topdown_map_size: topdown地图尺寸 (width, height)
+        """
+        self.scene_center = scene_center
+        self.topdown_map_bounds = topdown_map_bounds
+        self.topdown_spacing = topdown_spacing
+        self.topdown_map_size = topdown_map_size
+        
+        # 使用与topdown相同的分辨率和地图尺寸
+        self.map_resolution = topdown_spacing
+        self.map_shape = topdown_map_size
+        
+        # 重新初始化地图数组
+        self.grid_map = np.full(self.map_shape, 128, dtype=np.uint8)
+        
+        self.global_reference_set = True
+        print(f"Occupancy map设置为全局坐标系: 中心={scene_center}, 分辨率={topdown_spacing:.6f}m/pixel, 尺寸={topdown_map_size}")
 
     def update_map(
         self, 
@@ -177,7 +209,7 @@ class OccupancyMapBuilder:
         if len(points_world) == 0:
             return
 
-        # 更新智能体位置
+        # 更新智能体位置 - 使用统一的坐标转换
         agent_map_coords = self._world_to_map_coords(agent_pos.reshape(1, 3))[0]
         self.agent_map_coords = (agent_map_coords[0], agent_map_coords[1])
         
@@ -336,19 +368,39 @@ class OccupancyMapBuilder:
 
 
     def _world_to_map_coords(self, world_coords: np.ndarray) -> np.ndarray:
-        """将世界坐标 (X, Z) 转换为地图栅格坐标 (map_x, map_y)。"""
-        map_center = self.map_shape[0] // 2
+        """将世界坐标转换为地图栅格坐标。"""
+        if not self.global_reference_set:
+            # 回退到原始的相对坐标系（以地图中心为原点）
+            map_center = self.map_shape[0] // 2
+            
+            map_x = np.clip(
+                np.floor(world_coords[:, 0] / self.map_resolution) + map_center, 0, self.map_shape[1] - 1
+            ).astype(int)
+            
+            # 世界Z轴对应地图的-Y轴
+            map_y = np.clip(
+                np.floor(-world_coords[:, 2] / self.map_resolution) + map_center, 0, self.map_shape[0] - 1
+            ).astype(int)
+            
+            return np.stack([map_x, map_y], axis=1)
         
-        map_x = np.clip(
-            np.floor(world_coords[:, 0] / self.map_resolution) + map_center, 0, self.map_shape[1] - 1
-        ).astype(int)
-        
-        # 世界Z轴对应地图的-Y轴
-        map_y = np.clip(
-            np.floor(-world_coords[:, 2] / self.map_resolution) + map_center, 0, self.map_shape[0] - 1
-        ).astype(int)
-        
-        return np.stack([map_x, map_y], axis=1)
+        else:
+            # 使用与topdown view完全相同的坐标转换
+            # 基于topdown.py中的calculate_metadata和world_to_pixel逻辑
+            
+            # 获取topdown地图的世界坐标边界
+            tl_x = self.topdown_map_bounds['top_left'][0]
+            tl_z = self.topdown_map_bounds['top_left'][1] 
+            
+            # 将世界坐标转换为像素坐标
+            map_x = (world_coords[:, 0] - tl_x) / self.map_resolution
+            map_y = (world_coords[:, 2] - tl_z) / self.map_resolution  # Z对应地图Y
+            
+            # 裁剪到有效范围
+            map_x = np.clip(map_x, 0, self.map_shape[1] - 1).astype(int)
+            map_y = np.clip(map_y, 0, self.map_shape[0] - 1).astype(int)
+            
+            return np.stack([map_x, map_y], axis=1)
 
     def _quaternion_rotate_vector(self, quat: np.ndarray, vector: np.ndarray) -> np.ndarray:
         """
