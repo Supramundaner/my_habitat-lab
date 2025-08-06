@@ -113,8 +113,8 @@ def main():
         processor = ActionProcessor(simulator, composer, config)
 
         print("7.5. 初始化占用地图构建器...")
-        map_builder = OccupancyMapBuilder(config['OCCUPANCY_MAP'])
-        composer.set_map_builder(map_builder)
+        map_builder = OccupancyMapBuilder()
+        composer.set_map_builder(map_builder, config)
         
         # 8. 添加初始帧
         print("8. 添加初始帧...")
