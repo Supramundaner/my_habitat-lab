@@ -98,6 +98,7 @@ class OccupancyMapBuilder:
     def get_map_image(self, agent_pose: Dict[str, np.ndarray], output_size: Tuple[int, int]) -> np.ndarray:
         """
         生成用于显示的可视化地图图像，并在其上绘制智能体。
+        使用与topdown view相同的agent标注逻辑和大小。
 
         Args:
             agent_pose: 智能体位姿，用于绘制其在地图上的位置。
@@ -108,20 +109,84 @@ class OccupancyMapBuilder:
         """
         vis_map = cv2.cvtColor(self.grid_map, cv2.COLOR_GRAY2BGR)
 
-        # 绘制智能体
+        # 绘制智能体 - 使用与topdown view相同的标注逻辑
         if self.agent_map_coords:
-            cv2.circle(vis_map, self.agent_map_coords, 5, (0, 0, 255), -1) # 红色圆点
-
-            # 绘制朝向 - 使用手动实现的四元数旋转
-            forward_vec = self._quaternion_rotate_vector(agent_pose['rotation'], np.array([0, 0, -1]))
-            endpoint_x = self.agent_map_coords[0] + int(forward_vec[0] * 15)
-            endpoint_y = self.agent_map_coords[1] - int(forward_vec[2] * 15) # 地图Y轴与世界Z轴方向相反
-            cv2.line(vis_map, self.agent_map_coords, (endpoint_x, endpoint_y), (0, 255, 0), 2)
+            # 计算相对于地图尺寸的固定标注大小
+            # 参考topdown view的实现：dot_radius = max(4, int(8 * self.map_scale))
+            map_min_size = min(self.map_shape)
+            base_scale = map_min_size / 400.0  # 以400像素为基准
+            
+            # 圆点半径：相对于地图大小的固定比例
+            dot_radius = max(4, int(8 * base_scale))
+            
+            # 箭头长度：圆点半径的2倍
+            arrow_length = dot_radius * 2
+            
+            # 绘制位置点（红色圆点）
+            cv2.circle(vis_map, self.agent_map_coords, dot_radius, (0, 0, 255), -1)
+            
+            # 绘制朝向箭头 - 参考topdown view的朝向计算
+            self._draw_agent_direction_arrow(vis_map, agent_pose['rotation'], arrow_length)
 
         if output_size:
             vis_map = cv2.resize(vis_map, output_size, interpolation=cv2.INTER_NEAREST)
 
         return vis_map
+    
+    def _draw_agent_direction_arrow(self, vis_map: np.ndarray, rotation_quat: np.ndarray, arrow_length: int):
+        """
+        绘制智能体朝向箭头，完全参考topdown view的实现逻辑
+        
+        Args:
+            vis_map: 可视化地图图像
+            rotation_quat: 四元数旋转 [x, y, z, w]
+            arrow_length: 箭头长度
+        """
+        if not self.agent_map_coords:
+            return
+            
+        center_x, center_y = self.agent_map_coords
+        
+        try:
+            # 使用与topdown view相同的朝向计算方法
+            # 在Habitat中，-Z轴是前方，计算前向向量
+            forward_vec = self._quaternion_rotate_vector(rotation_quat, np.array([0, 0, -1]))
+            
+            # 转换到地图坐标系：X轴向右，Z轴向下
+            # 在地图上：X对应水平向右，Z对应垂直向下
+            dx = forward_vec[0] * arrow_length  # X分量
+            dz = forward_vec[2] * arrow_length  # Z分量（注意是Z，不是Y）
+            
+            end_x = center_x + int(dx)
+            end_y = center_y + int(dz)  # Z轴对应地图的Y轴
+            
+            # 绘制主箭头线（黄色，与topdown view一致）
+            cv2.line(vis_map, (center_x, center_y), (end_x, end_y), (0, 255, 255), 3)
+            
+            # 计算箭头头部的方向
+            arrow_angle = np.arctan2(dz, dx)
+            arrow_head_length = arrow_length * 0.3
+            arrow_head_angle = np.radians(30)
+            
+            # 左侧箭头线
+            left_angle = arrow_angle + np.pi - arrow_head_angle
+            left_x = end_x + int(np.cos(left_angle) * arrow_head_length)
+            left_y = end_y + int(np.sin(left_angle) * arrow_head_length)
+            cv2.line(vis_map, (end_x, end_y), (left_x, left_y), (0, 255, 255), 2)
+            
+            # 右侧箭头线
+            right_angle = arrow_angle + np.pi + arrow_head_angle
+            right_x = end_x + int(np.cos(right_angle) * arrow_head_length)
+            right_y = end_y + int(np.sin(right_angle) * arrow_head_length)
+            cv2.line(vis_map, (end_x, end_y), (right_x, right_y), (0, 255, 255), 2)
+            
+        except Exception as e:
+            print(f"绘制朝向箭头失败: {e}")
+            # 回退到简单的线条绘制
+            forward_vec = self._quaternion_rotate_vector(rotation_quat, np.array([0, 0, -1]))
+            endpoint_x = center_x + int(forward_vec[0] * arrow_length)
+            endpoint_y = center_y + int(forward_vec[2] * arrow_length)
+            cv2.line(vis_map, (center_x, center_y), (endpoint_x, endpoint_y), (0, 255, 0), 2)
     
     def _preprocess_depth_data(self, depth: np.ndarray) -> np.ndarray:
         """预处理深度数据，过滤异常值"""
