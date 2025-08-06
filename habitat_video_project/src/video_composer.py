@@ -362,19 +362,23 @@ class VideoComposer:
         """获取当前帧数"""
         return self.frame_count
     
-    def set_map_builder(self, map_builder):
+    def set_map_builder(self, map_builder, config: Dict[str, Any]):
         """设置地图构建器并同步坐标系"""
         self.map_builder = map_builder
         
         # 获取topdown地图的元数据
         topdown_metadata = self.simulator.get_topdown_metadata()
         
-        if topdown_metadata and not map_builder.global_reference_set:
+        if topdown_metadata:
             # 同步occupancy map的坐标系到topdown view
             map_builder.set_global_reference(
                 scene_center=np.array(topdown_metadata['scene_center']),
                 topdown_map_bounds=topdown_metadata['map_bounds'],
                 topdown_spacing=topdown_metadata['spacing'],
-                topdown_map_size=topdown_metadata['map_size']
+                topdown_map_size=topdown_metadata['map_size'],
+                camera_height=config['OCCUPANCY_MAP']['CAMERA_HEIGHT'],
+                height_filter_range=(config['OCCUPANCY_MAP']['MIN_H'], config['OCCUPANCY_MAP']['MAX_H'])
             )
             print("成功同步occupancy map坐标系到topdown view")
+        else:
+            raise RuntimeError("无法获取topdown地图元数据，无法初始化occupancy map")
