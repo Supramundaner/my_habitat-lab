@@ -3,22 +3,42 @@
 # LICENSE file in the root directory of this source tree.
 
 import numpy as np
+import torch
 import cv2
 from typing import Tuple, Optional, Dict, Any
 
 import magnum as mn
 from PIL import Image
 
+from .utils import get_device, get_dtype, to_torch, to_numpy, use_mixed_precision
+
 class OccupancyMapBuilder:
     """
     根据智能体的深度感知和位姿，实时构建和可视化鸟瞰占用地图。
-    该类的实现参考了 UniGoal 项目中的方法。
+    该类的实现参考了 UniGoal 项目中的方法，支持GPU加速计算。
     """
-    def __init__(self):
+    def __init__(self, use_gpu: bool = True, config: Dict[str, Any] = None):
         """
         初始化地图构建器。
         注意：初始化后必须调用set_global_reference来设置坐标系。
+        
+        Args:
+            use_gpu: 是否使用GPU加速计算
+            config: 配置字典，用于GPU内存管理
         """
+        self.use_gpu = use_gpu and torch.cuda.is_available()
+        self.device = get_device() if self.use_gpu else torch.device('cpu')
+        self.dtype = torch.float32  # 为了内存效率，强制使用float32
+        
+        # GPU内存管理参数
+        if config and 'gpu' in config:
+            gpu_config = config['gpu']
+            self.memory_efficient = gpu_config.get('memory_efficient', True)
+            self.max_chunk_size = gpu_config.get('max_chunk_size', 50000)
+        else:
+            self.memory_efficient = True
+            self.max_chunk_size = 50000
+        
         self.camera_height = None
         self.height_filter_range = None
         
@@ -33,6 +53,14 @@ class OccupancyMapBuilder:
         self.topdown_map_bounds = None
         self.topdown_spacing = None
         self.topdown_map_size = None
+        
+        # GPU缓存张量，避免重复分配内存
+        self._camera_intrinsics = None
+        self._camera_intrinsics_inv = None
+        
+        print(f"OccupancyMapBuilder初始化: {'GPU' if self.use_gpu else 'CPU'}加速")
+        if self.use_gpu:
+            print(f"内存效率模式: {self.memory_efficient}, 最大块大小: {self.max_chunk_size}")
 
     def set_global_reference(self, scene_center: np.ndarray, topdown_map_bounds: Dict[str, float], 
                            topdown_spacing: float, topdown_map_size: Tuple[int, int],
@@ -218,7 +246,130 @@ class OccupancyMapBuilder:
 
 
     def _depth_to_point_cloud(self, depth: np.ndarray, hfov: float) -> np.ndarray:
-        """从深度图计算相机坐标系下的点云。"""
+        """从深度图计算相机坐标系下的点云，使用GPU加速。"""
+        if self.use_gpu and self.memory_efficient and depth.size > 10000:  # 只有足够大的深度图才使用GPU
+            return self._depth_to_point_cloud_gpu(depth, hfov)
+        else:
+            return self._depth_to_point_cloud_cpu(depth, hfov)
+    
+    def _depth_to_point_cloud_gpu(self, depth: np.ndarray, hfov: float) -> np.ndarray:
+        """GPU加速版本的深度图到点云转换"""
+        depth = self._preprocess_depth_data(depth)
+        h, w = depth.shape
+        hfov_rad = np.deg2rad(hfov)
+        
+        # 为大深度图使用分块处理，避免GPU内存不足
+        max_pixels_per_chunk = self.max_chunk_size if self.memory_efficient else 200000
+        
+        if h * w > max_pixels_per_chunk:
+            return self._depth_to_point_cloud_chunked_gpu(depth, hfov, max_pixels_per_chunk)
+        
+        # 转换为torch张量（使用float32以节省内存）
+        depth_tensor = torch.from_numpy(depth).to(device=self.device, dtype=torch.float32)
+        
+        # 获取或计算相机内参矩阵
+        if self._camera_intrinsics is None or self._camera_intrinsics.shape != (3, 3):
+            K = get_camera_matrix(w, h, hfov_rad)
+            self._camera_intrinsics = torch.from_numpy(K).to(device=self.device, dtype=torch.float32)
+            self._camera_intrinsics_inv = torch.inverse(self._camera_intrinsics)
+        
+        # 创建像素坐标网格（GPU上）
+        x_coords = torch.arange(w, device=self.device, dtype=torch.float32)
+        y_coords = torch.arange(h, device=self.device, dtype=torch.float32)
+        x, y = torch.meshgrid(x_coords, y_coords, indexing='xy')
+        ones = torch.ones_like(x)
+        
+        # 堆叠为齐次坐标 (H*W, 3)
+        pixel_coords = torch.stack((x, y, ones), dim=2).reshape(-1, 3)
+        
+        # 滤除无效深度值
+        depth_flat = depth_tensor.flatten()
+        valid_depth_mask = (depth_flat > 0.01) & (depth_flat < 10.0)
+        
+        if not valid_depth_mask.any():
+            return np.array([]).reshape(0, 3)
+        
+        # 计算相机坐标
+        valid_pixels = pixel_coords[valid_depth_mask]  # (N, 3)
+        valid_depths = depth_flat[valid_depth_mask]    # (N,)
+        
+        # 矩阵乘法: K^(-1) * pixels^T
+        camera_coords = torch.matmul(self._camera_intrinsics_inv, valid_pixels.T)  # (3, N)
+        camera_coords = camera_coords * valid_depths.unsqueeze(0)  # 广播乘法
+        
+        # 转换为 (N, 3) 格式并返回numpy
+        return to_numpy(camera_coords.T)
+    
+    def _depth_to_point_cloud_chunked_gpu(self, depth: np.ndarray, hfov: float, max_pixels_per_chunk: int) -> np.ndarray:
+        """分块处理大深度图的GPU版本"""
+        h, w = depth.shape
+        hfov_rad = np.deg2rad(hfov)
+        
+        # 获取或计算相机内参矩阵
+        if self._camera_intrinsics is None:
+            K = get_camera_matrix(w, h, hfov_rad)
+            self._camera_intrinsics = torch.from_numpy(K).to(device=self.device, dtype=torch.float32)
+            self._camera_intrinsics_inv = torch.inverse(self._camera_intrinsics)
+        
+        # 将深度图分成块
+        total_pixels = h * w
+        num_chunks = (total_pixels + max_pixels_per_chunk - 1) // max_pixels_per_chunk
+        
+        results = []
+        
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * max_pixels_per_chunk
+            end_idx = min(start_idx + max_pixels_per_chunk, total_pixels)
+            
+            # 计算当前块的行列范围
+            start_row = start_idx // w
+            end_row = (end_idx - 1) // w + 1
+            
+            if start_row >= h:
+                break
+                
+            # 提取当前块
+            chunk_depth = depth[start_row:end_row, :]
+            chunk_h, chunk_w = chunk_depth.shape
+            
+            # 转换为torch张量
+            depth_tensor = torch.from_numpy(chunk_depth).to(device=self.device, dtype=torch.float32)
+            
+            # 创建块内像素坐标（调整偏移量）
+            x_coords = torch.arange(chunk_w, device=self.device, dtype=torch.float32)
+            y_coords = torch.arange(start_row, start_row + chunk_h, device=self.device, dtype=torch.float32)
+            x, y = torch.meshgrid(x_coords, y_coords, indexing='xy')
+            ones = torch.ones_like(x)
+            
+            pixel_coords = torch.stack((x, y, ones), dim=2).reshape(-1, 3)
+            
+            # 滤除无效深度值
+            depth_flat = depth_tensor.flatten()
+            valid_depth_mask = (depth_flat > 0.01) & (depth_flat < 10.0)
+            
+            if valid_depth_mask.any():
+                valid_pixels = pixel_coords[valid_depth_mask]
+                valid_depths = depth_flat[valid_depth_mask]
+                
+                # 计算相机坐标
+                camera_coords = torch.matmul(self._camera_intrinsics_inv, valid_pixels.T)
+                camera_coords = camera_coords * valid_depths.unsqueeze(0)
+                
+                # 添加到结果列表
+                results.append(to_numpy(camera_coords.T))
+            
+            # 清理中间张量以释放GPU内存
+            del depth_tensor, pixel_coords, depth_flat
+            torch.cuda.empty_cache()
+        
+        # 合并所有块的结果
+        if results:
+            return np.vstack(results)
+        else:
+            return np.array([]).reshape(0, 3)
+    
+    def _depth_to_point_cloud_cpu(self, depth: np.ndarray, hfov: float) -> np.ndarray:
+        """CPU版本的深度图到点云转换（保持原有逻辑）"""
         depth = self._preprocess_depth_data(depth)
         h, w = depth.shape
         hfov_rad = np.deg2rad(hfov)
@@ -244,7 +395,54 @@ class OccupancyMapBuilder:
         return camera_coords.T
 
     def _transform_points_to_world(self, points: np.ndarray, agent_pos: np.ndarray, agent_rot: np.ndarray) -> np.ndarray:
-        """将点云从相机坐标系转换到世界坐标系。"""
+        """将点云从相机坐标系转换到世界坐标系，使用GPU加速。"""
+        if self.use_gpu and len(points) > 100:  # 只有点云足够大才使用GPU
+            return self._transform_points_to_world_gpu(points, agent_pos, agent_rot)
+        else:
+            return self._transform_points_to_world_cpu(points, agent_pos, agent_rot)
+    
+    def _transform_points_to_world_gpu(self, points: np.ndarray, agent_pos: np.ndarray, agent_rot: np.ndarray) -> np.ndarray:
+        """GPU加速版本的坐标变换"""
+        if len(points) == 0:
+            return points
+        
+        # 转换为torch张量
+        points_tensor = to_torch(points)
+        agent_pos_tensor = to_torch(agent_pos)
+        agent_rot_tensor = to_torch(agent_rot)
+        
+        # 相机到智能体坐标系的固定旋转矩阵
+        cam_to_agent_rot = torch.tensor([
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 0, -1]
+        ], device=self.device, dtype=self.dtype)
+        
+        # 批量矩阵乘法
+        points_agent_frame = torch.matmul(points_tensor, cam_to_agent_rot.T)
+        
+        # 四元数到旋转矩阵的转换（GPU上）
+        x, y, z, w = agent_rot_tensor[0], agent_rot_tensor[1], agent_rot_tensor[2], agent_rot_tensor[3]
+        
+        # 手动计算旋转矩阵（向量化）
+        rot_mat = torch.zeros(3, 3, device=self.device, dtype=self.dtype)
+        rot_mat[0, 0] = 1 - 2*(y*y + z*z)
+        rot_mat[0, 1] = 2*(x*y - z*w)
+        rot_mat[0, 2] = 2*(x*z + y*w)
+        rot_mat[1, 0] = 2*(x*y + z*w)
+        rot_mat[1, 1] = 1 - 2*(x*x + z*z)
+        rot_mat[1, 2] = 2*(y*z - x*w)
+        rot_mat[2, 0] = 2*(x*z - y*w)
+        rot_mat[2, 1] = 2*(y*z + x*w)
+        rot_mat[2, 2] = 1 - 2*(x*x + y*y)
+        
+        # 批量旋转和平移
+        world_points = torch.matmul(points_agent_frame, rot_mat.T) + agent_pos_tensor.unsqueeze(0)
+        
+        return to_numpy(world_points)
+    
+    def _transform_points_to_world_cpu(self, points: np.ndarray, agent_pos: np.ndarray, agent_rot: np.ndarray) -> np.ndarray:
+        """CPU版本的坐标变换（保持原有逻辑）"""
         # Habitat-sim 相机坐标系: +Y向上, +X向右, -Z向前
         # 需要旋转以匹配世界坐标系: +Y向上, +X向右, +Z向后
         # 这个旋转是固定的，绕X轴旋转180度
@@ -387,7 +585,34 @@ class OccupancyMapBuilder:
             temp_map[blocked_y, blocked_x] = 0
 
     def _world_to_map_coords(self, world_coords: np.ndarray) -> np.ndarray:
-        """将世界坐标转换为地图栅格坐标。"""
+        """将世界坐标转换为地图栅格坐标，使用GPU加速。"""
+        if self.use_gpu and len(world_coords) > 1000:  # 大量点云时使用GPU
+            return self._world_to_map_coords_gpu(world_coords)
+        else:
+            return self._world_to_map_coords_cpu(world_coords)
+    
+    def _world_to_map_coords_gpu(self, world_coords: np.ndarray) -> np.ndarray:
+        """GPU加速版本的世界坐标到地图坐标转换"""
+        world_coords_tensor = to_torch(world_coords)
+        
+        # 获取topdown地图的世界坐标边界
+        tl_x = self.topdown_map_bounds['top_left'][0]
+        tl_z = self.topdown_map_bounds['top_left'][1]
+        
+        # 向量化坐标转换
+        map_x = (world_coords_tensor[:, 0] - tl_x) / self.map_resolution
+        map_y = (world_coords_tensor[:, 2] - tl_z) / self.map_resolution  # Z对应地图Y
+        
+        # 裁剪到有效范围
+        map_x = torch.clamp(map_x, 0, self.map_shape[1] - 1)
+        map_y = torch.clamp(map_y, 0, self.map_shape[0] - 1)
+        
+        # 转换为整数并返回numpy
+        result = torch.stack([map_x, map_y], dim=1).int()
+        return to_numpy(result)
+    
+    def _world_to_map_coords_cpu(self, world_coords: np.ndarray) -> np.ndarray:
+        """CPU版本的世界坐标到地图坐标转换（保持原有逻辑）"""
         # 使用与topdown view完全相同的坐标转换
         # 基于topdown.py中的calculate_metadata和world_to_pixel逻辑
         

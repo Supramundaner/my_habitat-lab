@@ -13,7 +13,10 @@ from .utils import (
     slerp, 
     quaternion_to_direction_yaw, 
     quaternion_from_euler,
-    euler_from_quaternion
+    euler_from_quaternion,
+    get_device,
+    use_mixed_precision,
+    to_numpy
 )
 
 
@@ -39,10 +42,14 @@ class ActionProcessor:
         self.fps = config['video']['fps']
         self.time_step = 1.0 / self.fps  # 每帧时间间隔
         
+        # GPU设置
+        self.use_gpu = config.get('gpu', {}).get('enabled', False)
+        
         print(f"动作处理器初始化完成")
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
         print(f"视频帧率: {self.fps} fps")
+        print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
     
     def execute_sequence(self, action_sequence: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -191,7 +198,13 @@ class ActionProcessor:
             
             # a. 计算并执行朝向下一个航点的旋转
             current_rot = self.simulator.get_robot_state()['rotation']
-            target_rotation = quaternion_to_direction_yaw(segment_start_pos, segment_end_pos)
+            target_rotation = quaternion_to_direction_yaw(
+                segment_start_pos, segment_end_pos, use_gpu=self.use_gpu
+            )
+            
+            # 确保target_rotation是numpy数组
+            if hasattr(target_rotation, 'cpu'):
+                target_rotation = to_numpy(target_rotation)
             self._animate_rotation(current_rot, target_rotation)
             
             # b. 执行到下一个航点的直线移动
@@ -249,7 +262,11 @@ class ActionProcessor:
         new_yaw = yaw + angle_degrees
         
         # 创建新的四元数
-        target_rot = quaternion_from_euler(roll, pitch, new_yaw)
+        target_rot = quaternion_from_euler(roll, pitch, new_yaw, use_gpu=self.use_gpu)
+        
+        # 确保target_rot是numpy数组
+        if hasattr(target_rot, 'cpu'):
+            target_rot = to_numpy(target_rot)
         
         # 执行旋转动画
         self._animate_rotation(current_rot, target_rot)
@@ -310,6 +327,10 @@ class ActionProcessor:
             
             # 使用球面线性插值
             interpolated_rot = slerp(start_rot, end_rot, t)
+            
+            # 确保返回numpy数组（如果是torch张量则转换）
+            if hasattr(interpolated_rot, 'cpu'):
+                interpolated_rot = to_numpy(interpolated_rot)
             
             # 更新机器人姿态
             self.simulator.set_robot_pose(current_pos, interpolated_rot)
