@@ -386,55 +386,6 @@ class OccupancyMapBuilder:
             blocked_x = ray_x[points_to_clear]
             temp_map[blocked_y, blocked_x] = 0
 
-    def _vectorized_remove_blocked_rays_optimized(self, temp_map: np.ndarray, agent_pt: tuple):
-        """进一步优化的向量化版本 - 使用广播操作"""
-        agent_x, agent_y = agent_pt
-        
-        # 获取射线点和障碍物点
-        ray_coords = np.where(temp_map == 255)
-        obs_coords = np.where(self.grid_map == 0)
-        
-        if len(ray_coords[0]) == 0 or len(obs_coords[0]) == 0:
-            return
-        
-        ray_y, ray_x = ray_coords[0], ray_coords[1]
-        obs_y, obs_x = obs_coords[0], obs_coords[1]
-        
-        # 计算射线点的极坐标
-        ray_dx = ray_x - agent_x
-        ray_dy = ray_y - agent_y
-        ray_distances = np.sqrt(ray_dx*ray_dx + ray_dy*ray_dy)
-        ray_angles = np.arctan2(ray_dy, ray_dx)
-        
-        # 计算障碍物点的极坐标
-        obs_dx = obs_x - agent_x
-        obs_dy = obs_y - agent_y
-        obs_distances = np.sqrt(obs_dx*obs_dx + obs_dy*obs_dy)
-        obs_angles = np.arctan2(obs_dy, obs_dx)
-        
-        # 使用广播计算角度差异矩阵
-        angle_diff = np.abs(ray_angles[:, None] - obs_angles[None, :])
-        angle_diff = np.minimum(angle_diff, 2*np.pi - angle_diff)  # 处理角度环绕
-        
-        # 找到每个射线点最近的同方向障碍物
-        angle_threshold = np.radians(5)  # 5度阈值
-        same_direction = angle_diff < angle_threshold
-        
-        # 对每个射线点，找到同方向的最近障碍物
-        points_to_clear = np.zeros(len(ray_x), dtype=bool)
-        
-        for i in range(len(ray_x)):
-            same_dir_obstacles = same_direction[i, :]
-            if np.any(same_dir_obstacles):
-                min_obs_distance = np.min(obs_distances[same_dir_obstacles])
-                if ray_distances[i] > min_obs_distance:
-                    points_to_clear[i] = True
-        
-        # 批量清除
-        if np.any(points_to_clear):
-            temp_map[ray_y[points_to_clear], ray_x[points_to_clear]] = 0
-
-
     def _world_to_map_coords(self, world_coords: np.ndarray) -> np.ndarray:
         """将世界坐标转换为地图栅格坐标。"""
         # 使用与topdown view完全相同的坐标转换
