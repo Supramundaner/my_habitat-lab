@@ -20,7 +20,9 @@ from src.utils import (
     load_json_config, 
     write_json_report, 
     generate_output_paths,
-    validate_config
+    validate_config,
+    initialize_gpu,
+    clear_gpu_cache
 )
 
 
@@ -81,6 +83,10 @@ def main():
         print("1. 加载配置文件...")
         config = load_json_config(args.config)
         
+        # 初始化GPU设置
+        print("1.5. 初始化GPU设置...")
+        initialize_gpu(config)
+        
         # 验证配置文件
         if not validate_config(config):
             print("配置文件验证失败")
@@ -113,7 +119,8 @@ def main():
         processor = ActionProcessor(simulator, composer, config)
 
         print("7.5. 初始化占用地图构建器...")
-        map_builder = OccupancyMapBuilder()
+        use_gpu = config.get('gpu', {}).get('enabled', False)
+        map_builder = OccupancyMapBuilder(use_gpu=use_gpu, config=config)
         composer.set_map_builder(map_builder, config)
         
         # 8. 添加初始帧
@@ -195,6 +202,8 @@ def main():
             composer.save_and_close()
         if simulator:
             simulator.close()
+        # 清理GPU缓存
+        clear_gpu_cache()
         print("清理完成")
 
 
