@@ -244,8 +244,7 @@ def validate_config(config: Dict[str, Any]) -> bool:
     required_keys = [
         'video.fps', 'video.resolution.width', 'video.resolution.height',
         'agent.linear_speed', 'agent.angular_speed',
-        'scene.scene_file', 'scene.robot_urdf',
-        'simulation.gpu_device_id'
+        'scene.scene_file', 'scene.robot_urdf'
     ]
     
     def check_nested_key(data: Dict[str, Any], key_path: str) -> bool:

@@ -121,7 +121,7 @@ pip install opencv-python pillow numpy magnum-python
 ### 基本用法
 
 ```bash
-cd habitat_video_project
+cd habitat_video_project 
 python main.py --config configs/default_config.json --actions configs/example_actions.json
 ```
 

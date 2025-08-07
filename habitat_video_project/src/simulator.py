@@ -49,7 +49,6 @@ class HabitatSimulator:
         backend_cfg = habitat_sim.SimulatorConfiguration()
         backend_cfg.scene_id = self.config['scene']['scene_file']
         backend_cfg.enable_physics = self.config['simulation']['enable_physics']
-        backend_cfg.gpu_device_id = self.config['simulation']['gpu_device_id']
         backend_cfg.random_seed = 1
         
         # FPV传感器配置
