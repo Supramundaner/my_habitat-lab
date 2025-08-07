@@ -5,7 +5,10 @@
 import numpy as np
 import torch
 import cv2
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
+from scipy import ndimage
+from numba import jit, prange
+import torch.nn.functional as F
 
 # 假设这些工具函数在其他地方定义
 from .utils import get_device, to_torch, to_numpy
@@ -31,7 +34,8 @@ class OccupancyMapBuilder:
         # 从配置中读取GPU内存管理参数
         gpu_config = config.get('gpu', {}) if config else {}
         self.memory_efficient = gpu_config.get('memory_efficient', True)
-        self.max_chunk_size = gpu_config.get('max_chunk_size', 50000)
+        self.max_chunk_size = gpu_config.get('max_chunk_size', 100000)  # 增大块大小
+        self.enable_numba = config.get('enable_numba', True) if config else True  # 启用Numba加速
 
         # 缓存的相机和坐标系参数
         self.camera_height: Optional[float] = None
@@ -57,11 +61,23 @@ class OccupancyMapBuilder:
 
         # 缓存的相机内参，避免重复计算
         self._camera_intrinsics_inv: Optional[torch.Tensor] = None
+        
+        # 预分配GPU内存缓存，避免频繁分配
+        if self.use_gpu:
+            self._gpu_cache = {
+                'pixel_coords': None,
+                'depth_buffer': None,
+                'point_buffer': None,
+                'transform_buffer': None
+            }
+            # 预热GPU
+            torch.cuda.empty_cache()
 
         print(f"OccupancyMapBuilder已初始化，使用 {'GPU' if self.use_gpu else 'CPU'} 进行计算。")
         if self.use_gpu:
             print(f"  - 内存效率模式: {'启用' if self.memory_efficient else '禁用'}")
             print(f"  - 最大数据块大小: {self.max_chunk_size}")
+            print(f"  - Numba加速: {'启用' if self.enable_numba else '禁用'}")
 
     def set_global_reference(self, scene_center: np.ndarray, topdown_map_bounds: Dict[str, float],
                            topdown_spacing: float, topdown_map_size: Tuple[int, int],
@@ -142,144 +158,198 @@ class OccupancyMapBuilder:
 
     def _preprocess_depth_data(self, depth: np.ndarray) -> np.ndarray:
         """
-        预处理深度数据，过滤由透明或反光表面引起的噪声。
+        优化的深度数据预处理，支持多种加速方式。
         """
         depth_float = depth.astype(np.float32)
-        # 使用中值滤波去除椒盐噪声
-        depth_filtered = cv2.medianBlur(depth_float, 5)
-
-        # 计算深度梯度以检测异常的深度跳变
-        grad_x = cv2.Sobel(depth_filtered, cv2.CV_32F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(depth_filtered, cv2.CV_32F, 0, 1, ksize=3)
-        gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-
-        # 标记梯度过大的区域为异常（可能是伪影）
-        anomaly_mask = gradient_magnitude > 0.5  # 梯度阈值
-        kernel = np.ones((5, 5), np.uint8)
-        # 扩大异常区域以完全覆盖噪声
-        anomaly_mask = cv2.dilate(anomaly_mask.astype(np.uint8), kernel, iterations=1) > 0
-
-        # 将异常区域的深度值置零，使其在后续处理中被忽略
-        depth_filtered[anomaly_mask] = 0
-        return depth_filtered
+        
+        # 如果启用Numba且数据量较大，使用JIT编译的快速滤波
+        if self.enable_numba and depth.size > 100000:
+            try:
+                return numba_fast_depth_filter(depth_float, threshold=0.3)
+            except Exception as e:
+                print(f"Numba深度滤波失败，回退到标准实现: {e}")
+        
+        # GPU路径：使用PyTorch实现的快速滤波
+        if self.use_gpu and depth.size > 50000:
+            depth_tensor = torch.from_numpy(depth_float).to(self.device)
+            
+            # 使用PyTorch的卷积实现快速中值滤波替代
+            kernel = torch.ones((1, 1, 3, 3), device=self.device, dtype=torch.float32) / 9.0
+            depth_4d = depth_tensor.unsqueeze(0).unsqueeze(0)
+            depth_filtered = F.conv2d(depth_4d, kernel, padding=1).squeeze()
+            
+            # 快速异常检测：使用梯度幅度（修复张量尺寸不匹配问题）
+            grad_kernel_x = torch.tensor([[[[-1, 0, 1]]]], device=self.device, dtype=torch.float32)
+            grad_kernel_y = torch.tensor([[[[-1], [0], [1]]]], device=self.device, dtype=torch.float32)
+            
+            grad_x = F.conv2d(depth_4d, grad_kernel_x, padding=1).squeeze()
+            grad_y = F.conv2d(depth_4d, grad_kernel_y, padding=1).squeeze()
+            
+            # 确保两个梯度张量尺寸一致
+            min_h = min(grad_x.shape[0], grad_y.shape[0], depth_filtered.shape[0])
+            min_w = min(grad_x.shape[1], grad_y.shape[1], depth_filtered.shape[1])
+            
+            grad_x = grad_x[:min_h, :min_w]
+            grad_y = grad_y[:min_h, :min_w]
+            depth_filtered = depth_filtered[:min_h, :min_w]
+            
+            gradient_magnitude = torch.sqrt(grad_x**2 + grad_y**2)
+            
+            # 标记异常区域
+            anomaly_mask = gradient_magnitude > 0.3  # 降低阈值减少过度滤波
+            depth_filtered[anomaly_mask] = 0
+            
+            return depth_filtered.cpu().numpy()
+        else:
+            # CPU路径：快速简化处理
+            # 使用scipy的快速滤波替代opencv
+            depth_filtered = ndimage.uniform_filter(depth_float, size=3)
+            
+            # 简化的异常检测
+            grad_x = ndimage.sobel(depth_filtered, axis=1)
+            grad_y = ndimage.sobel(depth_filtered, axis=0)
+            gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+            
+            # 简化的异常处理
+            anomaly_mask = gradient_magnitude > 0.3
+            depth_filtered[anomaly_mask] = 0
+            
+            return depth_filtered
 
     def _depth_to_point_cloud(self, depth: np.ndarray, hfov: float) -> np.ndarray:
         """
-        将深度图转换为相机坐标系下的点云。
-        自动选择CPU或GPU，并为大型图像启用分块处理以节省GPU内存。
+        高性能深度图转点云，完全向量化实现。
         """
         depth = self._preprocess_depth_data(depth)
         h, w = depth.shape
         hfov_rad = np.deg2rad(hfov)
 
-        # --- GPU 加速路径 ---
-        if self.use_gpu and depth.size > 10000:
+        # --- 高性能GPU路径 ---
+        if self.use_gpu and depth.size > 5000:  # 降低GPU使用阈值
             depth_tensor = to_torch(depth, device=self.device, dtype=torch.float32)
 
             # 缓存或重新计算逆相机内参矩阵
-            if self._camera_intrinsics_inv is None:
+            if self._camera_intrinsics_inv is None or self._camera_intrinsics_inv.shape[-1] != w:
                 K = get_camera_matrix(w, h, hfov_rad)
                 K_inv = np.linalg.inv(K)
                 self._camera_intrinsics_inv = to_torch(K_inv, device=self.device, dtype=self.dtype)
 
-            # 如果图像过大，则分块处理以避免GPU内存溢出
-            use_chunking = self.memory_efficient and h * w > self.max_chunk_size
-            if use_chunking:
-                num_chunks = (h * w + self.max_chunk_size - 1) // self.max_chunk_size
-                ys, xs = torch.meshgrid(
+            # 重用或创建像素坐标缓存
+            cache_key = f"{h}x{w}"
+            if (self._gpu_cache.get('pixel_coords') is None or 
+                self._gpu_cache['pixel_coords'].shape[0] != h * w):
+                
+                # 预计算像素坐标网格，避免每次重新计算
+                y_coords, x_coords = torch.meshgrid(
                     torch.arange(h, device=self.device, dtype=self.dtype),
                     torch.arange(w, device=self.device, dtype=self.dtype),
                     indexing='ij'
                 )
-                pixel_coords = torch.stack([xs, ys, torch.ones_like(xs)], dim=-1).view(-1, 3)
-                chunks = []
-                for i in range(num_chunks):
-                    start = i * self.max_chunk_size
-                    end = start + self.max_chunk_size
-                    chunk_pixels = pixel_coords[start:end]
-                    chunk_depths_flat = depth_tensor.view(-1)[start:end]
-                    
-                    valid_mask = (chunk_depths_flat > 0.01) & (chunk_depths_flat < 10.0)
-                    if not valid_mask.any(): continue
+                pixel_coords = torch.stack([
+                    x_coords.flatten(), 
+                    y_coords.flatten(), 
+                    torch.ones(h * w, device=self.device, dtype=self.dtype)
+                ], dim=1)
+                self._gpu_cache['pixel_coords'] = pixel_coords
+            
+            pixel_coords = self._gpu_cache['pixel_coords']
+            depth_flat = depth_tensor.flatten()
 
-                    cam_coords = self._camera_intrinsics_inv @ chunk_pixels[valid_mask].T
-                    cam_coords *= chunk_depths_flat[valid_mask]
-                    chunks.append(cam_coords.T)
-                
-                return to_numpy(torch.cat(chunks, dim=0)) if chunks else np.empty((0, 3))
-
-            # --- 非分块GPU处理 ---
-            ys, xs = torch.meshgrid(
-                torch.arange(h, device=self.device, dtype=self.dtype),
-                torch.arange(w, device=self.device, dtype=self.dtype),
-                indexing='ij'
-            )
-            pixel_coords = torch.stack([xs, ys, torch.ones_like(xs)], dim=-1).view(-1, 3)
-            depth_flat = depth_tensor.view(-1)
-
+            # 向量化有效性检查
             valid_mask = (depth_flat > 0.01) & (depth_flat < 10.0)
-            if not valid_mask.any(): return np.empty((0, 3))
+            valid_indices = torch.nonzero(valid_mask, as_tuple=True)[0]
+            
+            if valid_indices.numel() == 0:
+                return np.empty((0, 3))
 
-            cam_coords = self._camera_intrinsics_inv @ pixel_coords[valid_mask].T
-            cam_coords *= depth_flat[valid_mask]
+            # 批量处理：直接使用向量化矩阵乘法
+            valid_pixels = pixel_coords[valid_indices]
+            valid_depths = depth_flat[valid_indices]
+            
+            # 单次矩阵乘法完成所有点的投影变换
+            cam_coords = (self._camera_intrinsics_inv @ valid_pixels.T) * valid_depths.unsqueeze(0)
+            
             return to_numpy(cam_coords.T)
 
-        # --- CPU 路径 ---
+        # --- 优化的CPU路径 ---
         else:
+            # 预计算网格坐标，避免重复计算
             K = get_camera_matrix(w, h, hfov_rad)
             K_inv = np.linalg.inv(K)
-            y, x = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-            pixel_coords = np.stack([x, y, np.ones_like(x)], axis=-1).reshape(-1, 3)
-            depth_flat = depth.flatten()
-
+            
+            # 向量化创建像素坐标
+            y_indices, x_indices = np.mgrid[0:h, 0:w]
+            pixel_coords = np.stack([
+                x_indices.flatten(), 
+                y_indices.flatten(), 
+                np.ones(h * w)
+            ], axis=1).astype(np.float32)
+            
+            depth_flat = depth.flatten().astype(np.float32)
+            
+            # 向量化有效性检查
             valid_mask = (depth_flat > 0.01) & (depth_flat < 10.0)
-            if not valid_mask.any(): return np.empty((0, 3))
+            if not np.any(valid_mask):
+                return np.empty((0, 3))
 
-            cam_coords = K_inv @ pixel_coords[valid_mask].T
-            cam_coords *= depth_flat[valid_mask]
+            valid_pixels = pixel_coords[valid_mask]
+            valid_depths = depth_flat[valid_mask]
+            
+            # 单次矩阵乘法完成投影变换
+            cam_coords = (K_inv @ valid_pixels.T) * valid_depths
             return cam_coords.T
 
     def _transform_points_to_world(self, points: np.ndarray, agent_pos: np.ndarray, agent_rot_quat: np.ndarray) -> np.ndarray:
         """
-        将点云从相机坐标系转换到世界坐标系。自动选择CPU或GPU。
+        高性能点云坐标系转换，完全向量化实现。
         """
         if points.shape[0] == 0:
             return points
 
-        # --- GPU 加速路径 ---
-        if self.use_gpu and points.shape[0] > 100:
+        # 预计算四元数到旋转矩阵的转换，避免重复计算
+        x, y, z, w = agent_rot_quat
+        
+        # --- 优化的GPU加速路径 ---
+        if self.use_gpu and points.shape[0] > 50:  # 降低GPU使用阈值
             points_tensor = to_torch(points, device=self.device, dtype=self.dtype)
             agent_pos_tensor = to_torch(agent_pos, device=self.device, dtype=self.dtype)
             
-            # 1. 从相机坐标系转换到智能体坐标系
+            # 1. 相机到智能体坐标系（预计算的旋转矩阵）
             points_agent_frame = points_tensor @ self._cam_to_agent_rot_torch.T
             
-            # 2. 从智能体坐标系转换到世界坐标系
-            # 四元数 -> 旋转矩阵 (PyTorch实现)
-            x, y, z, w = agent_rot_quat
+            # 2. 四元数到旋转矩阵的向量化计算
+            # 避免逐个元素计算，使用向量化操作
+            xx, yy, zz = x*x, y*y, z*z
+            xy, xz, yz = x*y, x*z, y*z
+            xw, yw, zw = x*w, y*w, z*w
+            
             rot_mat = torch.tensor([
-                [1 - 2*(y*y + z*z), 2*(x*y - z*w), 2*(x*z + y*w)],
-                [2*(x*y + z*w), 1 - 2*(x*x + z*z), 2*(y*z - x*w)],
-                [2*(x*z - y*w), 2*(y*z + x*w), 1 - 2*(x*x + y*y)]
+                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
+                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
+                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
             ], device=self.device, dtype=self.dtype)
             
+            # 3. 批量变换：旋转 + 平移
             world_points = points_agent_frame @ rot_mat.T + agent_pos_tensor
             return to_numpy(world_points)
 
-        # --- CPU 路径 ---
+        # --- 优化的CPU路径 ---
         else:
-            # 1. 从相机坐标系转换到智能体坐标系
+            # 1. 相机到智能体坐标系
             points_agent_frame = points @ self._cam_to_agent_rot_np.T
             
-            # 2. 从智能体坐标系转换到世界坐标系
-            # 四元数 -> 旋转矩阵 (Numpy实现)
-            x, y, z, w = agent_rot_quat
+            # 2. 四元数到旋转矩阵（向量化计算）
+            xx, yy, zz = x*x, y*y, z*z
+            xy, xz, yz = x*y, x*z, y*z
+            xw, yw, zw = x*w, y*w, z*w
+            
             rot_mat = np.array([
-                [1 - 2*(y*y + z*z), 2*(x*y - z*w), 2*(x*z + y*w)],
-                [2*(x*y + z*w), 1 - 2*(x*x + z*z), 2*(y*z - x*w)],
-                [2*(x*z - y*w), 2*(y*z + x*w), 1 - 2*(x*x + y*y)]
+                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
+                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
+                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
             ], dtype=np.float32)
 
+            # 3. 批量变换
             world_points = points_agent_frame @ rot_mat.T + agent_pos
             return world_points
 
@@ -317,42 +387,207 @@ class OccupancyMapBuilder:
 
     def _project_to_map(self, points_world: np.ndarray, agent_pos: np.ndarray):
         """
-        将世界坐标系中的点云投影到2D占用地图上。
-        采用三步法更新：1. 标记障碍物；2. 标记空闲区域；3. 移除被遮挡的射线。
+        高性能地图投影，包含射线遮挡检测。
         """
         if points_world.shape[0] == 0:
             return
 
         # 更新智能体在地图上的坐标
         agent_map_coords = self._world_to_map_coords(agent_pos.reshape(1, 3))[0]
-        self.agent_map_coords = (agent_map_coords[0], agent_map_coords[1])
+        self.agent_map_coords = (int(agent_map_coords[0]), int(agent_map_coords[1]))
         
-        # 转换点云到地图坐标并过滤无效点
+        # 转换点云到地图坐标
         map_coords = self._world_to_map_coords(points_world)
         
-        # 1. 标记障碍物
+        # 1. 向量化标记障碍物
         min_h, max_h = self.height_filter_range
         obstacle_mask = (points_world[:, 1] >= min_h) & (points_world[:, 1] <= max_h)
-        obstacle_coords = map_coords[obstacle_mask]
-        if obstacle_coords.shape[0] > 0:
-            # 使用np.unique避免重复写入，提高效率
-            unique_obstacle_coords = np.unique(obstacle_coords, axis=0)
-            self.grid_map[unique_obstacle_coords[:, 1], unique_obstacle_coords[:, 0]] = 0 # 0: 占据
+        
+        if np.any(obstacle_mask):
+            obstacle_coords = map_coords[obstacle_mask]
+            # 使用advanced indexing批量更新
+            self.grid_map[obstacle_coords[:, 1], obstacle_coords[:, 0]] = 0
+        
+        # 2. 高性能射线绘制（包含遮挡检测）
+        if len(map_coords) > 0:
+            self._vectorized_ray_casting_with_occlusion(map_coords, self.agent_map_coords)
 
-        # 2. 标记空闲区域（使用Bresenham's line的思想，通过cv2.line实现）
-        temp_free_map = np.zeros_like(self.grid_map)
-        agent_pt = self.agent_map_coords
+    def _vectorized_ray_casting_with_occlusion(self, target_points: np.ndarray, agent_point: Tuple[int, int]):
+        """
+        高性能射线追踪实现，包含遮挡检测，支持Numba加速。
+        """
+        agent_x, agent_y = agent_point
         
-        # 批量绘制从智能体到所有可见点的射线
-        for x, y in map_coords:
-            cv2.line(temp_free_map, agent_pt, (x, y), 255, 1)
+        # 如果启用Numba且点数较多，使用JIT编译的函数
+        if self.enable_numba and len(target_points) > 100:
+            try:
+                # 使用Numba加速的射线追踪（包含遮挡检测）
+                grid_map_copy = self.grid_map.copy()  # Numba需要可写的数组
+                numba_ray_casting_with_occlusion(
+                    target_points.astype(np.int32), 
+                    np.int32(agent_x), 
+                    np.int32(agent_y), 
+                    (self.map_shape[0], self.map_shape[1]), 
+                    grid_map_copy
+                )
+                self.grid_map = grid_map_copy
+                return
+            except Exception as e:
+                print(f"Numba加速失败，回退到标准实现: {e}")
         
-        # 3. 移除穿越障碍物的射线部分，确保视线不穿墙
-        self._vectorized_remove_blocked_rays(temp_free_map, agent_pt)
+        # 标准的向量化实现（包含遮挡检测）
+        self._standard_ray_casting_with_occlusion(target_points, agent_point)
+
+    def _standard_ray_casting_with_occlusion(self, target_points: np.ndarray, agent_point: Tuple[int, int]):
+        """
+        标准的射线追踪实现，包含遮挡检测。
+        """
+        agent_x, agent_y = agent_point
         
-        # 4. 将未被遮挡且当前未知的区域更新为空闲
-        free_mask = (temp_free_map == 255) & (self.grid_map == 128)
-        self.grid_map[free_mask] = 255 # 255: 空闲
+        # 按距离排序目标点，优先处理近距离点
+        distances = np.sqrt((target_points[:, 0] - agent_x)**2 + (target_points[:, 1] - agent_y)**2)
+        sorted_indices = np.argsort(distances)
+        sorted_targets = target_points[sorted_indices]
+        sorted_distances = distances[sorted_indices]
+        
+        # 创建临时地图记录本次射线
+        temp_ray_map = np.zeros_like(self.grid_map, dtype=np.uint8)
+        
+        for i, (target_point, dist) in enumerate(zip(sorted_targets, sorted_distances)):
+            target_x, target_y = target_point
+            
+            if dist == 0:
+                continue
+                
+            # 使用Bresenham算法生成射线路径
+            ray_x, ray_y = self._bresenham_line(agent_x, agent_y, target_x, target_y)
+            
+            # 检查射线是否被遮挡
+            hit_obstacle = False
+            valid_ray_points = []
+            
+            for rx, ry in zip(ray_x, ray_y):
+                # 检查边界
+                if not (0 <= rx < self.map_shape[0] and 0 <= ry < self.map_shape[1]):
+                    break
+                    
+                # 如果遇到障碍物，停止射线
+                if self.grid_map[ry, rx] == 0:  # 障碍物
+                    hit_obstacle = True
+                    break
+                    
+                valid_ray_points.append((rx, ry))
+            
+            # 标记有效的射线路径为空闲（只有未被遮挡的部分）
+            if valid_ray_points:
+                for rx, ry in valid_ray_points:
+                    if self.grid_map[ry, rx] == 128:  # 只更新未知区域
+                        self.grid_map[ry, rx] = 255  # 空闲
+                        temp_ray_map[ry, rx] = 255
+
+    def _bresenham_line(self, x0: int, y0: int, x1: int, y1: int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Bresenham直线算法，生成从(x0,y0)到(x1,y1)的像素坐标。
+        """
+        points_x = []
+        points_y = []
+        
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        
+        x, y = x0, y0
+        
+        x_inc = 1 if x0 < x1 else -1
+        y_inc = 1 if y0 < y1 else -1
+        
+        error = dx - dy
+        
+        while True:
+            points_x.append(x)
+            points_y.append(y)
+            
+            if x == x1 and y == y1:
+                break
+                
+            e2 = 2 * error
+            
+            if e2 > -dy:
+                error -= dy
+                x += x_inc
+                
+            if e2 < dx:
+                error += dx
+                y += y_inc
+        
+        return np.array(points_x), np.array(points_y)
+
+    def _vectorized_ray_casting(self, target_points: np.ndarray, agent_point: Tuple[int, int]):
+        """
+        高性能射线追踪实现，支持Numba加速。
+        """
+        agent_x, agent_y = agent_point
+        
+        # 如果启用Numba且点数较多，使用JIT编译的函数
+        if self.enable_numba and len(target_points) > 100:
+            try:
+                # 使用Numba加速的射线追踪
+                grid_map_copy = self.grid_map.copy()  # Numba需要可写的数组
+                numba_vectorized_ray_casting(
+                    target_points.astype(np.int32), 
+                    np.int32(agent_x), 
+                    np.int32(agent_y), 
+                    (self.map_shape[0], self.map_shape[1]), 
+                    grid_map_copy
+                )
+                self.grid_map = grid_map_copy
+                return
+            except Exception as e:
+                print(f"Numba加速失败，回退到标准实现: {e}")
+        
+        # 标准的向量化实现
+        dx = target_points[:, 0] - agent_x
+        dy = target_points[:, 1] - agent_y
+        distances = np.sqrt(dx**2 + dy**2)
+        
+        # 过滤掉距离为0的点
+        valid_mask = distances > 0
+        if not np.any(valid_mask):
+            return
+            
+        dx = dx[valid_mask]
+        dy = dy[valid_mask]
+        distances = distances[valid_mask]
+        target_points = target_points[valid_mask]
+        
+        # 归一化方向向量
+        dx_norm = dx / distances
+        dy_norm = dy / distances
+        
+        # 向量化生成所有射线上的点
+        all_x_coords = []
+        all_y_coords = []
+        
+        for i, (dx_n, dy_n, dist) in enumerate(zip(dx_norm, dy_norm, distances)):
+            steps = np.arange(0, int(dist) + 1)
+            ray_x = agent_x + (steps * dx_n).astype(np.int32)
+            ray_y = agent_y + (steps * dy_n).astype(np.int32)
+            
+            # 确保坐标在地图范围内
+            valid_coords = ((ray_x >= 0) & (ray_x < self.map_shape[0]) & 
+                           (ray_y >= 0) & (ray_y < self.map_shape[1]))
+            
+            if np.any(valid_coords):
+                all_x_coords.append(ray_x[valid_coords])
+                all_y_coords.append(ray_y[valid_coords])
+        
+        if all_x_coords:
+            x_coords = np.concatenate(all_x_coords)
+            y_coords = np.concatenate(all_y_coords)
+            
+            # 批量更新空闲区域
+            free_mask = self.grid_map[y_coords, x_coords] == 128
+            if np.any(free_mask):
+                self.grid_map[y_coords[free_mask], x_coords[free_mask]] = 255
 
     def _vectorized_remove_blocked_rays(self, temp_map: np.ndarray, agent_pt: tuple):
         """
@@ -450,3 +685,113 @@ def get_camera_matrix(width: int, height: int, hfov_rad: float) -> np.ndarray:
     cx = width / 2.0
     cy = height / 2.0
     return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float32)
+
+
+@jit(nopython=True, parallel=True)
+def numba_ray_casting_with_occlusion(target_points, agent_x, agent_y, map_shape, grid_map):
+    """
+    使用Numba JIT编译的高性能射线追踪，包含遮挡检测。
+    """
+    map_width, map_height = map_shape
+    
+    for i in prange(len(target_points)):
+        target_x, target_y = target_points[i]
+        
+        # Bresenham直线算法实现
+        dx = abs(target_x - agent_x)
+        dy = abs(target_y - agent_y)
+        
+        x, y = agent_x, agent_y
+        x_inc = 1 if agent_x < target_x else -1
+        y_inc = 1 if agent_y < target_y else -1
+        
+        error = dx - dy
+        hit_obstacle = False
+        
+        while True:
+            # 检查边界
+            if not (0 <= x < map_width and 0 <= y < map_height):
+                break
+                
+            # 检查是否遇到障碍物
+            if grid_map[y, x] == 0:  # 障碍物
+                hit_obstacle = True
+                break
+                
+            # 只更新未知区域为空闲
+            if grid_map[y, x] == 128:
+                grid_map[y, x] = 255
+            
+            # 到达目标点
+            if x == target_x and y == target_y:
+                break
+                
+            # Bresenham步进
+            e2 = 2 * error
+            if e2 > -dy:
+                error -= dy
+                x += x_inc
+            if e2 < dx:
+                error += dx
+                y += y_inc
+
+
+@jit(nopython=True, parallel=True)
+def numba_vectorized_ray_casting(target_points, agent_x, agent_y, map_shape, grid_map):
+    """
+    使用Numba JIT编译的高性能射线追踪。
+    """
+    map_width, map_height = map_shape
+    
+    for i in prange(len(target_points)):
+        target_x, target_y = target_points[i]
+        
+        # Bresenham直线算法的向量化实现
+        dx = abs(target_x - agent_x)
+        dy = abs(target_y - agent_y)
+        
+        x, y = agent_x, agent_y
+        x_inc = 1 if agent_x < target_x else -1
+        y_inc = 1 if agent_y < target_y else -1
+        
+        error = dx - dy
+        
+        while True:
+            # 检查边界并更新地图
+            if 0 <= x < map_width and 0 <= y < map_height:
+                if grid_map[y, x] == 128:  # 只更新未知区域
+                    grid_map[y, x] = 255  # 设置为空闲
+            
+            if x == target_x and y == target_y:
+                break
+                
+            e2 = 2 * error
+            if e2 > -dy:
+                error -= dy
+                x += x_inc
+            if e2 < dx:
+                error += dx
+                y += y_inc
+
+
+@jit(nopython=True, parallel=True)
+def numba_fast_depth_filter(depth_array, threshold=0.3):
+    """
+    使用Numba加速的深度数据滤波。
+    """
+    h, w = depth_array.shape
+    filtered = depth_array.copy()
+    
+    # 简化的梯度计算和异常检测
+    for i in prange(1, h-1):
+        for j in prange(1, w-1):
+            if depth_array[i, j] > 0:
+                # 计算局部梯度
+                grad_x = abs(depth_array[i, j+1] - depth_array[i, j-1])
+                grad_y = abs(depth_array[i+1, j] - depth_array[i-1, j])
+                gradient = (grad_x + grad_y) / 2.0
+                
+                if gradient > threshold:
+                    filtered[i, j] = 0.0
+    
+    return filtered
