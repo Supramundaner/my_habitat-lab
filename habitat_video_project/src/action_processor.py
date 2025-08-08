@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional
 
 from .simulator import HabitatSimulator
 from .video_composer import VideoComposer
+from .vfh_star import VFHStar
 from .utils import (
     slerp, 
     quaternion_to_direction_yaw, 
@@ -114,6 +115,8 @@ class ActionProcessor:
         else:
             print(f"未知动作类型: {action_type}")
             return False
+    
+    def _handle_move_to(self, params: Dict[str, Any]) -> bool:
         """
         处理移动到指定位置的动作
         
@@ -123,8 +126,6 @@ class ActionProcessor:
         Returns:
             True表示成功，False表示碰撞
         """
-    """def _handle_move_to(self, params: Dict[str, Any]) -> bool:
-
         target_x = params['x']
         target_z = params['z']
         
@@ -142,77 +143,89 @@ class ActionProcessor:
         target_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
         
         # 3. 碰撞预检
-
-        
-        # 4. 计算朝向目标的旋转
-        target_rotation = quaternion_to_direction_yaw(current_pos, target_pos)
-        
-        # 5. 执行转向动画
-        self._animate_rotation(current_rot, target_rotation)
         if self.simulator.check_straight_path_collision(current_pos, target_pos):
             print(f"检测到从 {current_pos} 到 {target_pos} 的路径会发生碰撞")
             return False
+        
+        # 4. 计算朝向目标的旋转
+        target_rotation = quaternion_to_direction_yaw(current_pos, target_pos, use_gpu=self.use_gpu)
+        
+        # 确保target_rotation是numpy数组
+        if hasattr(target_rotation, 'cpu'):
+            target_rotation = to_numpy(target_rotation)
+        
+        # 5. 执行转向动画
+        self._animate_rotation(current_rot, target_rotation)
+        
         # 6. 执行移动动画
-        self._animate_movement(current_pos, target_pos)
+        current_pos_after_rotation = self.simulator.get_robot_state()['position']
+        self._animate_movement(current_pos_after_rotation, target_pos)
         
-        return True"""
-    def _handle_move_to(self, params: Dict[str, Any]) -> bool:
-        """
-        处理移动到指定位置的动作（使用路径规划）。
-        
-        Args:
-            params: 参数字典，包含x和z坐标
-        
-        Returns:
-            True表示成功，False表示失败（目标不可达或无路径）
-        """
-        target_x = params['x']
-        target_z = params['z']
-        
-        # 1. 获取当前机器人状态
-        current_state = self.simulator.get_robot_state()
-        start_pos = current_state['position']
-        
-        # 2. 检查目标点是否可导航并获取其3D坐标
-        target_y = self.simulator.get_navigable_y(target_x, target_z)
-        if target_y is None:
-            print(f"错误: 目标位置 ({target_x}, {target_z}) 不在可导航区域。")
-            return False # 动作失败，但不是碰撞，所以返回True让序列继续？这里我们定义为False，表示动作无法执行
-        
-        end_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
-        
-        # 3. 调用路径规划器获取路径
-        path_waypoints = self.simulator.plan_path(start_pos, end_pos)
-        
-        if path_waypoints is None:
-            print(f"错误: 无法规划到目标位置 ({target_x}, {target_z}) 的路径。")
-            return False
-            
-        # 4. 沿着路径的每个分段进行动画
-        # 路径的第一个点是起点，所以我们从第二个点开始作为目标
-        for i in range(len(path_waypoints) - 1):
-            segment_start_pos = self.simulator.get_robot_state()['position']
-            segment_end_pos = path_waypoints[i+1]
-            
-            print(f"  移动到航点 {i+1}/{len(path_waypoints)-1}: {segment_end_pos}")
-            
-            # a. 计算并执行朝向下一个航点的旋转
-            current_rot = self.simulator.get_robot_state()['rotation']
-            target_rotation = quaternion_to_direction_yaw(
-                segment_start_pos, segment_end_pos, use_gpu=self.use_gpu
-            )
-            
-            # 确保target_rotation是numpy数组
-            if hasattr(target_rotation, 'cpu'):
-                target_rotation = to_numpy(target_rotation)
-            self._animate_rotation(current_rot, target_rotation)
-            
-            # b. 执行到下一个航点的直线移动
-            # 注意: 此时的 segment_start_pos 已经是动画旋转后的最新位置了
-            current_pos_after_rotation = self.simulator.get_robot_state()['position']
-            self._animate_movement(current_pos_after_rotation, segment_end_pos)
-
         return True
+    
+    def _execute_move_forward(self):
+        """执行前进动作"""
+        current_state = self.simulator.get_robot_state()
+        current_pos = current_state['position']
+        current_rot = current_state['rotation']
+        
+        # 计算前进距离
+        forward_distance = self.linear_speed * self.time_step
+        
+        # 计算前进方向
+        from .utils import euler_from_quaternion
+        roll, pitch, yaw = euler_from_quaternion(current_rot)
+        forward_direction = yaw
+        
+        # 计算新位置
+        new_pos = current_pos + np.array([
+            forward_distance * np.cos(forward_direction),
+            0,
+            forward_distance * np.sin(forward_direction)
+        ])
+        
+        # 更新机器人位置
+        self.simulator.set_robot_pose(new_pos, current_rot)
+    
+    def _execute_turn_left(self, angle_degrees: float):
+        """执行左转动作"""
+        current_state = self.simulator.get_robot_state()
+        current_pos = current_state['position']
+        current_rot = current_state['rotation']
+        
+        # 计算旋转角度（弧度）
+        angle_radians = np.deg2rad(angle_degrees)
+        
+        # 计算新的旋转
+        roll, pitch, yaw = euler_from_quaternion(current_rot)
+        new_yaw = yaw + angle_radians
+        new_rot = quaternion_from_euler(roll, pitch, new_yaw, use_gpu=self.use_gpu)
+        
+        if hasattr(new_rot, 'cpu'):
+            new_rot = to_numpy(new_rot)
+        
+        # 更新机器人姿态
+        self.simulator.set_robot_pose(current_pos, new_rot)
+    
+    def _execute_turn_right(self, angle_degrees: float):
+        """执行右转动作"""
+        current_state = self.simulator.get_robot_state()
+        current_pos = current_state['position']
+        current_rot = current_state['rotation']
+        
+        # 计算旋转角度（弧度）
+        angle_radians = np.deg2rad(-angle_degrees)  # 右转为负角度
+        
+        # 计算新的旋转
+        roll, pitch, yaw = euler_from_quaternion(current_rot)
+        new_yaw = yaw + angle_radians
+        new_rot = quaternion_from_euler(roll, pitch, new_yaw, use_gpu=self.use_gpu)
+        
+        if hasattr(new_rot, 'cpu'):
+            new_rot = to_numpy(new_rot)
+        
+        # 更新机器人姿态
+        self.simulator.set_robot_pose(current_pos, new_rot)
     
     def _handle_turn_left(self, params: Dict[str, Any]) -> bool:
         """
@@ -258,8 +271,11 @@ class ActionProcessor:
         # 从当前四元数提取欧拉角
         roll, pitch, yaw = euler_from_quaternion(current_rot)
         
-        # 更新偏航角
-        new_yaw = yaw + angle_degrees
+        # 更新偏航角（将度数转换为弧度）
+        angle_radians = np.deg2rad(angle_degrees)
+        new_yaw = yaw + angle_radians
+        
+
         
         # 创建新的四元数
         target_rot = quaternion_from_euler(roll, pitch, new_yaw, use_gpu=self.use_gpu)
@@ -289,7 +305,10 @@ class ActionProcessor:
         print(f"暂停 {duration} 秒 ({num_frames} 帧)")
         
         for _ in range(num_frames):
-            self.composer.add_frame()
+            # 添加视频帧（传入当前机器人状态和观察数据）
+            current_state = self.simulator.get_robot_state()
+            current_observation = self.simulator.get_observation()
+            self.composer.add_frame(robot_state=current_state, observation=current_observation)
         
         return True
     
@@ -311,9 +330,10 @@ class ActionProcessor:
         if angle_diff > 180:
             angle_diff = 360 - angle_diff
         
-        # 计算动画时长和帧数
+        # 计算动画时长和帧数 - 确保有足够的帧数来显示明显的旋转
         duration = angle_diff / self.angular_speed
-        num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
+        min_frames = max(20, int(duration * self.fps))  # 最少20帧，确保旋转明显可见
+        num_frames = max(min_frames, round(duration * self.fps))
         
         print(f"旋转动画: {angle_diff:.1f}度, {duration:.2f}秒, {num_frames}帧")
         
@@ -321,7 +341,7 @@ class ActionProcessor:
         current_state = self.simulator.get_robot_state()
         current_pos = current_state['position']
         
-        # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
+        # 逐帧插值 - 使用 range(1, num_frames + 1) 避免重复起始帧
         for frame in range(1, num_frames + 1):
             t = frame / num_frames
             
@@ -335,8 +355,10 @@ class ActionProcessor:
             # 更新机器人姿态
             self.simulator.set_robot_pose(current_pos, interpolated_rot)
             
-            # 添加视频帧
-            self.composer.add_frame()
+            # 添加视频帧（传入当前机器人状态和观察数据）
+            current_state = self.simulator.get_robot_state()
+            current_observation = self.simulator.get_observation()
+            self.composer.add_frame(robot_state=current_state, observation=current_observation)
     
     def _animate_movement(self, start_pos: np.ndarray, end_pos: np.ndarray):
         """
@@ -349,7 +371,8 @@ class ActionProcessor:
         # 计算距离和动画时长
         distance = np.linalg.norm(end_pos - start_pos)
         duration = distance / self.linear_speed
-        num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
+        min_frames = max(20, int(duration * self.fps))  # 最少20帧，确保移动明显可见
+        num_frames = max(min_frames, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
         
         print(f"移动动画: {distance:.2f}米, {duration:.2f}秒, {num_frames}帧")
         
@@ -357,7 +380,7 @@ class ActionProcessor:
         current_state = self.simulator.get_robot_state()
         current_rot = current_state['rotation']
         
-        # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
+        # 逐帧插值 - 使用 range(1, num_frames + 1) 避免重复起始帧
         for frame in range(1, num_frames + 1):
             t = frame / num_frames
             
@@ -367,8 +390,10 @@ class ActionProcessor:
             # 更新机器人姿态
             self.simulator.set_robot_pose(interpolated_pos, current_rot)
             
-            # 添加视频帧
-            self.composer.add_frame()
+            # 添加视频帧（传入当前机器人状态和观察数据）
+            current_state = self.simulator.get_robot_state()
+            current_observation = self.simulator.get_observation()
+            self.composer.add_frame(robot_state=current_state, observation=current_observation)
     
     def get_execution_stats(self) -> Dict[str, Any]:
         """
