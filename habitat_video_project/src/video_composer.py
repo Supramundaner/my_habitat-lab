@@ -382,3 +382,7 @@ class VideoComposer:
             print("成功同步occupancy map坐标系到topdown view")
         else:
             raise RuntimeError("无法获取topdown地图元数据，无法初始化occupancy map")
+    
+    def get_map_builder(self):
+        """获取地图构建器"""
+        return self.map_builder
