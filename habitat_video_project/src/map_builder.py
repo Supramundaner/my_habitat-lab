@@ -735,7 +735,9 @@ class OccupancyMapBuilder:
         from .utils import euler_from_quaternion
         roll, pitch, yaw = euler_from_quaternion(rotation_quat)
         # 标准化角度到[-π, π]
-        return (yaw + np.pi) % (2 * np.pi) - np.pi
+        print(f"————yaw: {yaw}")
+        print(f"————rotation_quat: {rotation_quat}")
+        return yaw
 
 
 def get_camera_matrix(width: int, height: int, hfov_rad: float) -> np.ndarray:

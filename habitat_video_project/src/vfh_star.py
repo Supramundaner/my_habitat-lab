@@ -80,21 +80,41 @@ class VFHStar:
         if prev_direction is None:
             prev_direction = robot_theta
             
+        # 调试信息：输出输入参数
+        print(f"[DEBUG] VFH* 输入参数:")
+        print(f"  - 机器人位置: {robot_pos}")
+        print(f"  - 机器人朝向: {np.degrees(robot_theta):.2f}°")
+        print(f"  - 障碍物数量: {len(obstacles)}")
+        print(f"  - 前一个方向: {np.degrees(prev_direction):.2f}°" if prev_direction is not None else "  - 前一个方向: None")
+        
+        # 输出障碍物详情
+        if obstacles:
+            print(f"  - 障碍物详情:")
+            for i, (x, z, radius) in enumerate(obstacles):
+                dist_to_robot = np.sqrt((x - robot_pos[0])**2 + (z - robot_pos[1])**2)
+                print(f"    障碍物{i+1}: 位置({x:.3f}, {z:.3f}), 半径{radius:.3f}m, 距离机器人{dist_to_robot:.3f}m")
+        else:
+            print(f"  - 无障碍物")
+            
         # 获取候选方向
         primary_candidates = self._get_candidate_directions(robot_pos, obstacles)
         
         if not primary_candidates:
-            print("警告: 没有找到可行的候选方向")
+            print("[DEBUG] 警告: 没有找到可行的候选方向")
             return None
             
         if len(primary_candidates) == 1:
             # 只有一个候选方向，直接返回
+            print(f"[DEBUG] 只有一个候选方向: {np.degrees(primary_candidates[0]):.2f}°")
             return primary_candidates[0]
             
         # 使用A*搜索最佳路径
         ng = self.config.get('search_depth', 5)
-        return self._a_star_search(robot_pos, robot_theta, primary_candidates, 
-                                 ng, obstacles, prev_direction)
+        best_direction = self._a_star_search(robot_pos, robot_theta, primary_candidates, 
+                                           ng, obstacles, prev_direction)
+        
+        print(f"[DEBUG] 最佳方向: {np.degrees(best_direction):.2f}°")
+        return best_direction
     
     def _get_polar_histogram(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]]) -> np.ndarray:
         """
@@ -395,7 +415,15 @@ class VFHStar:
         """
         direction_error = self._normalize_angle(ideal_direction - current_theta)
         
+        # 调试信息：输出方向转换详情
+        print(f"[DEBUG] VFH* 离散动作转换:")
+        print(f"  - 理想方向: {np.degrees(ideal_direction):.2f}°")
+        print(f"  - 当前朝向: {np.degrees(current_theta):.2f}°")
+        print(f"  - 方向误差: {np.degrees(direction_error):.2f}°")
+        print(f"  - 对齐容差: {np.degrees(self.alignment_tolerance):.2f}°")
+        
         if abs(direction_error) < self.alignment_tolerance:
+            print(f"  - 选择动作: move_forward (方向已对齐)")
             return "move_forward", 0.0
         
         # 找到最接近的离散动作
@@ -406,12 +434,20 @@ class VFHStar:
             if err < min_err:
                 min_err, best_action = err, val
         
+        action_name = "move_forward"
+        action_value = 0.0
+        
         if best_action == self.discrete_actions["turn_left_30"]:
-            return "turn_left", 30.0
+            action_name = "turn_left"
+            action_value = 30.0
         elif best_action == self.discrete_actions["turn_right_30"]:
-            return "turn_right", 30.0
-        else:
-            return "move_forward", 0.0
+            action_name = "turn_right"
+            action_value = 30.0
+        
+        print(f"  - 选择动作: {action_name} ({action_value}°)")
+        print(f"  - 最小误差: {np.degrees(min_err):.2f}°")
+        
+        return action_name, action_value
     
     def set_visualization_axes(self, ax_hist=None, ax_tree=None):
         """
