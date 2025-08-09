@@ -115,16 +115,41 @@ class OccupancyMapBuilder:
             agent_pose: 智能体位姿字典，包含 'position' 和 'rotation'。
             hfov: 水平视场角 (度)。
         """
+ 
+        
+        if self.grid_map is None:
+            print("[MAP UPDATE ERROR] 占用地图未初始化！")
+            return
+            
+
+        
         # 1. 深度图 -> 相机坐标系点云
+  
         point_cloud_camera = self._depth_to_point_cloud(depth_observation, hfov)
 
+
         # 2. 相机坐标系点云 -> 世界坐标系点云
+
         point_cloud_world = self._transform_points_to_world(
             point_cloud_camera, agent_pose['position'], agent_pose['rotation']
         )
 
+        
+
+
         # 3. 世界坐标系点云 -> 更新地图
+
         self._project_to_map(point_cloud_world, agent_pose['position'])
+        
+
+        
+        # 显示更新后的地图统计
+        if self.grid_map is not None:
+            total_cells = self.grid_map.size
+            free_cells = np.sum(self.grid_map == 255)
+            unknown_cells = np.sum(self.grid_map == 128)
+            obstacle_cells = np.sum(self.grid_map == 0)  # 修复：障碍物值为0，不是1
+
 
     def get_map_image(self, agent_pose: Dict[str, np.ndarray], output_size: Tuple[int, int]) -> np.ndarray:
         """
@@ -685,17 +710,19 @@ class OccupancyMapBuilder:
         Returns:
             障碍物列表 [(x, y, radius), ...]
         """
-        if self.grid_map is None:
-            return []
+
         
         # 将机器人位置转换为地图坐标
         agent_map_coords = self._world_to_map_coords(np.array([[agent_pos[0], 0, agent_pos[1]]]))
         agent_map_x, agent_map_y = int(agent_map_coords[0, 0]), int(agent_map_coords[0, 1])
-        
+
         # 计算搜索半径（地图像素）
         radius_in_pixels = int(local_radius / self.map_resolution)
+
         
         obstacles = []
+        total_cells_checked = 0
+        occupied_cells = 0
         
         # 遍历机器人周围的局部区域
         for y_offset in range(-radius_in_pixels, radius_in_pixels + 1):
@@ -707,11 +734,14 @@ class OccupancyMapBuilder:
                 if not (0 <= map_x < self.map_shape[1] and 0 <= map_y < self.map_shape[0]):
                     continue
                 
+                total_cells_checked += 1
+                
                 # 如果地图中该位置是障碍物
-                if self.grid_map[map_y, map_x] == 1:  # 1表示占用
+                if self.grid_map[map_y, map_x] == 0:  # 0表示占用（障碍物）
+                    occupied_cells += 1
                     # 将地图坐标转换回世界坐标
-                    world_x = (map_x + 0.5) * self.map_resolution + self.topdown_map_bounds['min_x']
-                    world_z = (map_y + 0.5) * self.map_resolution + self.topdown_map_bounds['min_z']
+                    world_x = (map_x + 0.5) * self.map_resolution + self.topdown_map_bounds['top_left'][0]
+                    world_z = (map_y + 0.5) * self.map_resolution + self.topdown_map_bounds['top_left'][1]
                     
                     # 确保只考虑半径范围内的点
                     dist_to_agent = np.sqrt((world_x - agent_pos[0])**2 + (world_z - agent_pos[1])**2)
@@ -719,25 +749,36 @@ class OccupancyMapBuilder:
                         # 等效半径为栅格的一半
                         obstacle_radius = self.map_resolution / 2
                         obstacles.append((world_x, world_z, obstacle_radius))
+
+        
         
         return obstacles
     
     def get_robot_theta_from_quaternion(self, rotation_quat: np.ndarray) -> float:
         """
-        从四元数提取机器人的偏航角。
+        从四元数提取机器人的偏航角（统一角度系统）。
         
         Args:
             rotation_quat: 旋转四元数
             
         Returns:
-            偏航角（弧度，标准化到[-π, π]）
+            偏航角（弧度，统一角度系统，范围[-π, π]）
         """
-        from .utils import euler_from_quaternion
+        from .utils import euler_from_quaternion, yaw_to_unified_angle, normalize_unified_angle
+        
         roll, pitch, yaw = euler_from_quaternion(rotation_quat)
-        # 标准化角度到[-π, π]
+        
+        # 转换为统一角度系统
+        unified_angle = yaw_to_unified_angle(np.radians(yaw))
+        
+        # 标准化角度
+        normalized_angle = normalize_unified_angle(unified_angle)
+        
         print(f"————yaw: {yaw}")
         print(f"————rotation_quat: {rotation_quat}")
-        return yaw
+        print(f"————unified_angle: {np.degrees(normalized_angle):.2f}°")
+        
+        return normalized_angle
 
 
 def get_camera_matrix(width: int, height: int, hfov_rad: float) -> np.ndarray:

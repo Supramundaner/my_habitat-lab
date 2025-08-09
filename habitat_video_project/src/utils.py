@@ -383,38 +383,42 @@ def quaternion_to_direction_yaw(position: Union[np.ndarray, torch.Tensor],
         if not isinstance(target_position, torch.Tensor):
             target_position = to_torch(target_position)
         
-        direction_vector = target_position - position
-        dx = direction_vector[0]
-        dz = direction_vector[2]
+        # 使用统一角度系统计算目标角度
+        dx = target_position[0] - position[0]
+        dz = target_position[2] - position[2]
         
         if torch.isclose(dx, torch.tensor(0.0, device=dx.device)) and torch.isclose(dz, torch.tensor(0.0, device=dz.device)):
             return torch.tensor([0., 0., 0., 1.], device=get_device(), dtype=get_dtype())
         
-        yaw = torch.atan2(dx, -dz)
-        half_yaw = yaw / 2.0
+        # 使用统一角度系统
+        unified_angle = torch.atan2(dx, -dz)
+        half_angle = unified_angle / 2.0
         
         q = torch.zeros(4, device=get_device(), dtype=get_dtype())
         q[0] = 0                           # x
-        q[1] = -torch.sin(half_yaw)        # y
+        q[1] = torch.sin(half_angle)       # y (注意：这里使用sin而不是-sin)
         q[2] = 0                           # z
-        q[3] = torch.cos(half_yaw)         # w
+        q[3] = torch.cos(half_angle)       # w
         
         return q
     else:
         # CPU版本（保持原有逻辑）
-        direction_vector = target_position - position
-        dx = direction_vector[0]
-        dz = direction_vector[2]
+        # 使用统一角度系统计算目标角度
+        dx = target_position[0] - position[0]
+        dz = target_position[2] - position[2]
+        
         if np.isclose(dx, 0) and np.isclose(dz, 0):
             return np.array([0., 0., 0., 1.])
-        yaw = np.arctan2(dx, -dz)
-        half_yaw = yaw / 2.0
+        
+        # 使用统一角度系统
+        unified_angle = np.arctan2(dx, -dz)
+        half_angle = unified_angle / 2.0
 
         q = np.array([
             0,                 
-            -np.sin(half_yaw),  
+            np.sin(half_angle),  # 注意：这里使用sin而不是-sin
             0,                 
-            np.cos(half_yaw)   
+            np.cos(half_angle)   
         ])
         
         return q
@@ -453,3 +457,119 @@ def validate_config(config: Dict[str, Any]) -> bool:
         return False
     
     return True
+
+def unified_angle_system():
+    """
+    统一角度系统说明：
+    - 0度：指向-Z轴（Habitat的前进方向）
+    - 正角度：逆时针旋转
+    - 负角度：顺时针旋转
+    - 角度范围：[-π, π]
+    """
+    pass
+
+def cartesian_to_unified_angle(dx: float, dz: float) -> float:
+    """
+    将笛卡尔坐标差转换为统一角度系统
+    
+    Args:
+        dx: X方向差值 (target_x - current_x)
+        dz: Z方向差值 (target_z - current_z)
+    
+    Returns:
+        统一角度系统中的角度（弧度）
+    """
+    # 在统一系统中：
+    # 0度 = -Z轴方向
+    # 90度 = -X轴方向  
+    # 180度 = +Z轴方向
+    # -90度 = +X轴方向
+    
+    # 使用atan2(dx, -dz)来获得正确的角度
+    # 这样：当dz<0时（目标在-Z方向），角度为0
+    # 当dx>0时（目标在+X方向），角度为-90度
+    angle_radians = np.arctan2(-dx, -dz)
+    return angle_radians
+
+def unified_angle_to_direction_vector(angle: float) -> np.ndarray:
+    """
+    将统一角度转换为方向向量
+    
+    Args:
+        angle: 统一角度系统中的角度（弧度）
+    
+    Returns:
+        方向向量 [x, y, z]
+    """
+    return np.array([
+        -np.sin(angle),  # X分量
+        0,               # Y分量
+        -np.cos(angle)   # Z分量
+    ])
+
+def yaw_to_unified_angle(yaw_rad: float) -> float:
+    """
+    将四元数yaw角转换为统一角度系统
+    
+    Args:
+        yaw_rad: 四元数yaw角（弧度）
+    
+    Returns:
+        统一角度系统中的角度（弧度）
+    """
+    # 四元数yaw角与统一角度系统是一致的
+    # 因为我们的四元数转换已经使用了相同的约定
+    return yaw_rad
+
+def unified_angle_to_yaw(unified_angle: float) -> float:
+    """
+    将统一角度转换为四元数yaw角
+    
+    Args:
+        unified_angle: 统一角度系统中的角度（弧度）
+    
+    Returns:
+        四元数yaw角（弧度）
+    """
+    return unified_angle
+
+def get_target_angle_unified(current_pos: np.ndarray, target_pos: np.ndarray) -> float:
+    """
+    计算到目标的统一角度
+    
+    Args:
+        current_pos: 当前位置 [x, y, z]
+        target_pos: 目标位置 [x, y, z]
+    
+    Returns:
+        统一角度系统中的角度（弧度）
+    """
+    dx = target_pos[0] - current_pos[0]
+    dz = target_pos[2] - current_pos[2]  # 注意使用Z轴
+    
+    return cartesian_to_unified_angle(dx, dz)
+
+def normalize_unified_angle(angle: float) -> float:
+    """
+    标准化统一角度到[-π, π]
+    
+    Args:
+        angle: 输入角度（弧度）
+    
+    Returns:
+        标准化后的角度（弧度）
+    """
+    return (angle + np.pi) % (2 * np.pi) - np.pi
+
+def delta_unified_angle(angle1: float, angle2: float) -> float:
+    """
+    计算统一角度系统中两个角度的差值
+    
+    Args:
+        angle1: 角度1（弧度）
+        angle2: 角度2（弧度）
+    
+    Returns:
+        角度差值（弧度）
+    """
+    return normalize_unified_angle(angle1 - angle2)
