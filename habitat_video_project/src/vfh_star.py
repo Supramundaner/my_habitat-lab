@@ -6,6 +6,13 @@ VFH*算法模块 - 基于Vector Field Histogram的导航算法
 import numpy as np
 import heapq
 from typing import List, Tuple, Optional, Dict, Any
+from .utils import (
+    get_target_angle_unified, 
+    normalize_unified_angle, 
+    delta_unified_angle,
+    unified_angle_to_direction_vector,
+    cartesian_to_unified_angle
+)
 
 
 class VFHStar:
@@ -35,7 +42,7 @@ class VFHStar:
         
         # 机器人参数
         self.robot_radius = self.config.get('robot_radius', 0.14)
-        self.sensor_range = self.config.get('sensor_range', 0.4)
+        self.sensor_range = self.config.get('sensor_range', 2.0)
         self.ds = self.robot_radius * 0.5  # 投影距离
         
         # 直方图参数
@@ -46,10 +53,10 @@ class VFHStar:
         # 对齐容差
         self.alignment_tolerance = np.deg2rad(17)
         
-        # 离散动作
+        # 离散动作 - 使用统一角度系统
         self.discrete_actions = {
-            "turn_left_30": np.deg2rad(30),
-            "turn_right_30": -np.deg2rad(30),
+            "turn_left_30": np.deg2rad(30),    # 正角度 = 左转
+            "turn_right_30": -np.deg2rad(30),  # 负角度 = 右转
             "no_turn": 0.0
         }
         
@@ -70,50 +77,34 @@ class VFHStar:
         
         Args:
             robot_pos: 机器人位置 [x, z]
-            robot_theta: 机器人朝向角度（弧度）
+            robot_theta: 机器人朝向角度（弧度，统一角度系统）
             obstacles: 障碍物列表 [(x, y, radius), ...]
             prev_direction: 前一个选择的方向
             
         Returns:
-            最佳方向角度（弧度），如果无解则返回None
+            最佳方向角度（弧度，统一角度系统），如果无解则返回None
         """
+
+        
         if prev_direction is None:
             prev_direction = robot_theta
-            
-        # 调试信息：输出输入参数
-        print(f"[DEBUG] VFH* 输入参数:")
-        print(f"  - 机器人位置: {robot_pos}")
-        print(f"  - 机器人朝向: {np.degrees(robot_theta):.2f}°")
-        print(f"  - 障碍物数量: {len(obstacles)}")
-        print(f"  - 前一个方向: {np.degrees(prev_direction):.2f}°" if prev_direction is not None else "  - 前一个方向: None")
-        
-        # 输出障碍物详情
-        if obstacles:
-            print(f"  - 障碍物详情:")
-            for i, (x, z, radius) in enumerate(obstacles):
-                dist_to_robot = np.sqrt((x - robot_pos[0])**2 + (z - robot_pos[1])**2)
-                print(f"    障碍物{i+1}: 位置({x:.3f}, {z:.3f}), 半径{radius:.3f}m, 距离机器人{dist_to_robot:.3f}m")
-        else:
-            print(f"  - 无障碍物")
+
             
         # 获取候选方向
         primary_candidates = self._get_candidate_directions(robot_pos, obstacles)
         
         if not primary_candidates:
-            print("[DEBUG] 警告: 没有找到可行的候选方向")
+            print("[VFH* ERROR] 没有找到可行的候选方向")
             return None
             
         if len(primary_candidates) == 1:
             # 只有一个候选方向，直接返回
-            print(f"[DEBUG] 只有一个候选方向: {np.degrees(primary_candidates[0]):.2f}°")
             return primary_candidates[0]
             
         # 使用A*搜索最佳路径
         ng = self.config.get('search_depth', 5)
         best_direction = self._a_star_search(robot_pos, robot_theta, primary_candidates, 
-                                           ng, obstacles, prev_direction)
-        
-        print(f"[DEBUG] 最佳方向: {np.degrees(best_direction):.2f}°")
+                                 ng, obstacles, prev_direction)
         return best_direction
     
     def _get_polar_histogram(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]]) -> np.ndarray:
@@ -121,36 +112,47 @@ class VFHStar:
         计算极坐标直方图
         
         Args:
-            pos: 机器人位置 [x, z]
+            pos: 机器人位置 
             obstacles: 障碍物列表
             
         Returns:
             极坐标直方图数组
         """
+
+        
         histogram = np.zeros(self.num_histogram_bins)
         
-        for ox, oy, orad in obstacles:
+        for i, (ox, oy, orad) in enumerate(obstacles):
             dx, dy = ox - pos[0], oy - pos[1]
             dist = np.sqrt(dx**2 + dy**2)
             
+
+            
             if dist < self.sensor_range:
-                angle = np.arctan2(dy, dx)
+                # 使用统一角度系统计算障碍物角度
+                angle = cartesian_to_unified_angle(dx, dy)
                 gamma = np.arcsin(min(1.0, (self.robot_radius + orad) / dist))
                 
-                start_angle = self._normalize_angle(angle - gamma)
-                end_angle = self._normalize_angle(angle + gamma)
+                start_angle = normalize_unified_angle(angle - gamma)
+                end_angle = normalize_unified_angle(angle + gamma)
                 
-                start_bin = int(self._normalize_angle(start_angle) / self.histogram_alpha + 
+                start_bin = int(normalize_unified_angle(start_angle) / self.histogram_alpha + 
                                self.num_histogram_bins/2) % self.num_histogram_bins
-                end_bin = int(self._normalize_angle(end_angle) / self.histogram_alpha + 
+                end_bin = int(normalize_unified_angle(end_angle) / self.histogram_alpha + 
                              self.num_histogram_bins/2) % self.num_histogram_bins
+                
+
                 
                 curr = start_bin
                 while curr != end_bin:
                     histogram[curr] = 1.0
                     curr = (curr + 1) % self.num_histogram_bins
                 histogram[end_bin] = 1.0
-                
+            else:
+                pass
+        
+        occupied_bins = np.sum(histogram)
+        
         return histogram
     
     def _get_candidate_directions(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]]) -> List[float]:
@@ -162,60 +164,86 @@ class VFHStar:
             obstacles: 障碍物列表
             
         Returns:
-            候选方向列表
+            候选方向列表（统一角度系统）
         """
+
+        
         histogram = self._get_polar_histogram(pos, obstacles)
         
         # 如果没有障碍物，直接朝向目标
         if np.all(histogram == 0):
-            target_angle = np.arctan2(self.target[1] - pos[1], self.target[0] - pos[0])
-            return [self._normalize_angle(target_angle)]
+            target_angle = get_target_angle_unified(
+                np.array([pos[0], 0, pos[1]]),  # 转换为3D坐标
+                np.array([self.target[0], 0, self.target[1]])
+            )
+            normalized_angle = normalize_unified_angle(target_angle)
+            print(f"[VFH* DEBUG] 目标角度: {np.degrees(target_angle):.2f}° -> 标准化: {np.degrees(normalized_angle):.2f}°")
+            return [normalized_angle]
         
         # 找到自由扇区
         free_bins = np.where(histogram == 0)[0]
+        print(f"[VFH* DEBUG] 自由扇区数量: {len(free_bins)}")
+        
         if len(free_bins) == 0:
+            print(f"[VFH* ERROR] 没有自由扇区，所有方向都被阻塞")
             return []
         
         # 分割连续的自由扇区
         diffs = np.diff(free_bins)
         split_indices = np.where(diffs > 1)[0] + 1
-        valleys_bins = np.split(free_bins, split_indices)
         
-        # 处理跨越0度的情况
-        if len(valleys_bins) > 1 and free_bins[0] == 0 and free_bins[-1] == self.num_histogram_bins - 1:
-            valleys_bins[-1] = np.concatenate((valleys_bins[-1], valleys_bins[0]))
-            valleys_bins.pop(0)
+        # 分割扇区
+        sectors = []
+        start_idx = 0
+        for split_idx in split_indices:
+            sectors.append(free_bins[start_idx:split_idx])
+            start_idx = split_idx
+        sectors.append(free_bins[start_idx:])
         
+
+        
+        # 计算每个扇区的候选方向
         candidates = []
-        target_angle = np.arctan2(self.target[1] - pos[1], self.target[0] - pos[0])
+        target_angle = get_target_angle_unified(
+                np.array([pos[0], 0, pos[1]]),  # 转换为3D坐标
+                np.array([self.target[0], 0, self.target[1]])
+            )
         
-        for valley in valleys_bins:
-            if len(valley) == 0:
+        for sector in sectors:
+            if len(sector) == 0:
                 continue
                 
-            if len(valley) < self.smax:
-                # 小扇区，选择中点
-                mid_bin = valley[len(valley) // 2]
-                candidates.append(self._normalize_angle(
-                    (mid_bin - self.num_histogram_bins/2) * self.histogram_alpha
-                ))
+            if len(sector) < self.smax:
+                # 小扇区：只取中心方向
+                center_bin = sector[len(sector) // 2]
+                center_angle = (center_bin - self.num_histogram_bins // 2) * self.histogram_alpha
+                normalized_center = normalize_unified_angle(center_angle)
+                candidates.append(normalized_center)
             else:
-                # 大扇区，选择边界点
+                # 大扇区：取两个安全边界方向，以及可能的目标方向
                 safe_margin = self.smax // 2
-                candidates.append(self._normalize_angle(
-                    (valley[safe_margin] - self.num_histogram_bins/2) * self.histogram_alpha
-                ))
-                candidates.append(self._normalize_angle(
-                    (valley[-1 - safe_margin] - self.num_histogram_bins/2) * self.histogram_alpha
-                ))
                 
-                # 如果目标在扇区内，也加入候选
-                target_bin = int(self._normalize_angle(target_angle) / self.histogram_alpha + 
-                                self.num_histogram_bins/2) % self.num_histogram_bins
-                if target_bin in valley:
-                    candidates.append(self._normalize_angle(target_angle))
+                # 左边界方向
+                left_bin = sector[safe_margin]
+                left_angle = (left_bin - self.num_histogram_bins // 2) * self.histogram_alpha
+                normalized_left = normalize_unified_angle(left_angle)
+                candidates.append(normalized_left)
+                
+                # 右边界方向
+                right_bin = sector[-1 - safe_margin]
+                right_angle = (right_bin - self.num_histogram_bins // 2) * self.histogram_alpha
+                normalized_right = normalize_unified_angle(right_angle)
+                candidates.append(normalized_right)
+                
+                # 检查目标方向是否在当前扇区内，如果是则添加
+                target_bin = int(normalize_unified_angle(target_angle) / self.histogram_alpha + self.num_histogram_bins // 2) % self.num_histogram_bins
+                if target_bin in sector:
+                    candidates.append(normalize_unified_angle(target_angle))
+
         
-        return list(set(candidates))
+
+        
+        return candidates
     
     def _a_star_search(self, robot_pos: np.ndarray, robot_theta: float, 
                        primary_candidates: List[float], ng: int, 
@@ -226,14 +254,14 @@ class VFHStar:
         
         Args:
             robot_pos: 机器人位置
-            robot_theta: 机器人朝向
+            robot_theta: 机器人朝向（统一角度系统）
             primary_candidates: 主要候选方向
             ng: 搜索深度
             obstacles: 障碍物列表
             prev_direction: 前一个方向
             
         Returns:
-            最佳方向
+            最佳方向（统一角度系统）
         """
         open_set = []
         
@@ -244,8 +272,8 @@ class VFHStar:
             
             new_pos, new_theta = self._project_robot(robot_pos, robot_theta, cand)
             
-            heapq.heappush(open_set, (g + h, g, 1, (new_pos[0], new_pos[1], new_theta, cand), 
-                                     [(robot_pos[0], robot_pos[1]), new_pos]))
+            heapq.heappush(open_set, (g + h, g, 1, (float(new_pos[0]), float(new_pos[1]), new_theta, cand), 
+                                     [(float(robot_pos[0]), float(robot_pos[1])), new_pos.tolist()]))
         
         expanded_nodes = {}
         
@@ -257,60 +285,56 @@ class VFHStar:
             expanded_nodes[depth].append(path)
             
             if depth >= ng:
-                # 达到搜索深度，返回最佳主要候选
-                for pc in primary_candidates:
-                    p_pos, _ = self._project_robot(robot_pos, robot_theta, pc)
-                    if np.allclose(p_pos, path[1]):
-                        return pc
+                # 达到最大深度，返回最佳候选
+                best_candidate = min(primary_candidates, 
+                                   key=lambda c: self._cost_g0(c, robot_pos, robot_theta, prev_direction))
+                return best_candidate
             
-            x, y, theta, prev_dir = node
+            # 扩展节点
+            pos_x, pos_z, theta, direction = node
             
-            # 获取投影位置的候选方向
-            projected_candidates = self._get_candidate_directions(np.array([x, y]), obstacles)
+            # 获取新的候选方向
+            new_candidates = self._get_candidate_directions(np.array([pos_x, pos_z]), obstacles)
             
-            for cand in projected_candidates:
-                new_pos, _ = self._project_robot(np.array([x, y]), theta, cand)
+            for new_cand in new_candidates:
+                new_g = g + self._cost_gi(new_cand, theta, direction, depth + 1)
+                new_h = self._heuristic_h(new_cand, theta, direction, depth + 1)
                 
-                # 检查碰撞
-                is_collision = any(
-                    np.sqrt((new_pos[0] - ox)**2 + (new_pos[1] - oy)**2) < self.robot_radius + orad 
-                    for ox, oy, orad in obstacles
-                )
-                
-                if is_collision:
-                    continue
-                
-                new_g = g + self._cost_gi(cand, theta, prev_dir, depth)
-                new_h = self._heuristic_h(cand, theta, prev_dir, depth + 1)
-                _, new_theta = self._project_robot(np.array([x, y]), theta, cand)
+                new_pos, new_theta = self._project_robot(np.array([pos_x, pos_z]), theta, new_cand)
                 
                 heapq.heappush(open_set, (new_g + new_h, new_g, depth + 1, 
-                                        (new_pos[0], new_pos[1], new_theta, cand), 
-                                        path + [new_pos]))
+                                         (float(new_pos[0]), float(new_pos[1]), new_theta, new_cand), 
+                                         path + [new_pos.tolist()]))
         
-        # 如果没有找到路径，返回成本最低的主要候选
-        costs = [self._cost_g0(c, robot_pos, robot_theta, prev_direction) for c in primary_candidates]
-        best_dir = primary_candidates[np.argmin(costs)]
-        
-        return best_dir
+        # 如果没有找到路径，返回最佳候选
+        best_candidate = min(primary_candidates, 
+                           key=lambda c: self._cost_g0(c, robot_pos, robot_theta, prev_direction))
+        return best_candidate
     
     def _project_robot(self, pos: np.ndarray, theta: float, direction: float) -> Tuple[np.ndarray, float]:
         """
-        投影机器人位置
+        投影机器人位置和朝向
         
         Args:
             pos: 当前位置
-            theta: 当前朝向
-            direction: 目标方向
+            theta: 当前朝向（统一角度系统）
+            direction: 目标方向（统一角度系统）
             
         Returns:
             (新位置, 新朝向)
         """
-        new_theta = self._normalize_angle(direction)
-        new_pos = np.array([
-            pos[0] + self.ds * np.cos(new_theta),
-            pos[1] + self.ds * np.sin(new_theta)
-        ])
+        # 计算方向向量
+        direction_vec = unified_angle_to_direction_vector(direction)
+        
+        # 投影距离
+        projection_distance = 0.25  # 25cm
+        
+        # 新位置
+        new_pos = pos + direction_vec[:2] * projection_distance  # 只使用X和Z分量
+        
+        # 新朝向
+        new_theta = normalize_unified_angle(theta + delta_unified_angle(direction, theta))
+        
         return new_pos, new_theta
     
     def _cost_g0(self, c0: float, robot_pos: np.ndarray, robot_theta: float, prev_direction: float) -> float:
@@ -318,39 +342,45 @@ class VFHStar:
         计算初始成本
         
         Args:
-            c0: 候选方向
+            c0: 候选方向（统一角度系统）
             robot_pos: 机器人位置
-            robot_theta: 机器人朝向
-            prev_direction: 前一个方向
+            robot_theta: 机器人朝向（统一角度系统）
+            prev_direction: 前一个方向（统一角度系统）
             
         Returns:
             成本值
         """
-        target_angle = np.arctan2(self.target[1] - robot_pos[1], self.target[0] - robot_pos[0])
+        target_angle = get_target_angle_unified(
+            np.array([robot_pos[0], 0, robot_pos[1]]),  # 转换为3D坐标
+            np.array([self.target[0], 0, self.target[1]])
+        )
         
-        return (self.mu1 * abs(self._delta(c0, target_angle)) + 
-                self.mu2 * abs(self._delta(c0, robot_theta)) + 
-                self.mu3 * abs(self._delta(c0, prev_direction)))
+        return (self.mu1 * abs(delta_unified_angle(c0, target_angle)) + 
+                self.mu2 * abs(delta_unified_angle(c0, robot_theta)) + 
+                self.mu3 * abs(delta_unified_angle(c0, prev_direction)))
     
     def _cost_gi(self, ci: float, theta_i: float, ci_minus_1: float, i: int) -> float:
         """
         计算第i步的成本
         
         Args:
-            ci: 当前方向
-            theta_i: 当前朝向
-            ci_minus_1: 前一个方向
+            ci: 当前方向（统一角度系统）
+            theta_i: 当前朝向（统一角度系统）
+            ci_minus_1: 前一个方向（统一角度系统）
             i: 步数
             
         Returns:
             成本值
         """
-        target_angle = np.arctan2(self.target[1], self.target[0])
+        target_angle = get_target_angle_unified(
+            np.array([0, 0, 0]),  # 原点
+            np.array([self.target[0], 0, self.target[1]])  # 目标位置
+        )
         
         return (self.lambda_param**i) * (
-            self.mu1_prime * abs(self._delta(ci, target_angle)) + 
-            self.mu2_prime * abs(self._delta(ci, theta_i)) + 
-            self.mu3_prime * abs(self._delta(ci, ci_minus_1))
+            self.mu1_prime * abs(delta_unified_angle(ci, target_angle)) + 
+            self.mu2_prime * abs(delta_unified_angle(ci, theta_i)) + 
+            self.mu3_prime * abs(delta_unified_angle(ci, ci_minus_1))
         )
     
     def _heuristic_h(self, c: float, theta: float, prev_dir: float, depth: int) -> float:
@@ -358,79 +388,50 @@ class VFHStar:
         计算启发式函数
         
         Args:
-            c: 候选方向
-            theta: 当前朝向
-            prev_dir: 前一个方向
+            c: 候选方向（统一角度系统）
+            theta: 当前朝向（统一角度系统）
+            prev_dir: 前一个方向（统一角度系统）
             depth: 搜索深度
             
         Returns:
             启发式值
         """
-        target_angle = np.arctan2(self.target[1], self.target[0])
+        target_angle = get_target_angle_unified(
+            np.array([0, 0, 0]),  # 原点
+            np.array([self.target[0], 0, self.target[1]])  # 目标位置
+        )
         h = 0
         
         for i in range(depth, depth + 3):
             h += (self.lambda_param**i) * (
-                self.mu2_prime * abs(self._delta(target_angle, theta)) + 
-                self.mu3_prime * abs(self._delta(target_angle, prev_dir))
+                self.mu1_prime * abs(delta_unified_angle(target_angle, theta)) + 
+                self.mu2_prime * abs(delta_unified_angle(theta, prev_dir)) + 
+                self.mu3_prime * abs(delta_unified_angle(target_angle, prev_dir))
             )
         
         return h
-    
-    def _normalize_angle(self, angle: float) -> float:
-        """
-        标准化角度到[-π, π]
-        
-        Args:
-            angle: 输入角度
-            
-        Returns:
-            标准化后的角度
-        """
-        return (angle + np.pi) % (2 * np.pi) - np.pi
-    
-    def _delta(self, a1: float, a2: float) -> float:
-        """
-        计算角度差
-        
-        Args:
-            a1: 角度1
-            a2: 角度2
-            
-        Returns:
-            角度差
-        """
-        return self._normalize_angle(a1 - a2)
     
     def get_discrete_action(self, ideal_direction: float, current_theta: float) -> Tuple[str, float]:
         """
         将连续方向转换为离散动作
         
         Args:
-            ideal_direction: 理想方向
-            current_theta: 当前朝向
+            ideal_direction: 理想方向（统一角度系统）
+            current_theta: 当前朝向（统一角度系统）
             
         Returns:
             (动作名称, 动作值)
         """
-        direction_error = self._normalize_angle(ideal_direction - current_theta)
-        
-        # 调试信息：输出方向转换详情
-        print(f"[DEBUG] VFH* 离散动作转换:")
-        print(f"  - 理想方向: {np.degrees(ideal_direction):.2f}°")
-        print(f"  - 当前朝向: {np.degrees(current_theta):.2f}°")
-        print(f"  - 方向误差: {np.degrees(direction_error):.2f}°")
-        print(f"  - 对齐容差: {np.degrees(self.alignment_tolerance):.2f}°")
+        direction_error = delta_unified_angle(ideal_direction, current_theta)
         
         if abs(direction_error) < self.alignment_tolerance:
-            print(f"  - 选择动作: move_forward (方向已对齐)")
             return "move_forward", 0.0
         
         # 找到最接近的离散动作
         best_action, min_err = None, float('inf')
         
         for name, val in self.discrete_actions.items():
-            err = abs(self._normalize_angle(ideal_direction - self._normalize_angle(current_theta + val)))
+            err = abs(delta_unified_angle(ideal_direction, normalize_unified_angle(current_theta + val)))
             if err < min_err:
                 min_err, best_action = err, val
         
@@ -444,8 +445,7 @@ class VFHStar:
             action_name = "turn_right"
             action_value = 30.0
         
-        print(f"  - 选择动作: {action_name} ({action_value}°)")
-        print(f"  - 最小误差: {np.degrees(min_err):.2f}°")
+
         
         return action_name, action_value
     

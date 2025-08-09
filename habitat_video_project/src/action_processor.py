@@ -24,7 +24,7 @@ from .utils import (
 class ActionProcessor:
     """动作处理和动画控制的核心类"""
     
-    def __init__(self, simulator: HabitatSimulator, composer: VideoComposer, config: Dict[str, Any]):
+    def __init__(self, simulator: HabitatSimulator, composer: VideoComposer, config: Dict[str, Any], map_builder=None):
         """
         初始化动作处理器
         
@@ -32,10 +32,12 @@ class ActionProcessor:
             simulator: HabitatSimulator实例
             composer: VideoComposer实例
             config: 配置字典
+            map_builder: 占用地图构建器实例
         """
         self.simulator = simulator
         self.composer = composer
         self.config = config
+        self.map_builder = map_builder
         
         # 动画参数
         self.linear_speed = config['agent']['linear_speed']  # m/s
@@ -170,9 +172,12 @@ class ActionProcessor:
         target_x = params['x']
         target_z = params['z']
         
+
+        
         # 1. 获取当前机器人状态
         current_state = self.simulator.get_robot_state()
         start_pos = current_state['position']
+
         
         # 2. 检查目标点是否可导航并获取其3D坐标
         target_y = self.simulator.get_navigable_y(target_x, target_z)
@@ -181,11 +186,24 @@ class ActionProcessor:
             return False # 动作失败，但不是碰撞，所以返回True让序列继续？这里我们定义为False，表示动作无法执行
         
         end_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
+
         
         target_pos_2d = np.array([target_x, target_z])
         vfh_config = self.config.get('vfh', {})
+
+        
         vfh_star = VFHStar(target_pos_2d, vfh_config)
+        
+        # 将VFH实例传递给video_composer以启用histogram可视化
+        self.composer.set_vfh_instance(vfh_star)
+        
         map_builder = self.composer.get_map_builder()
+        
+        if map_builder is None:
+            print("[ERROR] 无法获取地图构建器！")
+            return False
+            
+
 
         max_iterations = 1000  # 防止无限循环
         iteration = 0
@@ -193,6 +211,8 @@ class ActionProcessor:
         
         while iteration < max_iterations:
             iteration += 1
+            
+    
             
             # 获取当前机器人状态
             current_state = self.simulator.get_robot_state()
@@ -204,18 +224,21 @@ class ActionProcessor:
             
             # 检查是否到达目标
             if dist_to_target < 0.5:  # 0.5米阈值
-                print(f"成功到达目标位置 ({target_x}, {target_z})")
+                print(f"[SUCCESS] 成功到达目标位置 ({target_x}, {target_z})")
                 return True
             
             # 获取当前占用地图
             observation = self.simulator.get_observation()
             depth_observation = observation.get('depth')
             if depth_observation is None:
-                print("错误: 无法获取深度传感器数据")
+                print("[ERROR] 无法获取深度传感器数据")
                 return False
+            
+            
             
             # 更新占用地图
             agent_pose = {'position': current_pos, 'rotation': current_rot}
+    
             map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
             
             # 从占用地图提取局部障碍物
@@ -225,23 +248,20 @@ class ActionProcessor:
             # 获取机器人朝向角度
             robot_theta = map_builder.get_robot_theta_from_quaternion(current_rot)
             
-            # 调试信息：输出当前状态
-            print(f"[DEBUG] 导航迭代 {iteration}:")
-            print(f"  - 机器人位置: {current_pos}")
-            print(f"  - 机器人朝向: {np.degrees(robot_theta):.2f}°")
-            print(f"  - 到目标距离: {dist_to_target:.3f}m")
-            print(f"  - 障碍物数量: {len(obstacles)}")
+
             
             # VFH*计算最佳方向
             ideal_direction = vfh_star.get_best_direction(robot_pos_2d, robot_theta, obstacles, prev_direction)
-
+            
+            if ideal_direction is None:
+                print("[ERROR] VFH*无法找到可行方向！")
+                return False
+                
             action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
-
-            print(f"[DEBUG] 执行动作: {action_name} ({action_value}°)")
             
             params = {'angle': action_value, 'type': action_name}
 
-
+            # 执行动作
             if action_name == "turn_left":
                 self._handle_turn_left(params)
             elif action_name == "turn_right":
@@ -253,29 +273,31 @@ class ActionProcessor:
                 current_rot = current_state['rotation']
                 
                 # 从四元数提取偏航角
-                from .utils import euler_from_quaternion
+                from .utils import euler_from_quaternion, yaw_to_unified_angle, unified_angle_to_direction_vector
                 roll, pitch, yaw = euler_from_quaternion(current_rot)
                 yaw_rad = np.radians(yaw)
                 
-                # 计算前进方向向量（在XZ平面上）
-                # 注意：在Habitat中，Z轴是前进方向，X轴是右方向
-                forward_direction = np.array([
-                    - np.sin(yaw_rad),  # X分量
-                    0,                # Y分量（高度不变）
-                    - np.cos(yaw_rad)   # Z分量
-                ])
+                # 转换为统一角度系统
+                unified_angle = yaw_to_unified_angle(yaw_rad)
+                
+                # 计算前进方向向量（使用统一角度系统）
+                forward_direction = unified_angle_to_direction_vector(unified_angle)
                 
                 # 计算向前0.25米的目标位置
                 distance = 0.25  # 前进距离
                 end_pos = current_pos + forward_direction * distance
                 
+                print(f"[DEBUG] 前进: 从 {current_pos} 到 {end_pos}")
+                
                 # 执行移动到目标位置
                 self._animate_movement(current_pos, end_pos)
             
-            
+            # 获取执行动作后的状态
             current_state = self.simulator.get_robot_state()
             current_pos = current_state['position']
             current_rot = current_state['rotation']
+            
+            print(f"[DEBUG] 动作执行后位置: {current_pos}")
             
             # 重新获取深度传感器数据并更新地图
             observation = self.simulator.get_observation()
@@ -291,8 +313,17 @@ class ActionProcessor:
             current_state = self.simulator.get_robot_state()
             current_observation = self.simulator.get_observation()
             self.composer.add_frame(robot_state=current_state, observation=current_observation)
+            
+            # 检查是否卡住（位置没有变化）
+            if iteration > 1:
+                pos_change = np.linalg.norm(current_pos - start_pos)
+                if pos_change < 0.01:  # 如果位置变化小于1cm
+                    print(f"[WARNING] 机器人可能卡住，位置变化: {pos_change:.3f}m")
+                    if iteration > 10:  # 如果连续10次迭代都卡住
+                        print(f"[ERROR] 机器人卡住，停止导航")
+                        return False
         
-        print(f"达到最大迭代次数 {max_iterations}，导航失败")
+        print(f"[ERROR] 达到最大迭代次数 {max_iterations}，导航失败")
         return False
         
     
