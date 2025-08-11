@@ -718,23 +718,44 @@ class HabitatSimulator:
     
     def get_fpv_observation(self) -> np.ndarray:
         """
-        获取第一人称视角图像
+        获取第一人称视角观察
         
         Returns:
             RGB图像数组
         """
-        try:
-            # 如果有物理机器人，从其传感器位置获取观察
-            if self.robot_object is not None:
-                return self._get_robot_sensor_observation()
-            else:
-                # 否则直接从虚拟智能体获取
-                observations = self.sim.get_sensor_observations()
-                return observations["color_sensor"]
-                
-        except Exception as e:
-            print(f"获取FPV观察失败: {e}")
-            return np.zeros((512, 512, 3), dtype=np.uint8)
+        # 获取机器人状态
+        robot_state = self.get_robot_state()
+        robot_pos = robot_state['position']
+        robot_rot = robot_state['rotation']
+        
+        # 设置第三人称视角相机（在机器人后方和上方）
+        camera_distance = 3.0  # 相机距离机器人的距离
+        camera_height = 2.0    # 相机高度
+        
+        # 计算相机位置（在机器人后方）
+        robot_forward = self._get_forward_vector(robot_rot)
+        camera_offset = -robot_forward * camera_distance + np.array([0, camera_height, 0])
+        camera_pos = robot_pos + camera_offset
+        
+        # 设置相机朝向机器人
+        camera_look_at = robot_pos
+        
+        # 设置相机参数
+        camera_fov = 60.0  # 视野角度
+        camera_aspect = 1.0  # 宽高比
+        
+        # 创建观察
+        observation = self.sim.get_observations_at(
+            position=camera_pos,
+            rotation=robot_rot,
+            keep_agent_at_new_pose=False
+        )
+        
+        if 'rgb' in observation:
+            return observation['rgb']
+        else:
+            # 如果没有RGB观察，返回黑色图像
+            return np.zeros((256, 256, 3), dtype=np.uint8)
     
     def _get_robot_sensor_observation(self) -> np.ndarray:
         """从物理机器人的传感器位置获取观察"""
@@ -947,7 +968,7 @@ class HabitatSimulator:
             四元数 [x, y, z, w]
         """
         yaw_rad = math.radians(yaw_degrees)
-        
+
         # 绕Y轴旋转的四元数
         return np.array([
             0.0,
@@ -1085,3 +1106,21 @@ class HabitatSimulator:
             import traceback
             traceback.print_exc()
             return False
+
+    def _get_forward_vector(self, rotation_quat: np.ndarray) -> np.ndarray:
+        """
+        从四元数获取前向向量
+        
+        Args:
+            rotation_quat: 四元数旋转
+            
+        Returns:
+            前向向量 [x, y, z]
+        """
+        # 使用Magnum四元数转换
+        quat = convert_to_magnum_quat(rotation_quat)
+        
+        # 在Habitat中，-Z轴是前方
+        forward_vec = quat.transform_vector(mn.Vector3(0, 0, -1))
+        
+        return np.array([forward_vec.x, forward_vec.y, forward_vec.z])

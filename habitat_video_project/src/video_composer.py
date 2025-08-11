@@ -9,6 +9,9 @@ import magnum as mn
 from PIL import Image, ImageDraw
 from typing import Dict, Any, Optional
 import math
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from .simulator import HabitatSimulator
 from .utils import euler_from_quaternion, convert_to_magnum_quat
@@ -55,6 +58,11 @@ class VideoComposer:
         
         self.frame_count = 0
         self.map_builder = None
+        
+        # Histogram可视化相关
+        self.histogram_size = 200  # histogram图像的尺寸
+        self.vfh_instance = None  # VFH算法实例，用于获取histogram数据
+        
         print(f"视频合成器初始化完成: {self.video_width}x{self.video_height} @ {self.fps}fps")
     
     def _resize_map_for_video(self, map_image: Image.Image) -> Image.Image:
@@ -170,8 +178,16 @@ class VideoComposer:
         else:
             occupancy_map_pil = Image.new('RGB', (self.map_width, self.map_width), (10, 10, 10))
 
-        # 4. 调整图像尺寸 - 保持纵横比
-        right_panel_height = self.video_height // 2
+        # 4. 创建histogram可视化
+        robot_pos_2d = np.array([robot_state['position'][0], robot_state['position'][2]])
+        obstacles = []
+        if self.map_builder:
+            obstacles = self.map_builder.get_obstacles_from_map(robot_pos_2d, 2.0)  # 使用2.0米范围
+        
+        histogram_img = self._create_histogram_visualization(robot_pos_2d, obstacles)
+        
+        # 5. 调整图像尺寸 - 保持纵横比
+        right_panel_height = self.video_height // 3  # 改为三等分
         
         # 为occupancy map保持纵横比
         occupancy_map_resized = self._resize_with_aspect_ratio(
@@ -182,11 +198,17 @@ class VideoComposer:
         top_down_map_resized = self._resize_with_aspect_ratio(
             top_down_map, self.map_width, right_panel_height
         )
+        
+        # 为histogram保持纵横比
+        histogram_resized = self._resize_with_aspect_ratio(
+            histogram_img, self.map_width, right_panel_height
+        )
 
-        # 5. 拼接右侧面板
+        # 6. 拼接右侧面板
         right_panel = Image.new('RGB', (self.map_width, self.video_height))
         right_panel.paste(occupancy_map_resized, (0, 0))
         right_panel.paste(top_down_map_resized, (0, right_panel_height))
+        right_panel.paste(histogram_resized, (0, 2 * right_panel_height))
 
         # 6. 拼接最终帧
         final_frame = self._compose_final_frame(fpv_image, right_panel)
@@ -382,3 +404,81 @@ class VideoComposer:
             print("成功同步occupancy map坐标系到topdown view")
         else:
             raise RuntimeError("无法获取topdown地图元数据，无法初始化occupancy map")
+    
+    def get_map_builder(self):
+        """获取地图构建器"""
+        return self.map_builder
+
+    def set_vfh_instance(self, vfh_instance):
+        """设置VFH算法实例，用于获取histogram数据"""
+        self.vfh_instance = vfh_instance
+        print("VFH实例已设置，histogram可视化功能已启用")
+
+    def _create_histogram_visualization(self, robot_pos: np.ndarray, obstacles: list) -> Image.Image:
+        """
+        创建histogram的极坐标可视化
+        
+        Args:
+            robot_pos: 机器人位置 [x, z]
+            obstacles: 障碍物列表
+            
+        Returns:
+            histogram可视化图像
+        """
+        if self.vfh_instance is None:
+            # 如果没有VFH实例，返回空白图像
+            return Image.new('RGB', (self.histogram_size, self.histogram_size), (50, 50, 50))
+        
+        try:
+            # 获取VFH的histogram数据
+            histogram = self.vfh_instance._get_polar_histogram(robot_pos, obstacles)
+            
+            # 创建matplotlib图形
+            fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(6, 6))
+            
+            # 计算角度数组
+            angles = np.linspace(0, 2*np.pi, len(histogram), endpoint=False)
+            
+            # 绘制histogram
+            bars = ax.bar(angles, histogram, width=2*np.pi/len(histogram), 
+                         alpha=0.7, color='red', edgecolor='black')
+            
+            # 标记可行走的方向（histogram值为0的bin）
+            walkable_angles = angles[histogram == 0]
+            if len(walkable_angles) > 0:
+                ax.bar(walkable_angles, [1.0] * len(walkable_angles), 
+                      width=2*np.pi/len(histogram), alpha=0.8, color='green', edgecolor='darkgreen')
+            
+            # 设置极坐标图的属性
+            ax.set_title('VFH Histogram\n(红色=障碍, 绿色=可行走)', pad=20, fontsize=10)
+            ax.set_rticks([0.5, 1.0])
+            ax.set_rlabel_position(0)
+            ax.grid(True, alpha=0.3)
+            
+            # 添加方向标记
+            ax.text(0, 1.2, '前', ha='center', va='center', fontsize=12, weight='bold')
+            ax.text(np.pi/2, 1.2, '左', ha='center', va='center', fontsize=12, weight='bold')
+            ax.text(np.pi, 1.2, '后', ha='center', va='center', fontsize=12, weight='bold')
+            ax.text(3*np.pi/2, 1.2, '右', ha='center', va='center', fontsize=12, weight='bold')
+            
+            # 将matplotlib图形转换为PIL图像
+            canvas = FigureCanvasAgg(fig)
+            canvas.draw()
+            buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
+            buf = buf.reshape(canvas.get_width_height()[::-1] + (3,))
+            
+            # 转换为PIL图像并调整尺寸
+            pil_image = Image.fromarray(buf)
+            pil_image = pil_image.resize((self.histogram_size, self.histogram_size), Image.Resampling.LANCZOS)
+            
+            plt.close(fig)  # 关闭matplotlib图形以释放内存
+            
+            return pil_image
+            
+        except Exception as e:
+            print(f"创建histogram可视化失败: {e}")
+            # 返回错误占位图
+            error_img = Image.new('RGB', (self.histogram_size, self.histogram_size), (100, 50, 50))
+            draw = ImageDraw.Draw(error_img)
+            draw.text((self.histogram_size//2-30, self.histogram_size//2-10), "Histogram Error", fill=(255, 255, 255))
+            return error_img

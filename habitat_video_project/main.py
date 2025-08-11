@@ -115,20 +115,20 @@ def main():
         print("6. 初始化视频合成器...")
         composer = VideoComposer(simulator, config, paths['video'])
         
-        print("7. 初始化动作处理器...")
-        processor = ActionProcessor(simulator, composer, config)
-
-        print("7.5. 初始化占用地图构建器...")
+        print("7. 初始化占用地图构建器...")
         use_gpu = config.get('gpu', {}).get('enabled', False)
         map_builder = OccupancyMapBuilder(use_gpu=use_gpu, config=config)
         composer.set_map_builder(map_builder, config)
         
-        # 8. 添加初始帧
-        print("8. 添加初始帧...")
+        print("8. 初始化动作处理器...")
+        processor = ActionProcessor(simulator, composer, config, map_builder)
+        
+        # 9. 添加初始帧
+        print("9. 添加初始帧...")
         composer.add_frame()
         
-        # 9. 执行动作序列
-        print("9. 执行动作序列...")
+        # 10. 执行动作序列
+        print("10. 执行动作序列...")
         start_time = datetime.now()
         
         report_data = processor.execute_sequence(actions['sequence'])
@@ -136,8 +136,8 @@ def main():
         end_time = datetime.now()
         execution_time = (end_time - start_time).total_seconds()
         
-        # 10. 生成最终报告
-        print("10. 生成执行报告...")
+        # 11. 生成最终报告
+        print("11. 生成执行报告...")
         final_state = simulator.get_robot_state()
         execution_stats = processor.get_execution_stats()
         
@@ -162,7 +162,7 @@ def main():
         
         write_json_report(paths['report'], full_report)
         
-        # 11. 输出执行总结
+        # 12. 输出执行总结
         print("\n" + "=" * 60)
         print("执行完成!")
         print("=" * 60)
