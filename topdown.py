@@ -34,7 +34,7 @@ def get_floor_navigable_extents(hsim: habitat_sim.Simulator, num_points_to_sampl
         min_samples = max(200, len(y_coors) // 20)
         print(f"Single floor detected: using eps={eps:.2f}, min_samples={min_samples}")
     else:
-        eps = 0.3
+        eps = 0.45
         min_samples = 500
         print(f"Multi-floor scene: using eps={eps:.2f}, min_samples={min_samples}")
     
@@ -398,7 +398,7 @@ def render_topdown_views(glb_path, custom_ortho_scale=None, target_coverage=0.9,
     # 在探测到的可导航区域上下扩展渲染体积，以包含实际的几何体。
     # 如果发现地板仍然缺失，请适当增大 `floor_margin`。
     # 如果天花板缺失，请适当增大 `ceiling_margin`。
-    ceiling_margin = 0.3  # (米) 在探测到的最高点之上再渲染 1 米
+    ceiling_margin = 0.8  # (米) 在探测到的最高点之上再渲染 1 米
     floor_margin = 0.3  # (米) 在探测到的最低点之下再渲染 0.3 米
     camera_offset = 0.01  # 将相机放置在渲染体积正上方一个极小的距离
 
