@@ -60,6 +60,19 @@ def parse_arguments():
         help='详细输出'
     )
     
+    parser.add_argument(
+        '--show-histogram',
+        action='store_true',
+        default=True,
+        help='在视频中显示VFH polar histogram（默认启用）'
+    )
+    
+    parser.add_argument(
+        '--no-histogram',
+        action='store_true',
+        help='在视频中隐藏VFH polar histogram'
+    )
+    
     return parser.parse_args()
 
 
@@ -113,7 +126,10 @@ def main():
         simulator.setup_scene_and_agent(actions['initial_state'])
         
         print("6. 初始化视频合成器...")
-        composer = VideoComposer(simulator, config, paths['video'])
+        # 处理histogram显示参数
+        show_histogram = args.show_histogram and not args.no_histogram
+        composer = VideoComposer(simulator, config, paths['video'], show_histogram=show_histogram)
+        print(f"   Histogram显示: {'启用' if show_histogram else '禁用'}")
         
         print("7. 初始化占用地图构建器...")
         use_gpu = config.get('gpu', {}).get('enabled', False)

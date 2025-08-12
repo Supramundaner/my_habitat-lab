@@ -287,7 +287,6 @@ class ActionProcessor:
                 distance = 0.25  # 前进距离
                 end_pos = current_pos + forward_direction * distance
                 
-                print(f"[DEBUG] 前进: 从 {current_pos} 到 {end_pos}")
                 
                 # 执行移动到目标位置
                 self._animate_movement(current_pos, end_pos)
@@ -297,7 +296,6 @@ class ActionProcessor:
             current_pos = current_state['position']
             current_rot = current_state['rotation']
             
-            print(f"[DEBUG] 动作执行后位置: {current_pos}")
             
             # 重新获取深度传感器数据并更新地图
             observation = self.simulator.get_observation()
@@ -374,12 +372,7 @@ class ActionProcessor:
         # 更新偏航角
         new_yaw = yaw + angle_degrees
         
-        # 调试信息：输出转向详情
-        print(f"[DEBUG] 转向动作详情:")
-        print(f"  - 当前角度: {yaw:.2f}°")
-        print(f"  - 转向角度: {angle_degrees:.2f}°")
-        print(f"  - 目标角度: {new_yaw:.2f}°")
-        
+
         # 创建新的四元数
         target_rot = quaternion_from_euler(roll, pitch, new_yaw, use_gpu=self.use_gpu)
         
@@ -433,13 +426,7 @@ class ActionProcessor:
         # 计算动画时长和帧数
         duration = angle_diff / self.angular_speed
         num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
-        
-        # 调试信息：输出旋转详情
-        print(f"[DEBUG] 旋转动画详情:")
-        print(f"  - 起始角度: {start_yaw:.2f}° (四元数: {start_rot})")
-        print(f"  - 目标角度: {end_yaw:.2f}° (四元数: {end_rot})")
-        print(f"  - 角度差: {angle_diff:.1f}度")
-        print(f"  - 动画时长: {duration:.2f}秒, {num_frames}帧")
+
         
         # 获取当前位置（保持不变）
         current_state = self.simulator.get_robot_state()
@@ -475,13 +462,6 @@ class ActionProcessor:
         duration = distance / self.linear_speed
         num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
         
-        # 调试信息：输出移动详情
-        print(f"[DEBUG] 移动动画详情:")
-        print(f"  - 起始位置: {start_pos}")
-        print(f"  - 目标位置: {end_pos}")
-        print(f"  - 移动距离: {distance:.3f}米")
-        print(f"  - 移动方向: {end_pos - start_pos}")
-        print(f"  - 动画时长: {duration:.2f}秒, {num_frames}帧")
         
         # 获取当前旋转（保持不变）
         current_state = self.simulator.get_robot_state()

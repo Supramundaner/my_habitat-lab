@@ -773,11 +773,7 @@ class OccupancyMapBuilder:
         
         # 标准化角度
         normalized_angle = normalize_unified_angle(unified_angle)
-        
-        print(f"————yaw: {yaw}")
-        print(f"————rotation_quat: {rotation_quat}")
-        print(f"————unified_angle: {np.degrees(normalized_angle):.2f}°")
-        
+    
         return normalized_angle
 
 

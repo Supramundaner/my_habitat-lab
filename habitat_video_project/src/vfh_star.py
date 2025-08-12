@@ -70,16 +70,17 @@ class VFHStar:
         print(f"传感器范围: {self.sensor_range}m")
     
     def get_best_direction(self, robot_pos: np.ndarray, robot_theta: float, 
-                          obstacles: List[Tuple[float, float, float]], 
-                          prev_direction: float = None) -> Optional[float]:
+                          obstacles: List[Tuple[float, float, float]] = None, 
+                          prev_direction: float = None, map_builder = None) -> Optional[float]:
         """
         获取最佳移动方向
         
         Args:
             robot_pos: 机器人位置 [x, z]
             robot_theta: 机器人朝向角度（弧度，统一角度系统）
-            obstacles: 障碍物列表 [(x, y, radius), ...]
+            obstacles: 障碍物列表 [(x, y, radius), ...]（可选，如果提供map_builder则忽略）
             prev_direction: 前一个选择的方向
+            map_builder: MapBuilder实例（可选，如果提供则直接从地图计算）
             
         Returns:
             最佳方向角度（弧度，统一角度系统），如果无解则返回None
@@ -91,7 +92,7 @@ class VFHStar:
 
             
         # 获取候选方向
-        primary_candidates = self._get_candidate_directions(robot_pos, obstacles)
+        primary_candidates = self._get_candidate_directions(robot_pos, obstacles, map_builder)
         
         if not primary_candidates:
             print("[VFH* ERROR] 没有找到可行的候选方向")
@@ -107,19 +108,25 @@ class VFHStar:
                                  ng, obstacles, prev_direction)
         return best_direction
     
-    def _get_polar_histogram(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]]) -> np.ndarray:
+
+    
+    def _get_polar_histogram(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]] = None, map_builder = None) -> np.ndarray:
         """
         计算极坐标直方图
         
         Args:
             pos: 机器人位置 
-            obstacles: 障碍物列表
+            obstacles: 障碍物列表（可选，如果提供map_builder则忽略）
+            map_builder: MapBuilder实例（可选，如果提供则直接从地图计算）
             
         Returns:
             极坐标直方图数组
         """
-
+        # 如果提供了map_builder，使用高效的直接地图计算方法
+        if map_builder is not None:
+            return self._get_polar_histogram_from_map(pos, map_builder)
         
+        # 否则使用原有的障碍物列表方法
         histogram = np.zeros(self.num_histogram_bins)
         
         for i, (ox, oy, orad) in enumerate(obstacles):
@@ -151,24 +158,97 @@ class VFHStar:
             else:
                 pass
         
-        occupied_bins = np.sum(histogram)
         
         return histogram
     
-    def _get_candidate_directions(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]]) -> List[float]:
+    def _get_polar_histogram_from_map(self, pos: np.ndarray, map_builder) -> np.ndarray:
+        """
+        从地图直接计算极坐标直方图（内部方法）
+        
+        Args:
+            pos: 机器人位置 [x, z]
+            map_builder: MapBuilder实例
+            
+        Returns:
+            极坐标直方图数组
+        """
+        histogram = np.zeros(self.num_histogram_bins)
+        
+        # 将机器人位置转换为地图坐标
+        agent_map_coords = map_builder._world_to_map_coords(np.array([[pos[0], 0, pos[1]]]))
+        agent_map_x, agent_map_y = int(agent_map_coords[0, 0]), int(agent_map_coords[0, 1])
+        
+        # 计算传感器范围内的地图像素半径
+        sensor_radius_pixels = int(self.sensor_range / map_builder.map_resolution)
+        robot_radius_pixels = max(1, int(self.robot_radius / map_builder.map_resolution))
+        
+        # 创建搜索区域的坐标网格
+        y_range = np.arange(-sensor_radius_pixels, sensor_radius_pixels + 1)
+        x_range = np.arange(-sensor_radius_pixels, sensor_radius_pixels + 1)
+        y_grid, x_grid = np.meshgrid(y_range, x_range, indexing='ij')
+        
+        # 转换为世界坐标的相对位置
+        rel_world_x = x_grid * map_builder.map_resolution
+        rel_world_z = y_grid * map_builder.map_resolution  # 注意：y对应z轴
+        distances = np.sqrt(rel_world_x**2 + rel_world_z**2)
+        
+        # 计算绝对地图坐标
+        abs_x = agent_map_x + x_grid
+        abs_y = agent_map_y + y_grid
+        
+        # 应用掩码
+        valid_mask = ((abs_x >= 0) & (abs_x < map_builder.map_shape[1]) & 
+                      (abs_y >= 0) & (abs_y < map_builder.map_shape[0]))
+        distance_mask = (distances >= self.robot_radius) & (distances <= self.sensor_range)
+        combined_mask = valid_mask & distance_mask
+        
+        if np.any(combined_mask):
+            # 获取有效像素的占用状态
+            valid_occupancy = map_builder.grid_map[abs_y[combined_mask], abs_x[combined_mask]]
+            obstacle_indices = np.where(valid_occupancy == 0)[0]  # 0表示占用
+            
+            if len(obstacle_indices) > 0:
+                # 获取障碍物像素的相对坐标
+                flat_combined = combined_mask.flatten()
+                valid_indices = np.where(flat_combined)[0]
+                obstacle_flat_indices = valid_indices[obstacle_indices]
+                
+                # 转换回2D索引
+                obstacle_y_indices, obstacle_x_indices = np.unravel_index(
+                    obstacle_flat_indices, combined_mask.shape)
+                
+                # 获取障碍物的世界坐标相对位置
+                obs_rel_x = rel_world_x[obstacle_y_indices, obstacle_x_indices]
+                obs_rel_z = rel_world_z[obstacle_y_indices, obstacle_x_indices]
+                
+                # 向量化计算统一角度
+                angles = np.arctan2(-obs_rel_x, -obs_rel_z)  # 基于cartesian_to_unified_angle的逻辑
+                
+                # 标准化角度并转换为bin索引
+                normalized_angles = (angles + np.pi) % (2 * np.pi) - np.pi  # normalize_unified_angle
+                bin_indices = ((normalized_angles / self.histogram_alpha + 
+                               self.num_histogram_bins/2) % self.num_histogram_bins).astype(int)
+                
+                # 设置直方图
+                histogram[bin_indices] = 1.0
+        
+        return histogram
+    
+    def _get_candidate_directions(self, pos: np.ndarray, obstacles: List[Tuple[float, float, float]] = None, map_builder = None) -> List[float]:
         """
         获取候选方向
         
         Args:
             pos: 机器人位置
-            obstacles: 障碍物列表
+            obstacles: 障碍物列表（可选，如果提供map_builder则忽略）
+            map_builder: MapBuilder实例（可选，如果提供则直接从地图计算）
             
         Returns:
             候选方向列表（统一角度系统）
         """
 
         
-        histogram = self._get_polar_histogram(pos, obstacles)
+        histogram = self._get_polar_histogram(pos, obstacles, map_builder)
         
         # 如果没有障碍物，直接朝向目标
         if np.all(histogram == 0):
@@ -177,12 +257,11 @@ class VFHStar:
                 np.array([self.target[0], 0, self.target[1]])
             )
             normalized_angle = normalize_unified_angle(target_angle)
-            print(f"[VFH* DEBUG] 目标角度: {np.degrees(target_angle):.2f}° -> 标准化: {np.degrees(normalized_angle):.2f}°")
             return [normalized_angle]
         
         # 找到自由扇区
         free_bins = np.where(histogram == 0)[0]
-        print(f"[VFH* DEBUG] 自由扇区数量: {len(free_bins)}")
+        
         
         if len(free_bins) == 0:
             print(f"[VFH* ERROR] 没有自由扇区，所有方向都被阻塞")
@@ -244,6 +323,8 @@ class VFHStar:
 
         
         return candidates
+    
+
     
     def _a_star_search(self, robot_pos: np.ndarray, robot_theta: float, 
                        primary_candidates: List[float], ng: int, 
@@ -310,6 +391,8 @@ class VFHStar:
         best_candidate = min(primary_candidates, 
                            key=lambda c: self._cost_g0(c, robot_pos, robot_theta, prev_direction))
         return best_candidate
+    
+
     
     def _project_robot(self, pos: np.ndarray, theta: float, direction: float) -> Tuple[np.ndarray, float]:
         """
