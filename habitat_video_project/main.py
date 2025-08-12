@@ -108,6 +108,16 @@ def main():
         print("2. 加载动作序列...")
         actions = load_json_config(args.actions)
         
+        # 检查动作序列格式并处理
+        if 'action' in actions:
+            # 新格式：包含target参数的动作序列
+            print("检测到新的动作序列格式（包含target参数）")
+            action_sequences = actions['action']
+        else:
+            # 旧格式：直接的动作序列
+            print("使用旧的动作序列格式")
+            action_sequences = [{'sequence': actions['sequence']}]
+        
         # 覆盖输出目录设置
         if args.output_dir:
             config['output_dir'] = args.output_dir
@@ -147,7 +157,26 @@ def main():
         print("10. 执行动作序列...")
         start_time = datetime.now()
         
-        report_data = processor.execute_sequence(actions['sequence'])
+        # 执行动作序列（支持新格式）
+        all_completed_actions = []
+        all_collision_action = None
+        
+        for i, action_group in enumerate(action_sequences):
+            print(f"\n执行动作组 {i+1}/{len(action_sequences)}")
+            if 'target' in action_group:
+                print(f"目标物体: {action_group['target']}")
+            
+            report_data = processor.execute_sequence(action_group['sequence'])
+            all_completed_actions.extend(report_data['completed_actions'])
+            
+            if report_data['collision_action']:
+                all_collision_action = report_data['collision_action']
+                break
+            
+            # 如果找到目标物体，停止执行后续动作组
+            if report_data.get('target_found', False):
+                print("目标物体已找到，停止执行后续动作组")
+                break
         
         end_time = datetime.now()
         execution_time = (end_time - start_time).total_seconds()
@@ -170,9 +199,9 @@ def main():
                 'position': final_state['position'].tolist(),
                 'rotation': final_state['rotation'].tolist()
             },
-            'original_sequence': actions['sequence'],
-            'completed_sequence': report_data['completed_actions'],
-            'collision_at_action': report_data['collision_action'],
+            'original_sequence': action_sequences,
+            'completed_sequence': all_completed_actions,
+            'collision_at_action': all_collision_action,
             'execution_stats': execution_stats
         }
         
@@ -185,10 +214,11 @@ def main():
         print(f"执行时间: {execution_time:.2f} 秒")
         print(f"生成帧数: {execution_stats['total_frames']}")
         print(f"视频时长: {execution_stats['total_duration']:.2f} 秒")
-        print(f"成功动作: {len(report_data['completed_actions'])}/{len(actions['sequence'])}")
+        total_actions = sum(len(group['sequence']) for group in action_sequences)
+        print(f"成功动作: {len(all_completed_actions)}/{total_actions}")
         
-        if report_data['collision_action']:
-            collision_info = report_data['collision_action']
+        if all_collision_action:
+            collision_info = all_collision_action
             print(f"碰撞检测: 在第 {collision_info['index'] + 1} 个动作处检测到碰撞")
             print(f"碰撞动作: {collision_info['action']}")
         else:

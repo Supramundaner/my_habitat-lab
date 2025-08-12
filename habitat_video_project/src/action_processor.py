@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional
 from .simulator import HabitatSimulator
 from .video_composer import VideoComposer
 from .vfh_star import VFHStar
+from .object_detector import ObjectDetector
 from .utils import (
     slerp, 
     quaternion_to_direction_yaw, 
@@ -48,11 +49,15 @@ class ActionProcessor:
         # GPU设置
         self.use_gpu = config.get('gpu', {}).get('enabled', False)
         
+        # 初始化物体检测器
+        self.object_detector = ObjectDetector(config)
+        
         print(f"动作处理器初始化完成")
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
         print(f"视频帧率: {self.fps} fps")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
+        print(f"物体检测: {'启用' if self.object_detector.is_enabled() else '禁用'}")
     
     def execute_sequence(self, action_sequence: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -72,25 +77,52 @@ class ActionProcessor:
         for i, action in enumerate(action_sequence):
             print(f"执行动作 {i+1}/{len(action_sequence)}: {action}")
             
-            success = self._execute_single_action(action)
-            
-            if not success:
-                collision_action = {
-                    'index': i,
-                    'action': action,
-                    'reason': 'collision_detected'
-                }
-                print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
-                break
+            # 检查是否有target参数（物体检测模式）
+            if action['type'] == 'move_to' and 'target' in action:
+                result = self._handle_object_detection_move(action['params'], action['target'])
+                
+                if result['target_found']:
+                    completed_actions.append(action)
+                    print(f"目标物体已找到并到达，跳过后续导航点")
+                    return {
+                        'completed_actions': completed_actions,
+                        'collision_action': None,
+                        'target_found': True
+                    }
+                else:
+                    # 检测失败，继续执行
+                    if result['success']:
+                        completed_actions.append(action)
+                    else:
+                        collision_action = {
+                            'index': i,
+                            'action': action,
+                            'reason': 'collision_detected'
+                        }
+                        print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
+                        break
             else:
-                completed_actions.append(action)
-                print(f"动作 {i+1} 执行完成")
+                # 普通动作
+                success = self._execute_single_action(action)
+                
+                if not success:
+                    collision_action = {
+                        'index': i,
+                        'action': action,
+                        'reason': 'collision_detected'
+                    }
+                    print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
+                    break
+                else:
+                    completed_actions.append(action)
+                    print(f"动作 {i+1} 执行完成")
         
         print(f"动作序列执行完成，成功执行 {len(completed_actions)} 个动作")
         
         return {
             'completed_actions': completed_actions,
-            'collision_action': collision_action
+            'collision_action': collision_action,
+            'target_found': False  # 默认未找到目标
         }
     
     def _execute_single_action(self, action: Dict[str, Any]) -> bool:
@@ -494,3 +526,130 @@ class ActionProcessor:
             'angular_speed': self.angular_speed,
             'fps': self.fps
         }
+    
+    def _handle_object_detection_move(self, params: Dict[str, Any], target_object: str) -> Dict[str, Any]:
+        """
+        处理基于物体检测的移动
+        
+        Args:
+            params: 原始移动参数
+            target_object: 目标物体名称
+            
+        Returns:
+            包含执行结果的字典
+        """
+        print(f"开始物体检测导航，目标: {target_object}")
+        
+        # 1. 尝试物体检测，获取目标坐标
+        target_coords = self._detect_and_get_target_coords(target_object)
+        
+        if target_coords is not None:
+            # 检测成功，移动到检测到的位置
+            print(f"检测到目标物体，坐标: {target_coords}")
+            new_params = {'x': target_coords[0], 'z': target_coords[2]}
+            success = self._handle_move_to(new_params)
+            
+            return {
+                'success': success,
+                'target_found': True,
+                'reason': 'object_detected_and_reached'
+            }
+        else:
+            # 检测失败，使用原始坐标
+            print(f"物体检测失败，使用原始坐标: {params}")
+            success = self._handle_move_to(params)
+            
+            return {
+                'success': success,
+                'target_found': False,
+                'reason': 'fallback_to_original_coords'
+            }
+    
+    def _detect_and_get_target_coords(self, target_object: str) -> Optional[np.ndarray]:
+        """
+        执行物体检测并获取目标坐标
+        
+        Args:
+            target_object: 目标物体名称
+            
+        Returns:
+            目标3D坐标 [x, y, z] 或 None
+        """
+        if not self.object_detector.is_enabled():
+            print("物体检测器未启用")
+            return None
+        
+        try:
+            # 获取当前观察
+            observations = self.simulator.get_observation()
+            rgb_image = observations['rgb']
+            depth_image = observations['depth']
+            
+            # 获取相机参数（从配置和图像尺寸计算）
+            height, width = rgb_image.shape[:2]
+            hfov = self.config.get('OCCUPANCY_MAP', {}).get('HFOV', 90.0)
+            hfov_rad = np.deg2rad(hfov)
+            
+            # 使用与map_builder相同的计算方式
+            fx = width / (2.0 * np.tan(hfov_rad / 2.0))
+            fy = fx  # 假设像素是正方形的
+            cx = width / 2.0
+            cy = height / 2.0
+            
+            camera_params = {
+                'fx': fx,
+                'fy': fy,
+                'cx': cx,
+                'cy': cy
+            }
+            
+            print(f"相机参数: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+            
+            # 执行物体检测
+            target_position = self.object_detector.detect_and_get_target_coords(
+                rgb_image, depth_image, target_object, camera_params
+            )
+            
+            if target_position is not None:
+                # 将相机坐标系转换为世界坐标系
+                # 这里需要根据实际的坐标系转换逻辑进行调整
+                world_position = self._camera_to_world_coords(target_position)
+                return world_position
+            
+            return None
+            
+        except Exception as e:
+            print(f"物体检测过程中发生错误: {e}")
+            return None
+    
+    def _camera_to_world_coords(self, camera_coords: np.ndarray) -> np.ndarray:
+        """
+        将相机坐标系转换为世界坐标系
+        
+        Args:
+            camera_coords: 相机坐标系下的3D坐标 [x, y, z]
+            
+        Returns:
+            世界坐标系下的3D坐标 [x, y, z]
+        """
+        try:
+            # 获取机器人当前状态
+            robot_state = self.simulator.get_robot_state()
+            robot_position = robot_state['position']
+            robot_rotation = robot_state['rotation']
+            
+            # 这里需要实现完整的坐标系转换
+            # 暂时使用简化的转换（假设相机在机器人前方）
+            # 实际应该使用旋转矩阵进行转换
+            
+            # 简化的转换：假设相机在机器人前方0.5米，高度0.5米
+            camera_offset = np.array([0.5, 0.5, 0.0])  # 相机相对于机器人的偏移
+            
+            # 将相机坐标转换为世界坐标
+            world_coords = robot_position + camera_offset + camera_coords
+            
+            return world_coords
+            
+        except Exception as e:
+            print(f"坐标系转换错误: {e}")
+            return camera_coords  # 转换失败时返回原始坐标
