@@ -1078,7 +1078,7 @@ class HabitatSimulator:
                 if 'cell_height' in custom_settings:
                     navmesh_settings.cell_height = custom_settings['cell_height']
                 if 'agent_height' in custom_settings:
-                    navmesh_settings.agent_height = custom_settings['agent_height']
+                    navmesh_settings.agent_height = custom_settings['agent_height']+0.1
                 if 'agent_radius' in custom_settings:
                     navmesh_settings.agent_radius = custom_settings['agent_radius']
                 if 'agent_max_climb' in custom_settings:
