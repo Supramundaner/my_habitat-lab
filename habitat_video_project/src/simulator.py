@@ -166,7 +166,7 @@ class HabitatSimulator:
                 navmesh_settings.cell_height = 0.2  # 网格单元高度（米）
                 navmesh_settings.agent_height = 1.5  # 智能体高度（米）
                 navmesh_settings.agent_radius = 0.1  # 智能体半径（米）
-                navmesh_settings.agent_max_climb = 0.2  # 最大攀爬高度（米）
+                navmesh_settings.agent_max_climb = 0.3  # 最大攀爬高度（米）
                 navmesh_settings.agent_max_slope = 45.0  # 最大坡度（度）
                 
                 print(f"导航网格设置:")
@@ -719,20 +719,8 @@ class HabitatSimulator:
         except Exception as e:
             print(f"获取导航高度失败: {e}")
             return None
-    
-    def check_straight_path_collision(self, start_pos: np.ndarray, end_pos: np.ndarray, 
+    """    def check_straight_path_collision(self, start_pos: np.ndarray, end_pos: np.ndarray, 
                                     step_size: float = 0.1) -> bool:
-        """
-        检查直线路径是否会发生碰撞
-        
-        Args:
-            start_pos: 起始位置 [x, y, z]
-            end_pos: 终点位置 [x, y, z]
-            step_size: 检测步长（米）
-        
-        Returns:
-            True表示会发生碰撞，False表示路径安全
-        """
         try:
             # 确保导航网格已加载
             if not self.sim.pathfinder.is_loaded:
@@ -785,7 +773,8 @@ class HabitatSimulator:
             
         except Exception as e:
             print(f"碰撞检测失败: {e}")
-            return True  # 保守策略，检测失败时认为会碰撞
+            return True  # 保守策略，检测失败时认为会碰撞"""
+
     
     def set_robot_pose(self, position: np.ndarray, rotation_quat: np.ndarray):
         """
