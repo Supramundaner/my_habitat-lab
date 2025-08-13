@@ -12,6 +12,8 @@
 - **动态地图生成**: 自动适应场景大小，生成高质量俯视图
 - **平滑动画**: 支持位置和旋转的平滑插值动画
 - **坐标转换**: 支持2D指令坐标到3D世界坐标的自动转换
+- **多格式兼容**: 同时支持2D位置+偏航角和3D位置+四元数格式
+- **多楼层支持**: 针对3D输入能正确渲染单个楼层的topdown视图
 
 ## 项目结构
 
@@ -47,6 +49,26 @@ pip install opencv-python pillow numpy magnum-python
 
 ## 配置文件
 
+### 输入格式兼容性
+
+本项目支持两种初始状态格式，具有以下优先级：
+
+#### 优先级规则
+1. **3D格式优先**: 如果提供了 `agent_state`，将优先使用3D格式初始化
+2. **2D格式备用**: 如果没有 `agent_state`，使用传统的 `initial_state` 格式
+3. **向后兼容**: 可以同时提供两种格式，系统会自动选择合适的格式
+4. **错误处理**: 如果两种格式都没有提供，将抛出错误
+
+#### 格式对比
+
+| 特性 | 2D格式 (`initial_state`) | 3D格式 (`agent_state`) |
+|------|-------------------------|----------------------|
+| 位置表示 | [x, z] 二维坐标 | [x, y, z] 三维坐标 |
+| 旋转表示 | 偏航角（度） | 四元数 [x, y, z, w] |
+| 适用场景 | 单层建筑 | 多层建筑 |
+| 高度获取 | 通过navmesh自动推断 | 直接指定 |
+| Topdown渲染 | 渲染所有楼层（可能重叠） | 只渲染指定楼层 |
+
 ### 主配置文件 (default_config.json)
 
 ```json
@@ -78,14 +100,50 @@ pip install opencv-python pillow numpy magnum-python
 }
 ```
 
-### 动作序列文件 (example_actions.json)
+### 动作序列文件
 
+支持多种初始状态格式：
+
+#### 方案A: 传统2D格式（单层场景推荐）
 ```json
 {
     "initial_state": {
         "position": [0.0, 0.0],      # 初始2D位置 [x, z]
         "rotation": 0.0              # 初始朝向角度 (度)
     },
+    "sequence": [...]
+}
+```
+
+#### 方案B: 新3D格式（多层场景推荐）
+```json
+{
+    "agent_state": {
+        "position": [4.3768, 0.03574, -2.63806],  # 初始3D位置 [x, y, z]
+        "rotation": [0.0, -0.02548, 0.0, 0.99968]  # 四元数旋转 [x, y, z, w]
+    },
+    "sequence": [...]
+}
+```
+
+#### 方案C: 混合格式（最大兼容性）
+```json
+{
+    "initial_state": {
+        "position": [0.0, 0.0],      # 2D格式备用
+        "rotation": 0.0
+    },
+    "agent_state": {
+        "position": [4.3768, 0.03574, -2.63806],  # 3D格式（优先使用）
+        "rotation": [0.0, -0.02548, 0.0, 0.99968]
+    },
+    "sequence": [...]
+}
+```
+
+#### 动作序列格式
+```json
+{
     "sequence": [
         {
             "type": "move_to",
@@ -139,8 +197,14 @@ python main.py --config configs/default_config.json --actions configs/example_ac
 # 使用默认配置
 python main.py
 
-# 指定自定义配置和动作
-python main.py --config /home/yaoaa/habitat-lab/habitat_video_project/configs/default_config.json --actions /home/yaoaa/habitat-lab/habitat_video_project/configs/example_actions.json
+# 使用2D格式的动作序列
+python main.py --actions configs/example_actions.json
+
+# 使用3D格式的动作序列（多层场景）
+python main.py --actions configs/example_3d_only_actions.json
+
+# 使用混合格式（3D优先，2D备用）
+python main.py --actions configs/example_3d_actions.json
 
 # 指定输出目录
 python main.py --output-dir /path/to/output

@@ -533,7 +533,6 @@ if __name__ == '__main__':
     os.makedirs(output_dir, exist_ok=True)
     
     scene_id = os.path.basename(os.path.dirname(hm3d_scene_path))
-    
     # --- 执行示例 1: 按楼层索引渲染 (渲染第一层, index=0) ---
     print("\n" + "="*80)
     print("### RUNNING EXAMPLE 1: RENDER BY FLOOR INDEX ###")
@@ -567,7 +566,7 @@ if __name__ == '__main__':
     print("### RUNNING EXAMPLE 2: RENDER BY 3D COORDINATE ###")
     try:
         target_point = [
-      0,0.81575,0
+      100,3.4,100
     ]
         result_image_pt, _, meta_data_pt = render_topdown_view(
             hm3d_scene_path, 

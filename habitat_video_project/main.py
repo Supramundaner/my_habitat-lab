@@ -110,7 +110,21 @@ def main():
         simulator = HabitatSimulator(config)
         
         print("5. 设置场景和智能体...")
-        simulator.setup_scene_and_agent(actions['initial_state'])
+        agent_state = actions.get('agent_state', None)  # 获取3D agent_state，如果存在
+        initial_state = actions.get('initial_state', None)  # 获取传统2D initial_state，如果存在
+        
+        if agent_state is None and initial_state is None:
+            raise ValueError("必须提供 'agent_state' 或 'initial_state' 中的至少一个")
+        
+        # 如果没有initial_state但有agent_state，创建一个默认的initial_state以确保向后兼容
+        if initial_state is None:
+            initial_state = {
+                "position": [0.0, 0.0],  # 默认2D位置
+                "rotation": 0.0  # 默认朝向
+            }
+            print("警告: 没有提供initial_state，使用默认值以确保向后兼容")
+        
+        simulator.setup_scene_and_agent(initial_state, agent_state)
         
         print("6. 初始化视频合成器...")
         composer = VideoComposer(simulator, config, paths['video'])
