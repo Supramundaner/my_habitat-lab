@@ -278,6 +278,7 @@ class ObjectDetector:
             return None
         
         # 1. 物体检测和分割
+        print(rgb_image.shape, target_object)
         detection_result = self.detect_object(rgb_image, target_object)
         if detection_result is None:
             return None

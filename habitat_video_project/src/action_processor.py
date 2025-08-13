@@ -5,7 +5,7 @@ ActionProcessor - 动作处理和动画逻辑类 (Controller)
 
 import numpy as np
 import time
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 
 from .simulator import HabitatSimulator
 from .video_composer import VideoComposer
@@ -81,45 +81,33 @@ class ActionProcessor:
         for i, action in enumerate(sequence):
             print(f"执行动作 {i+1}/{len(sequence)}: {action}")
             
-            # 检查是否有target参数（物体检测模式）
-            if action['type'] == 'move_to' and target_object is not None:
-                result = self._handle_object_detection_move(action['params'], target_object)
-                
-                if result['target_found']:
-                    completed_actions.append(action)
-                    print(f"目标物体已找到并到达，跳过后续导航点")
-                    return {
-                        'completed_actions': completed_actions,
-                        'collision_action': None,
-                        'target_found': True
-                    }
-                else:
-                    # 检测失败，继续执行
-                    if result['success']:
-                        completed_actions.append(action)
-                    else:
-                        collision_action = {
-                            'index': i,
-                            'action': action,
-                            'reason': 'collision_detected'
-                        }
-                        print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
-                        break
+            # 执行动作，传递target_object给需要的方法
+            result = self._execute_single_action(action, target_object)
+            
+            # 检查是否找到目标
+            if isinstance(result, dict) and result.get('target_found', False):
+                completed_actions.append(action)
+                print(f"目标物体已找到并到达，任务完成！")
+                return {
+                    'completed_actions': completed_actions,
+                    'collision_action': None,
+                    'target_found': True
+                }
+            
+            # 检查是否成功
+            success = result if isinstance(result, bool) else result.get('success', False)
+            
+            if not success:
+                collision_action = {
+                    'index': i,
+                    'action': action,
+                    'reason': 'collision_detected'
+                }
+                print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
+                break
             else:
-                # 普通动作
-                success = self._execute_single_action(action)
-                
-                if not success:
-                    collision_action = {
-                        'index': i,
-                        'action': action,
-                        'reason': 'collision_detected'
-                    }
-                    print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
-                    break
-                else:
-                    completed_actions.append(action)
-                    print(f"动作 {i+1} 执行完成")
+                completed_actions.append(action)
+                print(f"动作 {i+1} 执行完成")
         
         print(f"动作序列执行完成，成功执行 {len(completed_actions)} 个动作")
         
@@ -129,21 +117,23 @@ class ActionProcessor:
             'target_found': False  # 默认未找到目标
         }
     
-    def _execute_single_action(self, action: Dict[str, Any]) -> bool:
+    def _execute_single_action(self, action: Dict[str, Any], target_object: str = None) -> Union[bool, Dict[str, Any]]:
         """
         执行单个动作
         
         Args:
             action: 动作字典
+            target_object: 目标物体名称，用于物体检测
         
         Returns:
-            True表示成功，False表示失败（碰撞）
+            如果找到目标，返回包含target_found的字典
+            否则返回True表示成功，False表示失败（碰撞）
         """
         action_type = action['type']
         params = action['params']
         
         if action_type == 'move_to':
-            return self._handle_move_to(params)
+            return self._handle_move_to(params, target_object)
         elif action_type == 'turn_left':
             return self._handle_turn_left(params)
         elif action_type == 'turn_right':
@@ -195,39 +185,40 @@ class ActionProcessor:
         self._animate_movement(current_pos, target_pos)
         
         return True"""
-    def _handle_move_to(self, params: Dict[str, Any]) -> bool:
+    def _handle_move_to(self, params: Dict[str, Any], target_object: str = None) -> Union[bool, Dict[str, Any]]:
         """
         处理移动到指定位置的动作（使用路径规划）。
         
         Args:
             params: 参数字典，包含x和z坐标
+            target_object: 目标物体名称，如果提供则进行物体检测
         
         Returns:
-            True表示成功，False表示失败（目标不可达或无路径）
+            如果找到目标并到达，返回包含target_found的字典
+            否则返回True表示成功，False表示失败（目标不可达或无路径）
         """
         target_x = params['x']
         target_z = params['z']
         
-
+        # 初始化目标检测标志
+        target_found = False
+        target_locked = False  # 新增：目标锁定标志
+        locked_target_pos = None  # 新增：锁定的目标位置
         
         # 1. 获取当前机器人状态
         current_state = self.simulator.get_robot_state()
         start_pos = current_state['position']
 
-        
         # 2. 检查目标点是否可导航并获取其3D坐标
         target_y = self.simulator.get_navigable_y(target_x, target_z)
         if target_y is None:
             print(f"错误: 目标位置 ({target_x}, {target_z}) 不在可导航区域。")
-            return False # 动作失败，但不是碰撞，所以返回True让序列继续？这里我们定义为False，表示动作无法执行
+            return False
         
         end_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
-
-        
         target_pos_2d = np.array([target_x, target_z])
         vfh_config = self.config.get('vfh', {})
 
-        
         vfh_star = VFHStar(target_pos_2d, vfh_config)
         
         # 将VFH实例传递给video_composer以启用histogram可视化
@@ -238,8 +229,6 @@ class ActionProcessor:
         if map_builder is None:
             print("[ERROR] 无法获取地图构建器！")
             return False
-            
-
 
         max_iterations = 1000  # 防止无限循环
         iteration = 0
@@ -248,20 +237,49 @@ class ActionProcessor:
         while iteration < max_iterations:
             iteration += 1
             
-    
-            
             # 获取当前机器人状态
             current_state = self.simulator.get_robot_state()
             current_pos = current_state['position']
             current_rot = current_state['rotation']
             
-            # 计算到目标的距离
-            dist_to_target = np.sqrt((current_pos[0] - target_x)**2 + (current_pos[2] - target_z)**2)
+            # 每次低层动作前进行物体检测
+            if target_object is not None and not target_locked:
+                detected_coords = self._detect_and_get_target_coords(target_object)
+                if detected_coords is not None:
+                    # 第一次检测到目标，锁定位置
+                    new_target_x, new_target_z = detected_coords[0], detected_coords[2]
+                    print(f"检测到目标 {target_object}，锁定导航目标: ({new_target_x}, {new_target_z})")
+                    
+                    # 锁定目标位置
+                    locked_target_pos = np.array([new_target_x, new_target_z])
+                    target_locked = True
+                    target_found = True
+                    
+                    # 更新VFH*的目标
+                    vfh_star.update_target(locked_target_pos)
+            
+            # 使用锁定的目标位置（如果有的话）
+            if target_locked and locked_target_pos is not None:
+                current_target_x, current_target_z = locked_target_pos[0], locked_target_pos[1]
+            else:
+                current_target_x, current_target_z = target_x, target_z
+            
+            # 计算到目标的距离（使用当前目标位置）
+            dist_to_target = np.sqrt((current_pos[0] - current_target_x)**2 + (current_pos[2] - current_target_z)**2)
+            print(f"到目标的距离: {dist_to_target}m")
             
             # 检查是否到达目标
-            if dist_to_target < 0.5:  # 0.5米阈值
-                print(f"[SUCCESS] 成功到达目标位置 ({target_x}, {target_z})")
-                return True
+            if dist_to_target < 1.5:  # 0.5米阈值
+                print(f"[SUCCESS] 成功到达目标位置 ({current_target_x}, {current_target_z})")
+                if target_found:
+                    # 如果找到了目标物体，返回包含target_found的字典
+                    return {
+                        'success': True,
+                        'target_found': True
+                    }
+                else:
+                    # 普通导航成功
+                    return True
             
             # 获取当前占用地图
             observation = self.simulator.get_observation()
@@ -270,11 +288,8 @@ class ActionProcessor:
                 print("[ERROR] 无法获取深度传感器数据")
                 return False
             
-            
-            
             # 更新占用地图
             agent_pose = {'position': current_pos, 'rotation': current_rot}
-    
             map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
             
             # 从占用地图提取局部障碍物
@@ -283,8 +298,6 @@ class ActionProcessor:
             
             # 获取机器人朝向角度
             robot_theta = map_builder.get_robot_theta_from_quaternion(current_rot)
-            
-
             
             # VFH*计算最佳方向
             ideal_direction = vfh_star.get_best_direction(robot_pos_2d, robot_theta, obstacles, prev_direction)
@@ -295,13 +308,11 @@ class ActionProcessor:
                 
             action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
             
-            params = {'angle': action_value, 'type': action_name}
-
-            # 执行动作
+            # 执行低层动作
             if action_name == "turn_left":
-                self._handle_turn_left(params)
+                self._handle_turn_left({'angle': action_value})
             elif action_name == "turn_right":
-                self._handle_turn_right(params)
+                self._handle_turn_right({'angle': action_value})
             else:
                 # 获取当前机器人状态
                 current_state = self.simulator.get_robot_state()
@@ -323,7 +334,6 @@ class ActionProcessor:
                 distance = 0.25  # 前进距离
                 end_pos = current_pos + forward_direction * distance
                 
-                
                 # 执行移动到目标位置
                 self._animate_movement(current_pos, end_pos)
             
@@ -331,7 +341,6 @@ class ActionProcessor:
             current_state = self.simulator.get_robot_state()
             current_pos = current_state['position']
             current_rot = current_state['rotation']
-            
             
             # 重新获取深度传感器数据并更新地图
             observation = self.simulator.get_observation()
@@ -531,43 +540,7 @@ class ActionProcessor:
             'fps': self.fps
         }
     
-    def _handle_object_detection_move(self, params: Dict[str, Any], target_object: str) -> Dict[str, Any]:
-        """
-        处理基于物体检测的移动
-        
-        Args:
-            params: 原始移动参数
-            target_object: 目标物体名称
-            
-        Returns:
-            包含执行结果的字典
-        """
-        print(f"开始物体检测导航，目标: {target_object}")
-        
-        # 1. 尝试物体检测，获取目标坐标
-        target_coords = self._detect_and_get_target_coords(target_object)
-        
-        if target_coords is not None:
-            # 检测成功，移动到检测到的位置
-            print(f"检测到目标物体，坐标: {target_coords}")
-            new_params = {'x': target_coords[0], 'z': target_coords[2]}
-            success = self._handle_move_to(new_params)
-            
-            return {
-                'success': success,
-                'target_found': True,
-                'reason': 'object_detected_and_reached'
-            }
-        else:
-            # 检测失败，使用原始坐标
-            print(f"物体检测失败，使用原始坐标: {params}")
-            success = self._handle_move_to(params)
-            
-            return {
-                'success': success,
-                'target_found': False,
-                'reason': 'fallback_to_original_coords'
-            }
+
     
     def _detect_and_get_target_coords(self, target_object: str) -> Optional[np.ndarray]:
         """
@@ -589,7 +562,21 @@ class ActionProcessor:
             rgb_image = observations['rgb']
             depth_image = observations['depth']
             
+            
+            # 处理RGBA格式的图像，转换为RGB
+            if rgb_image.shape[-1] == 4:
+                print("检测到RGBA格式，转换为RGB")
+                # 方法1：直接取前3个通道
+                rgb_image = rgb_image[:, :, :3]
+                # 方法2：如果需要处理透明度，可以使用alpha混合
+                # alpha = rgb_image[:, :, 3:4] / 255.0
+                # rgb_image = rgb_image[:, :, :3] * alpha + (1 - alpha) * 255
+            elif rgb_image.shape[-1] != 3:
+                print(f"警告：意外的图像通道数: {rgb_image.shape[-1]}")
+                return None
+            
             # 获取相机参数（从配置和图像尺寸计算）
+            
             height, width = rgb_image.shape[:2]
             hfov = self.config.get('OCCUPANCY_MAP', {}).get('HFOV', 90.0)
             hfov_rad = np.deg2rad(hfov)
@@ -613,6 +600,7 @@ class ActionProcessor:
             target_position = self.object_detector.detect_and_get_target_coords(
                 rgb_image, depth_image, target_object, camera_params
             )
+            print(target_object)
             
             if target_position is not None:
                 # 将相机坐标系转换为世界坐标系
@@ -642,15 +630,31 @@ class ActionProcessor:
             robot_position = robot_state['position']
             robot_rotation = robot_state['rotation']
             
-            # 这里需要实现完整的坐标系转换
-            # 暂时使用简化的转换（假设相机在机器人前方）
-            # 实际应该使用旋转矩阵进行转换
+            # 基于map_builder.py中的_transform_points_to_world函数实现
+            # 1. 相机到智能体坐标系的转换（绕X轴旋转180度）
+            cam_to_agent_rot = np.array([
+                [1,  0,  0],
+                [0, -1,  0],
+                [0,  0, -1]
+            ], dtype=np.float32)
             
-            # 简化的转换：假设相机在机器人前方0.5米，高度0.5米
-            camera_offset = np.array([0.5, 0.5, 0.0])  # 相机相对于机器人的偏移
+            # 将相机坐标转换到智能体坐标系
+            points_agent_frame = camera_coords @ cam_to_agent_rot.T
             
-            # 将相机坐标转换为世界坐标
-            world_coords = robot_position + camera_offset + camera_coords
+            # 2. 四元数到旋转矩阵的转换
+            x, y, z, w = robot_rotation
+            xx, yy, zz = x*x, y*y, z*z
+            xy, xz, yz = x*y, x*z, y*z
+            xw, yw, zw = x*w, y*w, z*w
+            
+            rot_mat = np.array([
+                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
+                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
+                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
+            ], dtype=np.float32)
+            
+            # 3. 智能体坐标系到世界坐标系的转换：旋转 + 平移
+            world_coords = points_agent_frame @ rot_mat.T + robot_position
             
             return world_coords
             

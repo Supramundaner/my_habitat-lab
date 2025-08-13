@@ -152,7 +152,7 @@ def test_multiple_objects():
     object_detector = ObjectDetector(config)
     
     # 加载图像
-    image_path = "/home/awangas/my_habitat-lab/habitat_video_project/data/window.png"
+    image_path = "/home/awangas/my_habitat-lab/habitat_video_project/debug_rgb_Window.jpg"
     rgb_image = load_image(image_path)
     
     if rgb_image is None:

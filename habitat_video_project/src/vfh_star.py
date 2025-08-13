@@ -69,6 +69,16 @@ class VFHStar:
         print(f"机器人半径: {self.robot_radius}m")
         print(f"传感器范围: {self.sensor_range}m")
     
+    def update_target(self, new_target: np.ndarray):
+        """
+        更新目标位置
+        
+        Args:
+            new_target: 新的目标位置 [x, z]
+        """
+        self.target = new_target
+        print(f"VFH*目标已更新: {new_target}")
+    
     def get_best_direction(self, robot_pos: np.ndarray, robot_theta: float, 
                           obstacles: List[Tuple[float, float, float]] = None, 
                           prev_direction: float = None, map_builder = None) -> Optional[float]:
