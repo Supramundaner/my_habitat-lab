@@ -12,6 +12,7 @@ import math
 import os
 
 from .utils import convert_to_magnum_quat, convert_to_numpy_quat
+from .multi_floor_topdown import MultiFloorTopdownRenderer
 
 
 class HabitatSimulator:
@@ -34,6 +35,9 @@ class HabitatSimulator:
         self.scene_center = None
         self.scene_size = None
         self.base_map_image = None
+        
+        # 多楼层渲染器
+        self.multi_floor_renderer = None
         
         # 坐标转换参数
         self.map_width = None
@@ -205,25 +209,43 @@ class HabitatSimulator:
             print("详细错误信息:")
             traceback.print_exc()
     
-    def setup_scene_and_agent(self, initial_state: Dict[str, Any]):
+    def setup_scene_and_agent(self, initial_state: Dict[str, Any], agent_state: Optional[Dict[str, Any]] = None):
         """
         设置场景和智能体
+        支持传统的2D位置+yaw角度格式和新的3D位置+四元数格式
         
         Args:
-            initial_state: 初始状态配置，包含position和rotation
+            initial_state: 传统初始状态配置，包含2D position和yaw rotation
+            agent_state: 新的3D初始状态配置，包含3D position和四元数rotation
         """
         # 打印导航网格信息用于调试
         self.print_navmesh_info()
         
-        # 1. 生成topdown地图
-        self._generate_topdown_map()
+        # 确定使用哪种格式的初始状态
+        if agent_state is not None:
+            print("使用3D agent_state格式初始化")
+            use_3d_format = True
+            position_3d = np.array(agent_state['position'], dtype=np.float32)
+            rotation_quat = np.array(agent_state['rotation'], dtype=np.float32)
+        else:
+            print("使用传统initial_state格式初始化")
+            use_3d_format = False
+            position_2d = initial_state['position']
+            rotation_yaw = initial_state['rotation']
+        
+        # 1. 生成topdown地图 - 根据格式选择渲染方式
+        if use_3d_format:
+            self._generate_single_floor_topdown_map(position_3d)
+        else:
+            self._generate_topdown_map()
         
         # 2. 加载物理机器人
         if os.path.exists(self.config['scene']['robot_urdf']):
-            initial_3d_pos = self._convert_2d_to_3d(
-                initial_state['position'][0], 
-                initial_state['position'][1]
-            )
+            if use_3d_format:
+                initial_3d_pos = position_3d
+            else:
+                initial_3d_pos = self._convert_2d_to_3d(position_2d[0], position_2d[1])
+            
             if initial_3d_pos is not None:
                 self._load_physical_robot(self.config['scene']['robot_urdf'], initial_3d_pos)
             else:
@@ -232,17 +254,17 @@ class HabitatSimulator:
             print(f"警告: URDF文件不存在: {self.config['scene']['robot_urdf']}")
         
         # 3. 设置初始位置和朝向
-        initial_3d_pos = self._convert_2d_to_3d(
-            initial_state['position'][0], 
-            initial_state['position'][1]
-        )
-        
-        if initial_3d_pos is not None:
-            initial_rotation = self._yaw_to_quaternion(initial_state['rotation'])
-            self.set_robot_pose(initial_3d_pos, initial_rotation)
-            print(f"智能体初始化到位置: {initial_3d_pos}, 朝向: {initial_state['rotation']}度")
+        if use_3d_format:
+            self.set_robot_pose(position_3d, rotation_quat)
+            print(f"智能体初始化到3D位置: {position_3d}, 四元数旋转: {rotation_quat}")
         else:
-            print("错误: 无法将智能体放置到指定初始位置")
+            initial_3d_pos = self._convert_2d_to_3d(position_2d[0], position_2d[1])
+            if initial_3d_pos is not None:
+                initial_rotation = self._yaw_to_quaternion(rotation_yaw)
+                self.set_robot_pose(initial_3d_pos, initial_rotation)
+                print(f"智能体初始化到位置: {initial_3d_pos}, 朝向: {rotation_yaw}度")
+            else:
+                print("错误: 无法将智能体放置到指定初始位置")
     
     def _generate_topdown_map(self) -> None:
         """
@@ -395,6 +417,85 @@ class HabitatSimulator:
         finally:
             # 清理正交投影模拟器
             ortho_sim.close()
+    
+    def _generate_single_floor_topdown_map(self, target_position: np.ndarray) -> None:
+        """
+        为指定位置所在的楼层生成单独的topdown地图
+        使用MultiFloorTopdownRenderer进行正确的多楼层渲染
+        
+        Args:
+            target_position: 目标位置 [x, y, z]，用于确定渲染哪个楼层
+        """
+        print(f"为位置 {target_position} 生成单楼层topdown地图...")
+        
+        # 确保导航网格已加载
+        if not self.sim.pathfinder.is_loaded:
+            print("警告: 导航网格未加载，尝试重新计算...")
+            self._ensure_navmesh_loaded()
+            if not self.sim.pathfinder.is_loaded:
+                print("错误: 无法加载或重新计算导航网格，无法生成topdown地图")
+                return
+        
+        scene_file = self.config['scene']['scene_file']
+        
+        try:
+            # 创建多楼层渲染器
+            if self.multi_floor_renderer is None:
+                self.multi_floor_renderer = MultiFloorTopdownRenderer(scene_file)
+            
+            # 渲染指定位置所在的楼层
+            floor_image, unprojected_coords, meta_data = self.multi_floor_renderer.render_floor_by_position(target_position)
+            
+            if floor_image is None:
+                print("错误: 无法渲染指定楼层的topdown地图")
+                return
+            
+            # 保存为PIL图像
+            self.base_map_image = Image.fromarray(floor_image[..., :3], "RGB")
+            
+            # 计算坐标转换参数
+            self.map_width, self.map_height = self.base_map_image.size
+            
+            if unprojected_coords:
+                # 计算视野覆盖范围
+                view_width_meters, view_height_meters = unprojected_coords['view_range']
+                
+                # 保存转换参数
+                self.world_to_map_scale_x = self.map_width / view_width_meters
+                self.world_to_map_scale_z = self.map_height / view_height_meters
+                self.view_range = (view_width_meters, view_height_meters)
+                
+                # 计算topdown地图边界（用于与occupancy map同步）
+                self.topdown_spacing = view_width_meters / self.map_width  # 米/像素
+                
+                tl_x, tl_z = unprojected_coords['top_left']
+                br_x, br_z = unprojected_coords['bottom_right']
+                center_x, center_z = unprojected_coords['center']
+                
+                self.topdown_map_bounds = {
+                    'top_left': (tl_x, tl_z),
+                    'bottom_right': (br_x, br_z),
+                    'view_range': (view_width_meters, view_height_meters),
+                    'image_size': (self.map_width, self.map_height)
+                }
+                
+                # 更新场景中心信息
+                self.scene_center = [center_x, target_position[1], center_z]
+                
+                print(f"单楼层地图尺寸: {self.map_width} x {self.map_height}")
+                print(f"视野覆盖范围: {view_width_meters:.2f}m x {view_height_meters:.2f}m")
+                print(f"坐标缩放因子: X={self.world_to_map_scale_x:.2f}, Z={self.world_to_map_scale_z:.2f}")
+                print(f"像素间距: {self.topdown_spacing:.6f} m/pixel")
+                print(f"场景中心更新为: {self.scene_center}")
+                
+                print("单楼层topdown地图生成完成")
+            else:
+                print("警告: 无法获取坐标转换信息")
+                
+        except Exception as e:
+            print(f"生成单楼层topdown地图失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _calculate_ortho_scale(self, scene_size: float, target_coverage: float = 0.9,safety_margin=1) -> float:
         """
