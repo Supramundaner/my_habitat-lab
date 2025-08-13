@@ -17,6 +17,7 @@ from step_2_room_segmentation import perform_room_segmentation
 from step_3_llm_room_selection import select_room_with_llm
 from step_4_graph_generation import generate_navigation_graph
 from step_5_node_selection import select_navigation_node
+from step_6_path_planning import path_planning_step
 
 class WorkflowOrchestrator:
     """Main workflow orchestrator class."""
@@ -205,8 +206,23 @@ class WorkflowOrchestrator:
             self._update_step_status("step_5_node_selection", False, {"error": error_msg})
             return False
     
+    def run_step_6(self) -> bool:
+        """Step 6: Path planning from target_coordinate to selected node."""
+        print("\\n" + "="*60)
+        print("STEP 6: Path planning and action generation")
+        print("="*60)
+        
+        try:
+            result = path_planning_step(self.config, self.output_dir)
+            self._update_step_status("step_6_path_planning", True, result)
+            return True
+        except Exception as e:
+            error_msg = f"Step 6 failed: {str(e)}"
+            print(f"✗ {error_msg}")
+            self._update_step_status("step_6_path_planning", False, {"error": error_msg})
+            return False
+    
     def run_workflow(self) -> bool:
-        """Run the complete workflow."""
         print("\\n" + "🚀" + "="*58 + "🚀")
         print("🎯 STARTING NAVIGATION TARGET SELECTION WORKFLOW 🎯")
         print("🚀" + "="*58 + "🚀")
@@ -217,7 +233,8 @@ class WorkflowOrchestrator:
             self.run_step_2,
             self.run_step_3,
             self.run_step_4,
-            self.run_step_5
+            self.run_step_5,
+            self.run_step_6
         ]
         
         for i, step_func in enumerate(steps):

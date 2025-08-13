@@ -187,10 +187,10 @@ def main():
         
         if report_data['collision_action']:
             collision_info = report_data['collision_action']
-            print(f"碰撞检测: 在第 {collision_info['index'] + 1} 个动作处检测到碰撞")
-            print(f"碰撞动作: {collision_info['action']}")
+            print(f"不可导航检测: 在第 {collision_info['index'] + 1} 个动作处检测到不可导航点")
+            print(f"不可导航动作: {collision_info['action']}")
         else:
-            print("碰撞检测: 无碰撞")
+            print("不可导航检测: 正常")
         
         print(f"\n输出文件:")
         print(f"  视频: {paths['video']}")
