@@ -14,7 +14,7 @@ try:
 except ModuleNotFoundError:
     print("Could not import groundingdino. This is OK if you are only using the client.")
 
-GROUNDING_DINO_CONFIG = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+GROUNDING_DINO_CONFIG = "configs/GroundingDINO_SwinT_OGC.cfg.py"
 GROUNDING_DINO_WEIGHTS = "data/groundingdino_swint_ogc.pth"
 CLASSES = "chair . person . dog ."  # Default classes. Can be overridden at inference.
 
@@ -101,4 +101,4 @@ if __name__ == "__main__":
     gdino = GroundingDINOServer()
     print("Model loaded!")
     print(f"Hosting on port {args.port}...")
-    host_model(gdino, name="gdino", port=args.port)
+    host_model(gdino, name="gdino", port=args.port) 
