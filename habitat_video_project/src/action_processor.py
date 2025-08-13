@@ -59,12 +59,12 @@ class ActionProcessor:
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
         print(f"物体检测: {'启用' if self.object_detector.is_enabled() else '禁用'}")
     
-    def execute_sequence(self, action_sequence: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def execute_sequence(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行动作序列
         
         Args:
-            action_sequence: 动作序列列表
+            action_data: 动作数据字典，包含sequence和target
         
         Returns:
             执行结果报告
@@ -72,14 +72,18 @@ class ActionProcessor:
         completed_actions = []
         collision_action = None
         
-        print(f"开始执行动作序列，共 {len(action_sequence)} 个动作")
+        # 从action_data中提取sequence和target
+        sequence = action_data['sequence']
+        target_object = action_data.get('target', None)
         
-        for i, action in enumerate(action_sequence):
-            print(f"执行动作 {i+1}/{len(action_sequence)}: {action}")
+        print(f"开始执行动作序列，共 {len(sequence)} 个动作，目标对象: {target_object}")
+        
+        for i, action in enumerate(sequence):
+            print(f"执行动作 {i+1}/{len(sequence)}: {action}")
             
             # 检查是否有target参数（物体检测模式）
-            if action['type'] == 'move_to' and 'target' in action:
-                result = self._handle_object_detection_move(action['params'], action['target'])
+            if action['type'] == 'move_to' and target_object is not None:
+                result = self._handle_object_detection_move(action['params'], target_object)
                 
                 if result['target_found']:
                     completed_actions.append(action)

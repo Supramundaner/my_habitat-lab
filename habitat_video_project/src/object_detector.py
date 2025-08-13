@@ -36,7 +36,7 @@ class ObjectDetector:
             config: 包含object_detection配置的字典
         """
         self.config = config.get('object_detection', {})
-        self.enabled = self.config.get('enabled', False)
+        self.enabled = self.config.get('enabled', True)
         
         if not self.enabled:
             print("Object detection is disabled in config")
@@ -51,7 +51,7 @@ class ObjectDetector:
         # 初始化客户端
         try:
             grounding_dino_port = self.config.get('grounding_dino_port', 12181)
-            mobile_sam_port = self.config.get('mobile_sam_port', 12183)
+            mobile_sam_port = self.config.get('mobile_sam_port', 12184)
             
             self.grounding_dino = GroundingDINOClient(port=grounding_dino_port)
             self.mobile_sam = MobileSAMClient(port=mobile_sam_port)
@@ -68,9 +68,7 @@ class ObjectDetector:
     def detect_object(
         self, 
         rgb_image: np.ndarray, 
-        depth_image: np.ndarray,
         target_object: str,
-        camera_params: Dict[str, Any]
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """
         检测目标物体并返回分割结果
@@ -92,27 +90,60 @@ class ObjectDetector:
             
         try:
             # 1. 使用Grounding DINO检测物体
-            detections = self.grounding_dino.predict(rgb_image, caption=target_object)
+            # 使用更精确的检测策略：同时检测多个物体，然后选择目标物体
+            caption = target_object + " ."
+            detections = self.grounding_dino.predict(rgb_image, caption=caption)
             
             if detections.num_detections == 0:
                 print(f"No {target_object} detected")
                 return None
             
-            # 2. 获取置信度最高的检测结果
-            best_idx = np.argmax(detections.logits)
+            # 2. 找到目标物体的检测结果
+            target_found = False
+            best_idx = -1
+            best_confidence = 0.0
+            
+            for i, phrase in enumerate(detections.phrases):
+                # 检查检测到的物体是否匹配目标物体
+                if phrase.lower().strip() == target_object.lower().strip():
+                    confidence = detections.logits[i]
+                    if confidence > best_confidence:
+                        best_confidence = confidence
+                        best_idx = i
+                        target_found = True
+            
+            if not target_found:
+                print(f"No {target_object} found in detections. Available: {detections.phrases}")
+                return None
+            
             confidence = detections.logits[best_idx]
             
+            # 打印调试信息
+            print(f"Found {target_object} at index {best_idx} with confidence {confidence:.3f}")
+            print(f"All detections: {list(zip(detections.phrases, detections.logits.tolist()))}")
+            
             # 检查置信度阈值
-            threshold = self.config.get('detection_threshold', 0.4)
+            threshold = self.config.get('detection_threshold', 0.2)
             if confidence < threshold:
                 print(f"Detection confidence {confidence:.3f} below threshold {threshold}")
                 return None
             
             # 3. 获取边界框
-            height, width = rgb_image.shape[:2]
-            bbox_normalized = detections.boxes[best_idx]  # [x1, y1, x2, y2] in [0,1]
-            bbox_denorm = bbox_normalized * np.array([width, height, width, height])
-            bbox_denorm = bbox_denorm.astype(int)
+            # 直接使用detections中的bbox，让detections.py中的annotate函数自动处理归一化
+            bbox = detections.boxes[best_idx]  # [x1, y1, x2, y2]
+            
+            # 将Tensor转换为NumPy数组
+            if hasattr(bbox, 'cpu'):
+                bbox = bbox.cpu().numpy()
+            
+            # 检查bbox是否已经归一化，如果是则进行反归一化
+            if bbox.max() <= 1:
+                height, width = rgb_image.shape[:2]
+                bbox_denorm = bbox * np.array([width, height, width, height])
+                bbox_denorm = bbox_denorm.astype(int)
+            else:
+                # 如果已经是像素坐标，直接使用
+                bbox_denorm = bbox.astype(int)
             
             # 4. 使用Mobile SAM进行分割
             object_mask = self.mobile_sam.segment_bbox(rgb_image, bbox_denorm.tolist())
@@ -247,7 +278,7 @@ class ObjectDetector:
             return None
         
         # 1. 物体检测和分割
-        detection_result = self.detect_object(rgb_image, depth_image, target_object, camera_params)
+        detection_result = self.detect_object(rgb_image, target_object)
         if detection_result is None:
             return None
         

@@ -43,7 +43,7 @@ def parse_arguments():
     parser.add_argument(
         '--actions',
         type=str,
-        default='configs/example_actions.json',
+        default='configs/example_actions_new.json',
         help='动作序列文件路径'
     )
     
@@ -112,7 +112,9 @@ def main():
         if 'action' in actions:
             # 新格式：包含target参数的动作序列
             print("检测到新的动作序列格式（包含target参数）")
-            action_sequences = actions['action']
+            # 只测试第一个action对象
+            action_sequences = [actions['action'][0]]
+            print(f"测试第一个action对象，目标: {action_sequences[0].get('target', 'None')}")
         else:
             # 旧格式：直接的动作序列
             print("使用旧的动作序列格式")
@@ -161,12 +163,13 @@ def main():
         all_completed_actions = []
         all_collision_action = None
         
-        for i, action_group in enumerate(action_sequences):
+        for i, action_data in enumerate(action_sequences):
             print(f"\n执行动作组 {i+1}/{len(action_sequences)}")
-            if 'target' in action_group:
-                print(f"目标物体: {action_group['target']}")
+            if 'target' in action_data:
+                print(f"目标物体: {action_data['target']}")
             
-            report_data = processor.execute_sequence(action_group['sequence'])
+            # 传递完整的action_data（包含sequence和target）
+            report_data = processor.execute_sequence(action_data)
             all_completed_actions.extend(report_data['completed_actions'])
             
             if report_data['collision_action']:
