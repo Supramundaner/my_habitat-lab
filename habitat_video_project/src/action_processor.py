@@ -49,6 +49,9 @@ class ActionProcessor:
         # GPU设置
         self.use_gpu = config.get('gpu', {}).get('enabled', False)
         
+        # 到达目标的距离阈值
+        self.waypoint_distance = config.get('vfh', {}).get('watpoint_distance', 1.5)
+
         # 初始化物体检测器
         self.object_detector = ObjectDetector(config)
         
@@ -56,6 +59,7 @@ class ActionProcessor:
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
         print(f"视频帧率: {self.fps} fps")
+        print(f"目标到达距离: {self.waypoint_distance} m")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
         print(f"物体检测: {'启用' if self.object_detector.is_enabled() else '禁用'}")
     
@@ -269,7 +273,7 @@ class ActionProcessor:
             print(f"到目标的距离: {dist_to_target}m")
             
             # 检查是否到达目标
-            if dist_to_target < 1.5:  # 0.5米阈值
+            if dist_to_target < self.waypoint_distance:
                 print(f"[SUCCESS] 成功到达目标位置 ({current_target_x}, {current_target_z})")
                 if target_found:
                     # 如果找到了目标物体，返回包含target_found的字典
