@@ -49,9 +49,10 @@ class ActionProcessor:
         # GPU设置
         self.use_gpu = config.get('gpu', {}).get('enabled', False)
         
-        # 到达目标的距离阈值
-        self.waypoint_distance = config.get('vfh', {}).get('watpoint_distance', 1.5)
-
+        # 导航距离阈值配置
+        self.waypoint_distance = config.get('navigation', {}).get('waypoint_distance', 1.5)
+        self.destination_distance = config.get('navigation', {}).get('destination_distance', 0.8)
+        
         # 初始化物体检测器
         self.object_detector = ObjectDetector(config)
         
@@ -59,7 +60,8 @@ class ActionProcessor:
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
         print(f"视频帧率: {self.fps} fps")
-        print(f"目标到达距离: {self.waypoint_distance} m")
+        print(f"中间waypoint距离: {self.waypoint_distance} m")
+        print(f"最终目标距离: {self.destination_distance} m")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
         print(f"物体检测: {'启用' if self.object_detector.is_enabled() else '禁用'}")
     
@@ -85,8 +87,11 @@ class ActionProcessor:
         for i, action in enumerate(sequence):
             print(f"执行动作 {i+1}/{len(sequence)}: {action}")
             
-            # 执行动作，传递target_object给需要的方法
-            result = self._execute_single_action(action, target_object)
+            # 判断是否为最后一个move_to动作
+            is_last_move_to = (i == len(sequence) - 1 and action.get('type') == 'move_to')
+            
+            # 执行动作，传递target_object和位置信息给需要的方法
+            result = self._execute_single_action(action, target_object, is_last_move_to)
             
             # 检查是否找到目标
             if isinstance(result, dict) and result.get('target_found', False):
@@ -121,13 +126,14 @@ class ActionProcessor:
             'target_found': False  # 默认未找到目标
         }
     
-    def _execute_single_action(self, action: Dict[str, Any], target_object: str = None) -> Union[bool, Dict[str, Any]]:
+    def _execute_single_action(self, action: Dict[str, Any], target_object: str = None, is_last_move_to: bool = False) -> Union[bool, Dict[str, Any]]:
         """
         执行单个动作
         
         Args:
             action: 动作字典
             target_object: 目标物体名称，用于物体检测
+            is_last_move_to: 是否为最后一个move_to动作
         
         Returns:
             如果找到目标，返回包含target_found的字典
@@ -137,7 +143,7 @@ class ActionProcessor:
         params = action['params']
         
         if action_type == 'move_to':
-            return self._handle_move_to(params, target_object)
+            return self._handle_move_to(params, target_object, is_last_move_to)
         elif action_type == 'turn_left':
             return self._handle_turn_left(params)
         elif action_type == 'turn_right':
@@ -189,13 +195,14 @@ class ActionProcessor:
         self._animate_movement(current_pos, target_pos)
         
         return True"""
-    def _handle_move_to(self, params: Dict[str, Any], target_object: str = None) -> Union[bool, Dict[str, Any]]:
+    def _handle_move_to(self, params: Dict[str, Any], target_object: str = None, is_last_move_to: bool = False) -> Union[bool, Dict[str, Any]]:
         """
         处理移动到指定位置的动作（使用路径规划）。
         
         Args:
             params: 参数字典，包含x和z坐标
             target_object: 目标物体名称，如果提供则进行物体检测
+            is_last_move_to: 是否为最后一个move_to动作（用于选择距离阈值）
         
         Returns:
             如果找到目标并到达，返回包含target_found的字典
@@ -270,10 +277,15 @@ class ActionProcessor:
             
             # 计算到目标的距离（使用当前目标位置）
             dist_to_target = np.sqrt((current_pos[0] - current_target_x)**2 + (current_pos[2] - current_target_z)**2)
-            print(f"到目标的距离: {dist_to_target}m")
+            
+            # 根据是否为最后一个move_to动作选择距离阈值
+            threshold = self.destination_distance if is_last_move_to else self.waypoint_distance
+            threshold_type = "最终目标" if is_last_move_to else "中间waypoint"
+            
+            print(f"到目标的距离: {dist_to_target:.2f}m, 阈值: {threshold:.2f}m ({threshold_type})")
             
             # 检查是否到达目标
-            if dist_to_target < self.waypoint_distance:
+            if dist_to_target < threshold:
                 print(f"[SUCCESS] 成功到达目标位置 ({current_target_x}, {current_target_z})")
                 if target_found:
                     # 如果找到了目标物体，返回包含target_found的字典
