@@ -562,19 +562,7 @@ class ActionProcessor:
             rgb_image = observations['rgb']
             depth_image = observations['depth']
             
-            
-            # 处理RGBA格式的图像，转换为RGB
-            if rgb_image.shape[-1] == 4:
-                print("检测到RGBA格式，转换为RGB")
-                # 方法1：直接取前3个通道
-                rgb_image = rgb_image[:, :, :3]
-                # 方法2：如果需要处理透明度，可以使用alpha混合
-                # alpha = rgb_image[:, :, 3:4] / 255.0
-                # rgb_image = rgb_image[:, :, :3] * alpha + (1 - alpha) * 255
-            elif rgb_image.shape[-1] != 3:
-                print(f"警告：意外的图像通道数: {rgb_image.shape[-1]}")
-                return None
-            
+
             # 获取相机参数（从配置和图像尺寸计算）
             
             height, width = rgb_image.shape[:2]
@@ -593,8 +581,6 @@ class ActionProcessor:
                 'cx': cx,
                 'cy': cy
             }
-            
-            print(f"相机参数: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
             
             # 执行物体检测
             target_position = self.object_detector.detect_and_get_target_coords(

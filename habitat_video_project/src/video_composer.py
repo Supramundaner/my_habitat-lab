@@ -471,7 +471,7 @@ class VideoComposer:
             
             # 将matplotlib图形转换为PIL图像
             canvas = FigureCanvasAgg(fig)
-            canvas.draw()
+            # canvas.draw()
             buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
             buf = buf.reshape(canvas.get_width_height()[::-1] + (3,))
             

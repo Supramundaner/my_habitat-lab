@@ -123,7 +123,7 @@ class ObjectDetector:
             print(f"All detections: {list(zip(detections.phrases, detections.logits.tolist()))}")
             
             # 检查置信度阈值
-            threshold = self.config.get('detection_threshold', 0.2)
+            threshold = self.config.get('detection_threshold', 0.4)
             if confidence < threshold:
                 print(f"Detection confidence {confidence:.3f} below threshold {threshold}")
                 return None
@@ -278,7 +278,6 @@ class ObjectDetector:
             return None
         
         # 1. 物体检测和分割
-        print(rgb_image.shape, target_object)
         detection_result = self.detect_object(rgb_image, target_object)
         if detection_result is None:
             return None
