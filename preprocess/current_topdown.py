@@ -351,10 +351,11 @@ def calculate_metadata(corner_coords: dict):
     origin_pixel_x = (0.0 - tl_x) / spacing_x
     origin_pixel_y = (0.0 - tl_z) / spacing_y
     
+    # Convert all numpy types to Python native types for JSON serialization
     meta_data = {
-        "image_size": [img_width, img_height],
-        "origin_in_pixels": [origin_pixel_x, origin_pixel_y],
-        "spacing_in_meters_per_pixel": spacing_x
+        "image_size": [int(img_width), int(img_height)],
+        "origin_in_pixels": [float(origin_pixel_x), float(origin_pixel_y)],
+        "spacing_in_meters_per_pixel": float(spacing_x)
     }
     return meta_data
 
