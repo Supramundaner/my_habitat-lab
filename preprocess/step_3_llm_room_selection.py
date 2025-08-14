@@ -57,10 +57,15 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     prompt_path = config['prompts']['choose_room_prompt']
     prompt_template = load_prompt_template(prompt_path)
     
+    # Get goal object and replace placeholder
+    goal_object = config['scene_config']['goal_object']
+    prompt_template = prompt_template.format(goal_object=goal_object)
+    
     print(f"🤖 LLM Configuration:")
     print(f"  - Base URL: {base_url}")
     print(f"  - Model: {model}")
     print(f"  - Max tokens: {max_tokens}")
+    print(f"  - Goal object: {goal_object}")
     print(f"  - Prompt loaded from: {prompt_path}")
     
     try:
