@@ -20,7 +20,7 @@ from .utils import euler_from_quaternion, convert_to_magnum_quat
 class VideoComposer:
     """处理视频合成和图像绘制的类"""
     
-    def __init__(self, simulator: HabitatSimulator, config: Dict[str, Any], output_path: str):
+    def __init__(self, simulator: HabitatSimulator, config: Dict[str, Any], output_path: str, show_histogram: bool = True):
         """
         初始化视频合成器
         
@@ -28,10 +28,12 @@ class VideoComposer:
             simulator: HabitatSimulator实例
             config: 配置字典
             output_path: 输出视频路径
+            show_histogram: 是否在视频中显示VFH polar histogram
         """
         self.simulator = simulator
         self.config = config
         self.output_path = output_path
+        self.show_histogram = show_histogram
         
         # 视频配置
         self.fps = config['video']['fps']
@@ -178,13 +180,19 @@ class VideoComposer:
         else:
             occupancy_map_pil = Image.new('RGB', (self.map_width, self.map_width), (10, 10, 10))
 
-        # 4. 创建histogram可视化
-        robot_pos_2d = np.array([robot_state['position'][0], robot_state['position'][2]])
-        obstacles = []
-        if self.map_builder:
-            obstacles = self.map_builder.get_obstacles_from_map(robot_pos_2d, 2.0)  # 使用2.0米范围
-        
-        histogram_img = self._create_histogram_visualization(robot_pos_2d, obstacles)
+        # 4. 创建histogram可视化（可选）
+        if self.show_histogram:
+            robot_pos_2d = np.array([robot_state['position'][0], robot_state['position'][2]])
+            obstacles = []
+            if self.map_builder:
+                obstacles = self.map_builder.get_obstacles_from_map(robot_pos_2d, 2.0)  # 使用2.0米范围
+            
+            histogram_img = self._create_histogram_visualization(robot_pos_2d, obstacles)
+        else:
+            # 创建空白占位图
+            histogram_img = Image.new('RGB', (self.histogram_size, self.histogram_size), (50, 50, 50))
+            draw = ImageDraw.Draw(histogram_img)
+            draw.text((self.histogram_size//2-40, self.histogram_size//2-10), "Histogram Disabled", fill=(255, 255, 255))
         
         # 5. 调整图像尺寸 - 保持纵横比
         right_panel_height = self.video_height // 3  # 改为三等分
@@ -463,7 +471,7 @@ class VideoComposer:
             
             # 将matplotlib图形转换为PIL图像
             canvas = FigureCanvasAgg(fig)
-            canvas.draw()
+            # canvas.draw()
             buf = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8)
             buf = buf.reshape(canvas.get_width_height()[::-1] + (3,))
             
