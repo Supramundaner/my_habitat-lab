@@ -100,8 +100,13 @@ def select_node_with_llm(room_image: np.ndarray, nodes_in_room: List[Dict],
     prompt_path = config['prompts']['choose_node_prompt']
     prompt_template = load_prompt_template(prompt_path)
     
+    # Get goal object and replace placeholder
+    goal_object = config['scene_config']['goal_object']
+    prompt_template = prompt_template.format(goal_object=goal_object)
+    
     print(f"🤖 Using LLM for node selection:")
     print(f"  - Model: {model}")
+    print(f"  - Goal object: {goal_object}")
     print(f"  - Available nodes: {len(nodes_in_room)}")
     print(f"  - Prompt from: {prompt_path}")
     
