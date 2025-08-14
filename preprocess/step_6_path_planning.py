@@ -172,10 +172,9 @@ def create_action_json(start_world: List[float], waypoints_world: List[List[floa
     agent_position = config['scene_config']['target_coordinate']
     agent_rotation = config['scene_config']['rotation']
     goal_object = config['scene_config']['goal_object']
-    
-    # If rotation is null, use default rotation value as 0
+    # If rotation is null, use default [0, 0, 0, 0]
     if agent_rotation is None:
-        agent_rotation = 0
+        agent_rotation = [0, 0, 0, 0]
     
     # Create action sequence
     sequence = []
@@ -188,10 +187,9 @@ def create_action_json(start_world: List[float], waypoints_world: List[List[floa
             }
         })
     
-    # Create action data in the new format matching example_actions_new.json
     action_data = {
-        "initial_state": {
-            "position": [start_world[0], start_world[1]],  # Use 2D position [x, z]
+        "agent_state": {
+            "position": agent_position,
             "rotation": agent_rotation
         },
         "action": [
