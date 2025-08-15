@@ -180,7 +180,7 @@ pip install opencv-python pillow numpy magnum-python
 
 ```bash
 cd habitat_video_project 
-python main.py --config configs/default_config.json --actions configs/example_actions.json
+python main.py --no-histogram
 ```
 
 ### 命令行参数

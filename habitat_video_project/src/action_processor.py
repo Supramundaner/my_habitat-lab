@@ -113,30 +113,55 @@ class ActionProcessor:
             success = result if isinstance(result, bool) else result.get('success', False)
             
             if not success:
-                # 根据动作类型确定失败原因
-                if action.get('type') == 'move_to':
-                    reason = 'agent_stuck'  # move_to失败通常是因为卡住
-                else:
-                    reason = 'action_failed'  # 其他动作失败
+                # 根据动作类型和失败原因确定处理策略
+                if action.get('type') == 'move_to' and isinstance(result, dict):
+                    failure_reason = result.get('reason', 'unknown')
+                    failure_message = result.get('message', '未知错误')
                     
-                collision_action = {
-                    'index': i,
-                    'action': action,
-                    'reason': reason
-                }
-                
-                if reason == 'agent_stuck':
-                    print(f"在第 {i+1} 个动作处检测到Agent卡住，停止执行")
-                    # 如果是最后一个move_to动作，则终止整个序列
-                    if is_last_move_to:
-                        print(f"最后一个move_to动作失败，终止动作序列")
-                        break
+                    collision_action = {
+                        'index': i,
+                        'action': action,
+                        'reason': failure_reason,
+                        'message': failure_message
+                    }
+                    
+                    # 根据具体的失败原因决定是否继续
+                    if failure_reason == 'stuck':
+                        print(f"在第 {i+1} 个动作处检测到Agent卡住: {failure_message}")
+                        # 卡住情况：如果不是最后一个move_to，跳过继续执行下一个动作
+                        if is_last_move_to:
+                            print(f"最后一个move_to动作因卡住失败，终止动作序列")
+                            break
+                        else:
+                            print(f"跳过当前卡住的move_to动作，继续执行下一个动作")
+                            collision_action = None  # 重置，因为我们要继续执行
+                            continue
+                            
+                    elif failure_reason == 'target_unreachable':
+                        print(f"在第 {i+1} 个动作处目标不可达: {failure_message}")
+                        # 目标不可达：如果不是最后一个move_to，也跳过继续执行
+                        if is_last_move_to:
+                            print(f"最后一个move_to动作因目标不可达失败，终止动作序列")
+                            break
+                        else:
+                            print(f"跳过当前不可达的move_to动作，继续执行下一个动作")
+                            collision_action = None
+                            continue
+                            
                     else:
-                        print(f"跳过当前move_to动作，继续执行下一个动作")
-                        # 不break，继续执行下一个动作
-                        collision_action = None  # 重置collision_action，因为我们要继续执行
-                        continue
+                        # 其他严重错误（系统错误、无可行路径、超时等）：直接终止
+                        print(f"在第 {i+1} 个动作处发生严重错误: {failure_message}")
+                        print(f"终止动作序列")
+                        break
+                        
                 else:
+                    # 非move_to动作失败，或者move_to动作返回简单的False
+                    collision_action = {
+                        'index': i,
+                        'action': action,
+                        'reason': 'action_failed',
+                        'message': '动作执行失败'
+                    }
                     print(f"在第 {i+1} 个动作处执行失败，停止执行")
                     break
             else:
@@ -253,7 +278,11 @@ class ActionProcessor:
         target_y = self.simulator.get_navigable_y(target_x, target_z)
         if target_y is None:
             print(f"错误: 目标位置 ({target_x}, {target_z}) 不在可导航区域。")
-            return False
+            return {
+                'success': False,
+                'reason': 'target_unreachable',
+                'message': f'目标位置 ({target_x}, {target_z}) 不在可导航区域'
+            }
         
         end_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
         target_pos_2d = np.array([target_x, target_z])
@@ -268,7 +297,11 @@ class ActionProcessor:
         
         if map_builder is None:
             print("[ERROR] 无法获取地图构建器！")
-            return False
+            return {
+                'success': False,
+                'reason': 'system_error',
+                'message': '无法获取地图构建器'
+            }
 
         max_iterations = 1000  # 防止无限循环
         iteration = 0
@@ -349,7 +382,11 @@ class ActionProcessor:
             
             if ideal_direction is None:
                 print("[ERROR] VFH*无法找到可行方向！")
-                return False
+                return {
+                    'success': False,
+                    'reason': 'no_feasible_path',
+                    'message': 'VFH*无法找到可行方向'
+                }
                 
             action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
             
@@ -411,7 +448,11 @@ class ActionProcessor:
                 if displacement_in_window < self.min_displacement:
                     print(f"[STUCK] Agent在最近{self.time_steps_num}个time step中位移({displacement_in_window:.3f}m)小于阈值({self.min_displacement}m)，认为已卡住")
                     print(f"停止当前move_to动作")
-                    return False  # 返回False表示move_to动作失败，会触发进行下一个动作
+                    return {
+                        'success': False,
+                        'reason': 'stuck',
+                        'message': f'Agent在{self.time_steps_num}个time step中位移{displacement_in_window:.3f}m < {self.min_displacement}m'
+                    }
             
             # 重新获取深度传感器数据并更新地图
             observation = self.simulator.get_observation()
@@ -429,7 +470,11 @@ class ActionProcessor:
             self.composer.add_frame(robot_state=current_state, observation=current_observation)
         
         print(f"[ERROR] 达到最大迭代次数 {max_iterations}，导航失败")
-        return False
+        return {
+            'success': False,
+            'reason': 'max_iterations_exceeded',
+            'message': f'达到最大迭代次数{max_iterations}，导航失败'
+        }
         
     
     def _handle_turn_left(self, params: Dict[str, Any]) -> bool:
