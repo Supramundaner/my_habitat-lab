@@ -443,7 +443,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
                     min_distance = distance
                     closest_floor = (i, fext)
             
-            if closest_floor and min_distance < 0.1:  # Allow up to 0.5m deviation
+            if closest_floor and min_distance < 0.5:  # Allow up to 0.5m deviation
                 target_fext = closest_floor[1]
                 print(f"\nUsing closest floor {closest_floor[0]} for coordinate {target_floor}.")
                 print(f"Point Y ({point_y:.2f}) is {min_distance:.2f}m away from floor range Y=[{closest_floor[1]['min']:.2f}, {closest_floor[1]['max']:.2f}]")
