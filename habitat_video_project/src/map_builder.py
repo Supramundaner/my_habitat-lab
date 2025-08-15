@@ -325,58 +325,80 @@ class OccupancyMapBuilder:
             return cam_coords.T
 
     def _transform_points_to_world(self, points: np.ndarray, agent_pos: np.ndarray, agent_rot_quat: np.ndarray) -> np.ndarray:
-        """
-        高性能点云坐标系转换，完全向量化实现。
-        """
-        if points.shape[0] == 0:
-            return points
+            """
+            高性能点云坐标系转换，并在智能体坐标系下进行高度过滤。
+            """
+            if points.shape[0] == 0:
+                return points
 
-        # 预计算四元数到旋转矩阵的转换，避免重复计算
-        x, y, z, w = agent_rot_quat
-        
-        # --- 优化的GPU加速路径 ---
-        if self.use_gpu and points.shape[0] > 50:  # 降低GPU使用阈值
-            points_tensor = to_torch(points, device=self.device, dtype=self.dtype)
-            agent_pos_tensor = to_torch(agent_pos, device=self.device, dtype=self.dtype)
+            # 获取相对于智能体的高度过滤范围
+            min_h, max_h = self.height_filter_range
             
-            # 1. 相机到智能体坐标系（预计算的旋转矩阵）
-            points_agent_frame = points_tensor @ self._cam_to_agent_rot_torch.T
+            # 预计算四元数到旋转矩阵的转换
+            x, y, z, w = agent_rot_quat
             
-            # 2. 四元数到旋转矩阵的向量化计算
-            # 避免逐个元素计算，使用向量化操作
-            xx, yy, zz = x*x, y*y, z*z
-            xy, xz, yz = x*y, x*z, y*z
-            xw, yw, zw = x*w, y*w, z*w
-            
-            rot_mat = torch.tensor([
-                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
-                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
-                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
-            ], device=self.device, dtype=self.dtype)
-            
-            # 3. 批量变换：旋转 + 平移
-            world_points = points_agent_frame @ rot_mat.T + agent_pos_tensor
-            return to_numpy(world_points)
+            # --- 优化的GPU加速路径 ---
+            if self.use_gpu and points.shape[0] > 50:
+                points_tensor = to_torch(points, device=self.device, dtype=self.dtype)
+                agent_pos_tensor = to_torch(agent_pos, device=self.device, dtype=self.dtype)
+                
+                # 1. 相机到智能体坐标系
+                points_agent_frame = points_tensor @ self._cam_to_agent_rot_torch.T
+                
+                # 2. 【新增】在智能体坐标系下进行高度过滤
+                agent_frame_heights = points_agent_frame[:, 1]
+                height_mask = (agent_frame_heights >= min_h) & (agent_frame_heights <= max_h)
+                
+                # 如果过滤后没有点，则提前返回
+                if not torch.any(height_mask):
+                    return np.empty((0, 3))
+                    
+                filtered_points_agent = points_agent_frame[height_mask]
+                
+                # 3. 四元数到旋转矩阵的向量化计算
+                xx, yy, zz = x*x, y*y, z*z
+                xy, xz, yz = x*y, x*z, y*z
+                xw, yw, zw = x*w, y*w, z*w
+                
+                rot_mat = torch.tensor([
+                    [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
+                    [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
+                    [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
+                ], device=self.device, dtype=self.dtype)
+                
+                # 4. 批量变换：使用过滤后的点进行旋转 + 平移
+                world_points = filtered_points_agent @ rot_mat.T + agent_pos_tensor
+                return to_numpy(world_points)
 
-        # --- 优化的CPU路径 ---
-        else:
-            # 1. 相机到智能体坐标系
-            points_agent_frame = points @ self._cam_to_agent_rot_np.T
-            
-            # 2. 四元数到旋转矩阵（向量化计算）
-            xx, yy, zz = x*x, y*y, z*z
-            xy, xz, yz = x*y, x*z, y*z
-            xw, yw, zw = x*w, y*w, z*w
-            
-            rot_mat = np.array([
-                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
-                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
-                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
-            ], dtype=np.float32)
+            # --- 优化的CPU路径 ---
+            else:
+                # 1. 相机到智能体坐标系
+                points_agent_frame = points @ self._cam_to_agent_rot_np.T
+                
+                # 2. 【新增】在智能体坐标系下进行高度过滤
+                agent_frame_heights = points_agent_frame[:, 1]
+                height_mask = (agent_frame_heights >= min_h) & (agent_frame_heights <= max_h)
 
-            # 3. 批量变换
-            world_points = points_agent_frame @ rot_mat.T + agent_pos
-            return world_points
+                # 如果过滤后没有点，则提前返回
+                if not np.any(height_mask):
+                    return np.empty((0, 3))
+
+                filtered_points_agent = points_agent_frame[height_mask]
+
+                # 3. 四元数到旋转矩阵（向量化计算）
+                xx, yy, zz = x*x, y*y, z*z
+                xy, xz, yz = x*y, x*z, y*z
+                xw, yw, zw = x*w, y*w, z*w
+                
+                rot_mat = np.array([
+                    [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
+                    [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
+                    [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
+                ], dtype=np.float32)
+
+                # 4. 批量变换：使用过滤后的点进行旋转 + 平移
+                world_points = filtered_points_agent @ rot_mat.T + agent_pos
+                return world_points
 
     def _world_to_map_coords(self, world_coords: np.ndarray) -> np.ndarray:
         """
@@ -411,31 +433,29 @@ class OccupancyMapBuilder:
             return np.stack([map_x, map_y], axis=1)
 
     def _project_to_map(self, points_world: np.ndarray, agent_pos: np.ndarray):
-        """
-        高性能地图投影，包含射线遮挡检测。
-        """
-        if points_world.shape[0] == 0:
-            return
+            """
+            高性能地图投影，包含射线遮挡检测。
+            假设传入的 points_world 已经是经过高度过滤的有效障碍物点。
+            """
+            if points_world.shape[0] == 0:
+                return
 
-        # 更新智能体在地图上的坐标
-        agent_map_coords = self._world_to_map_coords(agent_pos.reshape(1, 3))[0]
-        self.agent_map_coords = (int(agent_map_coords[0]), int(agent_map_coords[1]))
-        
-        # 转换点云到地图坐标
-        map_coords = self._world_to_map_coords(points_world)
-        
-        # 1. 向量化标记障碍物
-        min_h, max_h = self.height_filter_range
-        obstacle_mask = (points_world[:, 1] >= min_h) & (points_world[:, 1] <= max_h)
-        
-        if np.any(obstacle_mask):
-            obstacle_coords = map_coords[obstacle_mask]
-            # 使用advanced indexing批量更新
-            self.grid_map[obstacle_coords[:, 1], obstacle_coords[:, 0]] = 0
-        
-        # 2. 高性能射线绘制（包含遮挡检测）
-        if len(map_coords) > 0:
-            self._vectorized_ray_casting_with_occlusion(map_coords, self.agent_map_coords)
+            # 更新智能体在地图上的坐标
+            agent_map_coords = self._world_to_map_coords(agent_pos.reshape(1, 3))[0]
+            self.agent_map_coords = (int(agent_map_coords[0]), int(agent_map_coords[1]))
+            
+            # 转换点云到地图坐标
+            map_coords = self._world_to_map_coords(points_world)
+            
+            # 1. 【简化】直接标记所有传入的点为障碍物
+            if map_coords.shape[0] > 0:
+                # 使用advanced indexing批量更新
+                # 注意：map_coords[:, 1]是y（行），map_coords[:, 0]是x（列）
+                self.grid_map[map_coords[:, 1], map_coords[:, 0]] = 0
+            
+            # 2. 高性能射线绘制（包含遮挡检测）
+            if len(map_coords) > 0:
+                self._vectorized_ray_casting_with_occlusion(map_coords, self.agent_map_coords)
 
     def _vectorized_ray_casting_with_occlusion(self, target_points: np.ndarray, agent_point: Tuple[int, int]):
         """
