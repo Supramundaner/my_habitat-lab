@@ -9,7 +9,7 @@ instead of using subprocess calls, allowing for better integration and debugging
 Usage:
     python run_eval.py eval_config.json
 """
-
+import traceback
 import os
 import sys
 import json
@@ -461,12 +461,17 @@ class EpisodeEvaluator:
             os.chdir(original_cwd)
 
     def _evaluate_navigation_success(self, episode_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Evaluate navigation success based on distance to target viewpoints."""
+        """
+        Evaluate navigation success based on geodesic distance to target viewpoints,
+        mimicking the logic from ovon-nav.py.
+        """
+        sim = None  # 初始化 sim 变量
         try:
             print("\n" + "="*60)
-            print("EVALUATING NAVIGATION SUCCESS")
+            print("EVALUATING NAVIGATION SUCCESS (GEODESIC METHOD)")
             print("="*60)
 
+            # --- 1. 获取评估所需数据 ---
             video_report_path = self.output_dir / "video" / "execution_report.json"
             if not video_report_path.exists():
                 raise FileNotFoundError(f"Video report not found: {video_report_path}")
@@ -476,51 +481,111 @@ class EpisodeEvaluator:
 
             final_position = np.array(video_report['final_agent_state']['position'])
             start_position = np.array(episode_data['start_position'])
-
+            # 从报告中获取实际行走距离，如果不存在则估算
+            episode_cum_distance = video_report['execution_stats'].get('total_distance', 0.0)
+            if episode_cum_distance == 0.0:
+                print("Warning: 'total_distance' not in report. Using Euclidean distance for path length.")
+                episode_cum_distance = np.linalg.norm(final_position - start_position)
+                
             view_points = [np.array(vp['agent_state']['position']) for goal in episode_data['goals'] for vp in goal.get('view_points', [])]
             if not view_points:
                 print("⚠ No viewpoints found in goals, using goal positions instead")
                 view_points = [np.array(goal['position']) for goal in episode_data['goals'] if 'position' in goal]
             if not view_points:
                 raise ValueError("No target viewpoints or positions found in goals")
-
-            print(f"Final agent position: {final_position}")
-            print(f"Number of target viewpoints: {len(view_points)}")
-
-            distances = [np.linalg.norm(final_position - vp) for vp in view_points]
-            min_distance = min(distances) if distances else float('inf')
-
-            success_threshold = self.config['evaluation']['success_distance_threshold']
-            success = min_distance <= success_threshold
-
-            episode_distance = video_report['execution_info'].get('total_distance', np.linalg.norm(final_position - start_position))
             
-            # Simplified SPL - proper SPL requires a pathfinder for optimal_distance
-            optimal_distance = np.linalg.norm(view_points[np.argmin(distances)] - start_position) if distances else float('inf')
-            spl = (optimal_distance / max(optimal_distance, episode_distance)) if success and optimal_distance > 0 else 0.0
+            scene_file = self.config['scene']['scene_file']
+            success_threshold = self.config['evaluation'].get('success_distance_threshold', 0.25) # 使用配置文件中的阈值，默认为0.25
+
+            # --- 2. 初始化一个临时的模拟器用于寻路 ---
+            print(f"Initializing temporary simulator with scene: {scene_file}")
+            sim_settings = {
+                "scene": scene_file,
+                "default_agent": 0,
+                "sensor_height": 1.5,
+                "width": 128,
+                "height": 128,
+            }
+            sim_cfg = habitat_sim.SimulatorConfiguration()
+            sim_cfg.scene_id = sim_settings["scene"]
+            agent_cfg = habitat_sim.AgentConfiguration()
+            
+            cfg = habitat_sim.Configuration(sim_cfg, [agent_cfg])
+            sim = habitat_sim.Simulator(cfg)
+            path_finder = sim.pathfinder
+            
+            # --- 3. 计算测地线距离 ---
+            # 计算起点到目标的测地线距离 (L*)
+            path_start = habitat_sim.MultiGoalShortestPath()
+            path_start.requested_start = start_position
+            path_start.requested_ends = view_points
+            if path_finder.find_path(path_start):
+                start_end_geo_distance = path_start.geodesic_distance
+            else:
+                print("Warning: Goal is not navigable from start position.")
+                start_end_geo_distance = np.inf
+
+            # 计算智能体终点到目标的测地线距离 (d_g)
+            path_agent = habitat_sim.MultiGoalShortestPath()
+            path_agent.requested_start = final_position
+            path_agent.requested_ends = view_points
+            if path_finder.find_path(path_agent):
+                agent_end_geo_distance = path_agent.geodesic_distance
+            else:
+                print("Warning: Goal is not navigable from agent's final position.")
+                agent_end_geo_distance = np.inf
+                
+            # --- 4. 计算 SR 和 SPL ---
+            if start_end_geo_distance == np.inf:
+                # 如果目标本身就不可达，我们认为任务“成功”是平凡的
+                sr = 1.0
+                spl = 1.0
+            elif agent_end_geo_distance == np.inf:
+                # 如果智能体走到了一个无法到达目标点的地方
+                sr = 0.0
+                spl = 0.0
+            else:
+                # 标准情况
+                sr = 1.0 if agent_end_geo_distance <= success_threshold else 0.0
+                if sr > 0:
+                    spl = start_end_geo_distance / max(start_end_geo_distance, episode_cum_distance)
+                else:
+                    spl = 0.0
 
             evaluation_results = {
-                "success": success,
-                "min_distance_to_target": min_distance,
-                "success_threshold": success_threshold,
+                "sr": sr,
                 "spl": spl,
+                "success": bool(sr), # 保留旧的 'success' 字段以兼容
+                "geodesic_distance_to_target": agent_end_geo_distance,
+                "optimal_geodesic_distance": start_end_geo_distance,
+                "path_length": episode_cum_distance,
+                "success_threshold": success_threshold,
                 "final_position": final_position.tolist(),
                 "start_position": start_position.tolist(),
-                "target_viewpoints": [vp.tolist() for vp in view_points],
-                "episode_distance": episode_distance,
                 "object_category": episode_data['object_category']
             }
 
-            print(f"✓ Navigation Success: {success}")
-            print(f"  Distance to target: {min_distance:.3f}m (threshold: {success_threshold}m)")
+            print(f"✓ Evaluation Complete (Geodesic Method)")
+            print(f"  Success (SR): {sr}")
             print(f"  SPL: {spl:.3f}")
+            print(f"  Geodesic distance to target: {agent_end_geo_distance:.3f}m (threshold: {success_threshold}m)")
+            print(f"  Optimal geodesic distance: {start_end_geo_distance:.3f}m")
+            print(f"  Actual path length: {episode_cum_distance:.3f}m")
+            
             return evaluation_results
 
         except Exception as e:
             error_msg = f"Failed to evaluate navigation success: {e}"
             self.results["errors"].append(error_msg)
             print(f"✗ {error_msg}")
-            return {"success": False, "error": error_msg, "min_distance_to_target": float('inf'), "spl": 0.0}
+            traceback.print_exc()
+            return {"sr": 0.0, "spl": 0.0, "success": False, "error": error_msg}
+        
+        finally:
+            # 确保模拟器被正确关闭
+            if sim:
+                sim.close()
+                print("Temporary simulator closed.")
 
     def _save_results(self):
         """Save final evaluation results."""
@@ -573,9 +638,9 @@ class EpisodeEvaluator:
             print(f"\nEvaluation Summary:")
             print(f"  Episode ID: {self.config['episode']['episode_id']}")
             print(f"  Object Category: {episode_data['object_category']}")
-            print(f"  Success: {'✓' if eval_res.get('success') else '✗'}")
-            print(f"  Distance to target: {eval_res.get('min_distance_to_target', float('inf')):.3f}m")
+            print(f"  Success (SR): {'✓' if eval_res.get('sr', 0.0) > 0 else '✗'} ({eval_res.get('sr', 0.0):.1f})")
             print(f"  SPL: {eval_res.get('spl', 0.0):.3f}")
+            print(f"  Geodesic distance to target: {eval_res.get('geodesic_distance_to_target', float('inf')):.3f}m")
             print(f"\nOutput files:")
             print(f"  Video: {self.output_dir}/output.mp4")
             print(f"  Results: {self.output_dir}/output.json")
