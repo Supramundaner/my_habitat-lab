@@ -147,7 +147,39 @@ class HabitatSimulator:
         # 将路径点转换为numpy数组列表返回
         return [np.array(p) for p in path.points]
     
-    
+    def _snap_to_navmesh(self, position: np.ndarray, island_index: int = -1) -> Optional[np.ndarray]:
+        """
+        将一个3D位置点吸附到最近的可导航网格上。
+        
+        Args:
+            position: 期望的3D位置 [x, y, z]。
+            island_index: 导航网格岛屿的索引，-1表示在所有岛屿中搜索。
+        
+        Returns:
+            吸附到导航网格上的3D坐标 [x, y, z]，如果无法找到可导航点则返回None。
+        """
+        if not self.sim.pathfinder.is_loaded:
+            print("错误: 导航网格未加载，无法执行吸附操作。")
+            return None
+        
+        snapped_point = self.sim.pathfinder.snap_point(position, island_index=island_index)
+        
+        # 检查吸附后的点是否真正可导航
+        if self.sim.pathfinder.is_navigable(snapped_point):
+            snapped_pos_np = np.array(snapped_point, dtype=np.float32)
+            distance_moved = np.linalg.norm(snapped_pos_np - position)
+            
+            # 如果移动距离大于一个很小的值，就打印提示信息
+            if distance_moved > 1e-4:
+                print(f"提示: 初始位置已吸附到导航网格。")
+                print(f"  - 原始位置: {position}")
+                print(f"  - 吸附后位置: {snapped_pos_np}")
+                print(f"  - 移动距离: {distance_moved:.4f} 米")
+            
+            return snapped_pos_np
+        else:
+            print(f"警告: 无法将位置 {position} 吸附到任何可导航点。")
+            return None
     
     def _ensure_navmesh_loaded(self):
         """
@@ -208,63 +240,71 @@ class HabitatSimulator:
             import traceback
             print("详细错误信息:")
             traceback.print_exc()
-    
     def setup_scene_and_agent(self, initial_state: Dict[str, Any], agent_state: Optional[Dict[str, Any]] = None):
-        """
-        设置场景和智能体
-        支持传统的2D位置+yaw角度格式和新的3D位置+四元数格式
-        
-        Args:
-            initial_state: 传统初始状态配置，包含2D position和yaw rotation
-            agent_state: 新的3D初始状态配置，包含3D position和四元数rotation
-        """
-        # 打印导航网格信息用于调试
-        self.print_navmesh_info()
-        
-        # 确定使用哪种格式的初始状态
-        if agent_state is not None:
-            print("使用3D agent_state格式初始化")
-            use_3d_format = True
-            position_3d = np.array(agent_state['position'], dtype=np.float32)
-            rotation_quat = np.array(agent_state['rotation'], dtype=np.float32)
-        else:
-            print("使用传统initial_state格式初始化")
-            use_3d_format = False
-            position_2d = initial_state['position']
-            rotation_yaw = initial_state['rotation']
-        
-        # 1. 生成topdown地图 - 根据格式选择渲染方式
-        if use_3d_format:
-            self._generate_single_floor_topdown_map(position_3d)
-        else:
-            self._generate_topdown_map()
-        
-        # 2. 加载物理机器人
-        if os.path.exists(self.config['scene']['robot_urdf']):
-            if use_3d_format:
-                initial_3d_pos = position_3d
-            else:
-                initial_3d_pos = self._convert_2d_to_3d(position_2d[0], position_2d[1])
+            """
+            设置场景和智能体。
+            在设置智能体位置前，会先将其吸附到最近的可导航网格点。
             
-            if initial_3d_pos is not None:
-                self._load_physical_robot(self.config['scene']['robot_urdf'], initial_3d_pos)
+            Args:
+                initial_state: 传统初始状态配置，包含2D position和yaw rotation。
+                agent_state: 新的3D初始状态配置，包含3D position和四元数rotation。
+            """
+            self.print_navmesh_info()
+            
+            snapped_position = None
+            rotation_quat = None
+            rotation_yaw = None
+            
+            # 确定使用哪种格式的初始状态，并进行吸附操作
+            if agent_state is not None:
+                print("使用3D agent_state格式初始化...")
+                initial_position_3d = np.array(agent_state['position'], dtype=np.float32)
+                rotation_quat = np.array(agent_state['rotation'], dtype=np.float32)
+                
+                # --- 新增：吸附到Navmesh ---
+                snapped_position = self._snap_to_navmesh(initial_position_3d)
+                if snapped_position is None:
+                    print("错误: 无法将初始3D位置对齐到导航网格，初始化失败。")
+                    return
+                
+                self._generate_single_floor_topdown_map(snapped_position)
+                
             else:
-                print("警告: 初始位置不可导航，未加载物理机器人")
-        else:
-            print(f"警告: URDF文件不存在: {self.config['scene']['robot_urdf']}")
-        
-        # 3. 设置初始位置和朝向
-        if use_3d_format:
-            self.set_robot_pose(position_3d, rotation_quat)
-            print(f"智能体初始化到3D位置: {position_3d}, 四元数旋转: {rotation_quat}")
-        else:
-            initial_3d_pos = self._convert_2d_to_3d(position_2d[0], position_2d[1])
-            if initial_3d_pos is not None:
-                initial_rotation = self._yaw_to_quaternion(rotation_yaw)
-                self.set_robot_pose(initial_3d_pos, initial_rotation)
-                print(f"智能体初始化到位置: {initial_3d_pos}, 朝向: {rotation_yaw}度")
+                print("使用传统initial_state格式初始化...")
+                position_2d = initial_state['position']
+                rotation_yaw = initial_state['rotation']
+                
+                # --- 修改：使用新的吸附逻辑 ---
+                # 构造一个临时的3D点来进行吸附。Y值可以先用0或者场景中心Y值。
+                # 我们先生成地图，这样就有场景中心了。
+                self._generate_topdown_map() 
+                temp_y = self.scene_center[1] if self.scene_center is not None else 0.0
+                # 注意：initial_state的position通常是(x, z)
+                temp_3d_pos = np.array([position_2d[0], temp_y, position_2d[1]], dtype=np.float32)
+                
+                snapped_position = self._snap_to_navmesh(temp_3d_pos)
+                if snapped_position is None:
+                    print("错误: 无法将初始2D位置对齐到导航网格，初始化失败。")
+                    return
+
+                rotation_quat = self._yaw_to_quaternion(rotation_yaw)
+
+            # 1. 生成topdown地图 (对于2D情况，已在上面完成)
+            # (对于3D情况，已在上面完成)
+
+            # 2. 加载物理机器人
+            if os.path.exists(self.config['scene']['robot_urdf']):
+                self._load_physical_robot(self.config['scene']['robot_urdf'], snapped_position)
             else:
-                print("错误: 无法将智能体放置到指定初始位置")
+                print(f"警告: URDF文件不存在: {self.config['scene']['robot_urdf']}")
+            
+            # 3. 设置初始位置和朝向 (使用吸附后的位置)
+            self.set_robot_pose(snapped_position, rotation_quat)
+            
+            if agent_state:
+                print(f"智能体初始化到吸附后3D位置: {snapped_position}, 四元数旋转: {rotation_quat}")
+            else:
+                print(f"智能体初始化到吸附后位置: {snapped_position}, 朝向: {rotation_yaw}度")
     
     def _generate_topdown_map(self) -> None:
         """
