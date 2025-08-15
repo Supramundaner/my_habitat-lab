@@ -53,6 +53,10 @@ class ActionProcessor:
         self.waypoint_distance = config.get('navigation', {}).get('waypoint_distance', 1.5)
         self.destination_distance = config.get('navigation', {}).get('destination_distance', 0.8)
         
+        # Time step跟踪参数
+        self.time_steps_num = config.get('agent', {}).get('time_steps_num', 10)
+        self.min_displacement = config.get('agent', {}).get('min_displacement', 1.0)
+        
         # 初始化物体检测器
         self.object_detector = ObjectDetector(config)
         
@@ -62,6 +66,8 @@ class ActionProcessor:
         print(f"视频帧率: {self.fps} fps")
         print(f"中间waypoint距离: {self.waypoint_distance} m")
         print(f"最终目标距离: {self.destination_distance} m")
+        print(f"Time step检测窗口: {self.time_steps_num} steps")
+        print(f"最小位移阈值: {self.min_displacement} m")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
         print(f"物体检测: {'启用' if self.object_detector.is_enabled() else '禁用'}")
     
@@ -107,13 +113,32 @@ class ActionProcessor:
             success = result if isinstance(result, bool) else result.get('success', False)
             
             if not success:
+                # 根据动作类型确定失败原因
+                if action.get('type') == 'move_to':
+                    reason = 'agent_stuck'  # move_to失败通常是因为卡住
+                else:
+                    reason = 'action_failed'  # 其他动作失败
+                    
                 collision_action = {
                     'index': i,
                     'action': action,
-                    'reason': 'collision_detected'
+                    'reason': reason
                 }
-                print(f"在第 {i+1} 个动作处检测到碰撞，停止执行")
-                break
+                
+                if reason == 'agent_stuck':
+                    print(f"在第 {i+1} 个动作处检测到Agent卡住，停止执行")
+                    # 如果是最后一个move_to动作，则终止整个序列
+                    if is_last_move_to:
+                        print(f"最后一个move_to动作失败，终止动作序列")
+                        break
+                    else:
+                        print(f"跳过当前move_to动作，继续执行下一个动作")
+                        # 不break，继续执行下一个动作
+                        collision_action = None  # 重置collision_action，因为我们要继续执行
+                        continue
+                else:
+                    print(f"在第 {i+1} 个动作处执行失败，停止执行")
+                    break
             else:
                 completed_actions.append(action)
                 print(f"动作 {i+1} 执行完成")
@@ -215,6 +240,10 @@ class ActionProcessor:
         target_found = False
         target_locked = False  # 新增：目标锁定标志
         locked_target_pos = None  # 新增：锁定的目标位置
+        
+        # Time step跟踪变量
+        time_step_count = 0
+        position_history = []  # 存储最近time_steps_num个time step的位置
         
         # 1. 获取当前机器人状态
         current_state = self.simulator.get_robot_state()
@@ -324,6 +353,9 @@ class ActionProcessor:
                 
             action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
             
+            # 记录执行discrete action前的位置
+            pre_action_pos = current_pos.copy()
+            
             # 执行低层动作
             if action_name == "turn_left":
                 self._handle_turn_left({'angle': action_value})
@@ -353,10 +385,33 @@ class ActionProcessor:
                 # 执行移动到目标位置
                 self._animate_movement(current_pos, end_pos)
             
+            # Time step跟踪 - 每执行一个discrete action计为一个time step
+            time_step_count += 1
+            
             # 获取执行动作后的状态
             current_state = self.simulator.get_robot_state()
             current_pos = current_state['position']
             current_rot = current_state['rotation']
+            
+            # 更新位置历史
+            position_history.append(current_pos.copy())
+            
+            # 保持位置历史长度不超过time_steps_num
+            if len(position_history) > self.time_steps_num:
+                position_history.pop(0)
+            
+            # 检查是否卡住（在time_steps_num个time step窗口内位移小于min_displacement）
+            if len(position_history) >= self.time_steps_num:
+                start_pos_window = position_history[0]
+                end_pos_window = position_history[-1]
+                displacement_in_window = np.linalg.norm(end_pos_window - start_pos_window)
+                
+                print(f"Time step {time_step_count}: 最近{self.time_steps_num}步位移: {displacement_in_window:.3f}m")
+                
+                if displacement_in_window < self.min_displacement:
+                    print(f"[STUCK] Agent在最近{self.time_steps_num}个time step中位移({displacement_in_window:.3f}m)小于阈值({self.min_displacement}m)，认为已卡住")
+                    print(f"停止当前move_to动作")
+                    return False  # 返回False表示move_to动作失败，会触发进行下一个动作
             
             # 重新获取深度传感器数据并更新地图
             observation = self.simulator.get_observation()
@@ -372,15 +427,6 @@ class ActionProcessor:
             current_state = self.simulator.get_robot_state()
             current_observation = self.simulator.get_observation()
             self.composer.add_frame(robot_state=current_state, observation=current_observation)
-            
-            # 检查是否卡住（位置没有变化）
-            if iteration > 1:
-                pos_change = np.linalg.norm(current_pos - start_pos)
-                if pos_change < 0.01:  # 如果位置变化小于1cm
-                    print(f"[WARNING] 机器人可能卡住，位置变化: {pos_change:.3f}m")
-                    if iteration > 10:  # 如果连续10次迭代都卡住
-                        print(f"[ERROR] 机器人卡住，停止导航")
-                        return False
         
         print(f"[ERROR] 达到最大迭代次数 {max_iterations}，导航失败")
         return False
