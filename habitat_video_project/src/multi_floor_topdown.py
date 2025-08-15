@@ -202,15 +202,33 @@ def find_target_floor(position: np.ndarray, floor_extents: List[Dict]) -> Option
         floor_extents: 楼层范围信息列表
     
     Returns:
-        楼层索引，如果未找到则返回None
+        楼层索引，如果未找到则返回最近的楼层
     """
     point_y = position[1]
+    closest_floor_idx = None
+    min_distance = float('inf')
+    
     for i, fext in enumerate(floor_extents):
+        # 检查是否在楼层范围内
         if fext['min'] <= point_y <= fext['max']:
             print(f"Position Y ({point_y:.2f}) is within floor {i} range Y=[{fext['min']:.2f}, {fext['max']:.2f}]")
             return i
+        
+        # 计算到楼层最小高度的距离
+        distance_to_min = abs(point_y - fext['min'])
+        if distance_to_min < min_distance:
+            min_distance = distance_to_min
+            closest_floor_idx = i
     
-    print(f"Warning: Position Y ({point_y:.2f}) does not fall within any detected floor ranges")
+    # 如果找到最近楼层
+    if closest_floor_idx is not None:
+        closest_fext = floor_extents[closest_floor_idx]
+        print(f"Warning: Position Y ({point_y:.2f}) not in any floor range")
+        print(f"  - Assigning to closest floor {closest_floor_idx} (Y-min={closest_fext['min']:.2f}, distance={min_distance:.2f}m)")
+        return closest_floor_idx
+    
+    # 没有找到任何楼层的情况
+    print(f"Error: Position Y ({point_y:.2f}) not in any floor range and no floors available")
     return None
 
 
