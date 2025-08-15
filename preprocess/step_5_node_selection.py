@@ -256,7 +256,7 @@ def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[s
         nodes_in_room,
         config['graph_generation'].get('node_radius_pixels', 8)
     )
-    
+    original_graph=crop_image_to_bbox(topdown_image, room_bbox)
     # Save room with graph
     room_with_graph_path = os.path.join(output_dir, "room_with_graph.png")
     cv2.imwrite(room_with_graph_path, room_with_graph)
