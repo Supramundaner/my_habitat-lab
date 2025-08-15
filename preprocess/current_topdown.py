@@ -156,6 +156,8 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
     """创建正交投影的Habitat-Sim配置"""
     backend_cfg = habitat_sim.SimulatorConfiguration()
     backend_cfg.scene_id = scene_path
+    # Disable semantic mesh loading to avoid semantic file requirement
+    backend_cfg.load_semantic_mesh = False
 
     sensor_cfg = habitat_sim.CameraSensorSpec()
     sensor_cfg.resolution = [4096, 4096] # 方形传感器，简化计算
@@ -415,15 +417,38 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
             raise ValueError(f"Invalid floor index {target_floor}. Scene has {len(floor_extents)} floors (indices 0 to {len(floor_extents)-1}).")
     elif isinstance(target_floor, (list, tuple, np.ndarray)) and len(target_floor) == 3:
         point_y = target_floor[1]
+        # Add tolerance for floor matching (0.1m tolerance)
+        tolerance = 0.1
         for i, fext in enumerate(floor_extents):
-            # 使用楼层的 min 和 max Y坐标来判断点是否在该楼层内
-            if fext['min'] <= point_y <= fext['max']:
+            # 使用楼层的 min 和 max Y坐标来判断点是否在该楼层内，增加容差
+            if (fext['min'] - tolerance) <= point_y <= (fext['max'] + tolerance):
                 target_fext = fext
                 print(f"\nSuccessfully targeted floor {i} using coordinate {target_floor}.")
-                print(f"Point Y ({point_y:.2f}) is within floor range Y=[{fext['min']:.2f}, {fext['max']:.2f}]")
+                print(f"Point Y ({point_y:.2f}) is within floor range Y=[{fext['min']:.2f}, {fext['max']:.2f}] (with tolerance: ±{tolerance:.2f})")
                 break
         if target_fext is None:
-            raise ValueError(f"Point {target_floor} (Y={point_y:.2f}) does not fall within any detected navigable floor extents.")
+            # Find the closest floor if no exact match
+            closest_floor = None
+            min_distance = float('inf')
+            for i, fext in enumerate(floor_extents):
+                # Calculate distance to floor range
+                if point_y < fext['min']:
+                    distance = fext['min'] - point_y
+                elif point_y > fext['max']:
+                    distance = point_y - fext['max']
+                else:
+                    distance = 0  # Point is within range
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_floor = (i, fext)
+            
+            if closest_floor and min_distance < 0.1:  # Allow up to 0.5m deviation
+                target_fext = closest_floor[1]
+                print(f"\nUsing closest floor {closest_floor[0]} for coordinate {target_floor}.")
+                print(f"Point Y ({point_y:.2f}) is {min_distance:.2f}m away from floor range Y=[{closest_floor[1]['min']:.2f}, {closest_floor[1]['max']:.2f}]")
+            else:
+                raise ValueError(f"Point {target_floor} (Y={point_y:.2f}) does not fall within any detected navigable floor extents. Closest floor is {min_distance:.2f}m away.")
     else:
         raise TypeError("`target_floor` must be an integer (floor index) or a 3-element list/tuple (world coordinate).")
     # --- 楼层选择结束 ---
@@ -455,6 +480,8 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
 
         backend_cfg = habitat_sim.SimulatorConfiguration()
         backend_cfg.scene_id = glb_path
+        # Disable semantic mesh loading to avoid semantic file requirement
+        backend_cfg.load_semantic_mesh = False
         sensor_cfg = habitat_sim.CameraSensorSpec()
         sensor_cfg.resolution = [4096, 4096]
         sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
