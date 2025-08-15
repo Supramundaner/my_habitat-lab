@@ -321,7 +321,7 @@ def generate_output_paths(output_dir: str) -> Dict[str, str]:
     
     return {
         'video': os.path.join(output_dir, f"output_{timestamp}.mp4"),
-        'report': os.path.join(output_dir, f"report_{timestamp}.json")
+        'report': os.path.join(output_dir, f"execution_report.json")
     }
 
 
