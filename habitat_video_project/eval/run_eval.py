@@ -169,7 +169,7 @@ class EpisodeEvaluator:
                     "target_floor": self.config['preprocess']['scene_config']['target_floor'],
                     "target_coordinate": episode_data['start_position'],
                     "goal_object": episode_data['object_category'],
-                    "rotation": self.config['preprocess']['scene_config']['rotation'],
+                    "rotation": episode_data['start_rotation'],
                     "custom_ortho_scale": self.config['preprocess']['scene_config']['custom_ortho_scale'],
                     "target_coverage": self.config['preprocess']['scene_config']['target_coverage'],
                     "draw_coordinates": self.config['preprocess']['scene_config']['draw_coordinates']
