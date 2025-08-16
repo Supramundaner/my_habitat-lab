@@ -343,7 +343,7 @@ class ActionProcessor:
             # 根据是否为最后一个move_to动作选择距离阈值
             threshold = self.destination_distance if is_last_move_to else self.waypoint_distance
             if target_locked:
-                threshold = 0.25
+                threshold = 1.0
             threshold_type = "最终目标" if is_last_move_to or target_locked else "中间waypoint"
 
             print(f"到目标的距离: {dist_to_target:.2f}m, 阈值: {threshold:.2f}m ({threshold_type})")
