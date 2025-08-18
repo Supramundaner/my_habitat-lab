@@ -20,7 +20,7 @@ from .utils import euler_from_quaternion, convert_to_magnum_quat
 class VideoComposer:
     """处理视频合成和图像绘制的类"""
     
-    def __init__(self, simulator: HabitatSimulator, config: Dict[str, Any], output_path: str, show_histogram: bool = True):
+    def __init__(self, simulator: HabitatSimulator, config: Dict[str, Any], output_path: str, show_histogram: bool = False):
         """
         初始化视频合成器
         

@@ -1,6 +1,6 @@
 """
 ActionProcessor - 动作处理和动画逻辑类 (Controller)
-协调整个模拟过程，处理动作序列和动画
+协调整个模拟过程，处理目标导航和动画
 """
 
 import numpy as np
@@ -10,7 +10,6 @@ from typing import Dict, List, Any, Optional, Union
 from .simulator import HabitatSimulator
 from .video_composer import VideoComposer
 from .vfh_star import VFHStar
-from .object_detector import ObjectDetector
 from .utils import (
     slerp, 
     quaternion_to_direction_yaw, 
@@ -57,9 +56,6 @@ class ActionProcessor:
         self.time_steps_num = config.get('agent', {}).get('time_steps_num', 10)
         self.min_displacement = config.get('agent', {}).get('min_displacement', 1.0)
         
-        # 初始化物体检测器
-        self.object_detector = ObjectDetector(config)
-        
         print(f"动作处理器初始化完成")
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
@@ -69,14 +65,13 @@ class ActionProcessor:
         print(f"Time step检测窗口: {self.time_steps_num} steps")
         print(f"最小位移阈值: {self.min_displacement} m")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
-        print(f"物体检测: {'启用' if self.object_detector.is_enabled() else '禁用'}")
     
     def execute_sequence(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        执行动作序列
+        执行目标导航序列
         
         Args:
-            action_data: 动作数据字典，包含sequence和target
+            action_data: 动作数据字典，包含target_info和wall_mask_path
         
         Returns:
             执行结果报告
@@ -84,225 +79,119 @@ class ActionProcessor:
         completed_actions = []
         collision_action = None
         
-        # 从action_data中提取sequence和target
-        sequence = action_data['sequence']
-        target_object = action_data.get('target', None)
+        # 从action_data中提取target_info
+        target_info = action_data.get('target_info', None)
         
-        print(f"开始执行动作序列，共 {len(sequence)} 个动作，目标对象: {target_object}")
+        if target_info is None:
+            print("错误: 未找到target_info")
+            return {
+                'completed_actions': [],
+                'collision_action': {'reason': 'no_target_info', 'message': '未找到目标信息'},
+                'target_found': False
+            }
         
-        for i, action in enumerate(sequence):
-            print(f"执行动作 {i+1}/{len(sequence)}: {action}")
-            
-            # 判断是否为最后一个move_to动作
-            is_last_move_to = (i == len(sequence) - 1 and action.get('type') == 'move_to')
-            
-            # 执行动作，传递target_object和位置信息给需要的方法
-            result = self._execute_single_action(action, target_object, is_last_move_to)
-            
-            # 检查是否找到目标
-            if isinstance(result, dict) and result.get('target_found', False):
-                completed_actions.append(action)
-                print(f"目标物体已找到并到达，任务完成！")
-                return {
-                    'completed_actions': completed_actions,
-                    'collision_action': None,
-                    'target_found': True
-                }
-            
-            # 检查是否成功
-            success = result if isinstance(result, bool) else result.get('success', False)
-            
-            if not success:
-                # 根据动作类型和失败原因确定处理策略
-                if action.get('type') == 'move_to' and isinstance(result, dict):
-                    failure_reason = result.get('reason', 'unknown')
-                    failure_message = result.get('message', '未知错误')
-                    
-                    collision_action = {
-                        'index': i,
-                        'action': action,
-                        'reason': failure_reason,
-                        'message': failure_message
-                    }
-                    
-                    # 根据具体的失败原因决定是否继续
-                    if failure_reason == 'stuck':
-                        print(f"在第 {i+1} 个动作处检测到Agent卡住: {failure_message}")
-                        # 卡住情况：如果不是最后一个move_to，跳过继续执行下一个动作
-                        if is_last_move_to:
-                            print(f"最后一个move_to动作因卡住失败，终止动作序列")
-                            break
-                        else:
-                            print(f"跳过当前卡住的move_to动作，继续执行下一个动作")
-                            collision_action = None  # 重置，因为我们要继续执行
-                            continue
-                            
-                    elif failure_reason == 'target_unreachable':
-                        print(f"在第 {i+1} 个动作处目标不可达: {failure_message}")
-                        # 目标不可达：如果不是最后一个move_to，也跳过继续执行
-                        if is_last_move_to:
-                            print(f"最后一个move_to动作因目标不可达失败，终止动作序列")
-                            break
-                        else:
-                            print(f"跳过当前不可达的move_to动作，继续执行下一个动作")
-                            collision_action = None
-                            continue
-                            
-                    else:
-                        # 其他严重错误（系统错误、无可行路径、超时等）：直接终止
-                        print(f"在第 {i+1} 个动作处发生严重错误: {failure_message}")
-                        print(f"终止动作序列")
-                        break
-                        
-                else:
-                    # 非move_to动作失败，或者move_to动作返回简单的False
-                    collision_action = {
-                        'index': i,
-                        'action': action,
-                        'reason': 'action_failed',
-                        'message': '动作执行失败'
-                    }
-                    print(f"在第 {i+1} 个动作处执行失败，停止执行")
-                    break
-            else:
-                completed_actions.append(action)
-                print(f"动作 {i+1} 执行完成")
+        print(f"开始执行目标导航，目标信息: {target_info}")
         
-        print(f"动作序列执行完成，成功执行 {len(completed_actions)} 个动作")
+        # 执行目标导航
+        result = self._execute_target_navigation(target_info)
+        
+        # 检查是否成功
+        success = result.get('success', False)
+        
+        if success:
+            completed_actions.append({'type': 'target_navigation', 'target': target_info})
+            print(f"目标导航完成")
+        else:
+            collision_action = {
+                'reason': result.get('reason', 'navigation_failed'),
+                'message': result.get('message', '目标导航失败')
+            }
+            print(f"目标导航失败: {collision_action['message']}")
         
         return {
             'completed_actions': completed_actions,
             'collision_action': collision_action,
-            'target_found': False  # 默认未找到目标
+            'target_found': success
         }
     
-    def _execute_single_action(self, action: Dict[str, Any], target_object: str = None, is_last_move_to: bool = False) -> Union[bool, Dict[str, Any]]:
+    def _execute_target_navigation(self, target_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        执行单个动作
+        执行目标导航
         
         Args:
-            action: 动作字典
-            target_object: 目标物体名称，用于物体检测
-            is_last_move_to: 是否为最后一个move_to动作
+            target_info: 目标信息字典，包含coordinate和name
         
         Returns:
-            如果找到目标，返回包含target_found的字典
-            否则返回True表示成功，False表示失败（碰撞）
+            导航结果字典
         """
-        action_type = action['type']
-        params = action['params']
+        # 提取目标坐标
+        target_coord = target_info.get('coordinate', None)
+        target_name = target_info.get('name', 'unknown')
         
-        if action_type == 'move_to':
-            return self._handle_move_to(params, target_object, is_last_move_to)
-        elif action_type == 'turn_left':
-            return self._handle_turn_left(params)
-        elif action_type == 'turn_right':
-            return self._handle_turn_right(params)
-        elif action_type == 'pause':
-            return self._handle_pause(params)
-        else:
-            print(f"未知动作类型: {action_type}")
-            return False
-        """
-        处理移动到指定位置的动作
+        if target_coord is None:
+            return {
+                'success': False,
+                'reason': 'invalid_target_coordinate',
+                'message': '目标坐标无效'
+            }
         
-        Args:
-            params: 参数字典，包含x和z坐标
+        # 确保target_coord是[x, z]格式
+        if len(target_coord) != 2:
+            return {
+                'success': False,
+                'reason': 'invalid_target_coordinate',
+                'message': f'目标坐标格式错误，期望[x, z]，实际{target_coord}'
+            }
         
-        Returns:
-            True表示成功，False表示碰撞
-        """
-    """def _handle_move_to(self, params: Dict[str, Any]) -> bool:
-
-        target_x = params['x']
-        target_z = params['z']
+        target_x, target_z = target_coord
         
-        # 1. 获取当前机器人状态
-        current_state = self.simulator.get_robot_state()
-        current_pos = current_state['position']
-        current_rot = current_state['rotation']
+        print(f"开始导航到目标: {target_name} 位置: ({target_x}, {target_z})")
         
-        # 2. 计算目标3D位置
+        # 检查目标点是否可导航并获取其3D坐标
         target_y = self.simulator.get_navigable_y(target_x, target_z)
         if target_y is None:
-            print(f"目标位置 ({target_x}, {target_z}) 不可导航")
-            return False
-        
-        target_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
-        
-        # 3. 碰撞预检
-
-        
-        # 4. 计算朝向目标的旋转
-        target_rotation = quaternion_to_direction_yaw(current_pos, target_pos)
-        
-        # 5. 执行转向动画
-        self._animate_rotation(current_rot, target_rotation)
-        if self.simulator.check_straight_path_collision(current_pos, target_pos):
-            print(f"检测到从 {current_pos} 到 {target_pos} 的路径会发生碰撞")
-            return False
-        # 6. 执行移动动画
-        self._animate_movement(current_pos, target_pos)
-        
-        return True"""
-    def _handle_move_to(self, params: Dict[str, Any], target_object: str = None, is_last_move_to: bool = False) -> Union[bool, Dict[str, Any]]:
-        """
-        处理移动到指定位置的动作（使用路径规划）。
-        
-        Args:
-            params: 参数字典，包含x和z坐标
-            target_object: 目标物体名称，如果提供则进行物体检测
-            is_last_move_to: 是否为最后一个move_to动作（用于选择距离阈值）
-        
-        Returns:
-            如果找到目标并到达，返回包含target_found的字典
-            否则返回True表示成功，False表示失败（目标不可达或无路径）
-        """
-        target_x = params['x']
-        target_z = params['z']
-        
-        # 初始化目标检测标志
-        target_found = False
-        target_locked = False  # 新增：目标锁定标志
-        locked_target_pos = None  # 新增：锁定的目标位置
-        
-        # Time step跟踪变量
-        time_step_count = 0
-        position_history = []  # 存储最近time_steps_num个time step的位置
-        
-        # 1. 获取当前机器人状态
-        current_state = self.simulator.get_robot_state()
-        start_pos = current_state['position']
-
-        # 2. 检查目标点是否可导航并获取其3D坐标
-        target_y = self.simulator.get_navigable_y(target_x, target_z)
-        if target_y is None:
-            print(f"错误: 目标位置 ({target_x}, {target_z}) 不在可导航区域。")
             return {
                 'success': False,
                 'reason': 'target_unreachable',
                 'message': f'目标位置 ({target_x}, {target_z}) 不在可导航区域'
             }
         
-        end_pos = np.array([target_x, target_y, target_z], dtype=np.float32)
+        # 初始化VFH*算法
         target_pos_2d = np.array([target_x, target_z])
         vfh_config = self.config.get('vfh', {})
-
         vfh_star = VFHStar(target_pos_2d, vfh_config)
         
         # 将VFH实例传递给video_composer以启用histogram可视化
         self.composer.set_vfh_instance(vfh_star)
         
-        map_builder = self.composer.get_map_builder()
+        # 执行混合导航（A* + VFH*）
+        return self._execute_hybrid_navigation(target_pos_2d, target_name, vfh_star)
+    
+    def _execute_hybrid_navigation(self, target_pos_2d: np.ndarray, target_name: str, vfh_star: VFHStar) -> Dict[str, Any]:
+        """
+        执行混合导航（A* + VFH*）
         
-        if map_builder is None:
-            print("[ERROR] 无法获取地图构建器！")
-            return {
-                'success': False,
-                'reason': 'system_error',
-                'message': '无法获取地图构建器'
-            }
-
+        Args:
+            target_pos_2d: 目标位置 [x, z]
+            target_name: 目标名称
+            vfh_star: VFH*算法实例
+        
+        Returns:
+            导航结果
+        """
+        print(f"开始A* + VFH*混合导航到目标: {target_name}")
+        
+        # 导航参数
+        a_star_interval = 5  # 每5次行动重新规划A*
+        intermediate_distance = 1.5  # 中间目标点距离
+        final_target_threshold = 1.5  # 切换到最终目标的阈值
+        final_stop_threshold = 0.8  # 最终停止阈值
+        
+        # 跟踪变量
+        action_count = 0  # 行动计数器
+        current_path = None  # 当前A*路径
+        current_path_points = None  # 当前路径点（世界坐标）
+        
         max_iterations = 1000  # 防止无限循环
         iteration = 0
         prev_direction = None
@@ -314,76 +203,77 @@ class ActionProcessor:
             current_state = self.simulator.get_robot_state()
             current_pos = current_state['position']
             current_rot = current_state['rotation']
+            current_pos_2d = np.array([current_pos[0], current_pos[2]])
             
-            # 每次低层动作前进行物体检测
-            if target_object is not None and not target_locked:
-                detected_coords = self._detect_and_get_target_coords(target_object)
-                if detected_coords is not None:
-                    # 第一次检测到目标，锁定位置
-                    new_target_x, new_target_z = detected_coords[0], detected_coords[2]
-                    print(f"检测到目标 {target_object}，锁定导航目标: ({new_target_x}, {new_target_z})")
-                    
-                    # 锁定目标位置
-                    locked_target_pos = np.array([new_target_x, new_target_z])
-                    target_locked = True
-                    target_found = True
-                    
-                    # 更新VFH*的目标
-                    vfh_star.update_target(locked_target_pos)
+            # 计算到最终目标的距离
+            dist_to_final_target = np.sqrt((current_pos[0] - target_pos_2d[0])**2 + (current_pos[2] - target_pos_2d[1])**2)
             
-            # 使用锁定的目标位置（如果有的话）
-            if target_locked and locked_target_pos is not None:
-                current_target_x, current_target_z = locked_target_pos[0], locked_target_pos[1]
-            else:
-                current_target_x, current_target_z = target_x, target_z
+            print(f"迭代 {iteration}: 到最终目标距离: {dist_to_final_target:.2f}m")
             
-            # 计算到目标的距离（使用当前目标位置）
-            dist_to_target = np.sqrt((current_pos[0] - current_target_x)**2 + (current_pos[2] - current_target_z)**2)
+            # 检查是否到达最终目标
+            if dist_to_final_target < final_stop_threshold:
+                print(f"[SUCCESS] 成功到达最终目标位置 ({target_pos_2d[0]}, {target_pos_2d[1]})")
+                return {'success': True}
             
-            # 根据是否为最后一个move_to动作选择距离阈值
-            threshold = self.destination_distance if is_last_move_to else self.waypoint_distance
-            if target_locked:
-                threshold = 1.0
-            threshold_type = "最终目标" if is_last_move_to or target_locked else "中间waypoint"
-
-            print(f"到目标的距离: {dist_to_target:.2f}m, 阈值: {threshold:.2f}m ({threshold_type})")
-            
-            # 检查是否到达目标
-            if dist_to_target < threshold:
-                print(f"[SUCCESS] 成功到达目标位置 ({current_target_x}, {current_target_z})")
-                if target_found:
-                    # 如果找到了目标物体，返回包含target_found的字典
+            # 每5次行动（包括第一次）重新运行A*算法
+            if action_count % a_star_interval == 0:
+                print(f"重新规划A*路径 (行动次数: {action_count})")
+                current_path = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+                
+                if current_path is None:
                     return {
-                        'success': True,
-                        'target_found': True
+                        'success': False,
+                        'reason': 'no_a_star_path',
+                        'message': 'A*算法无法找到路径'
                     }
-                else:
-                    # 普通导航成功
-                    return True
+                
+                print(f"A*路径规划成功，路径点数: {len(current_path)}")
+            
+            # 确定当前VFH*目标
+            if dist_to_final_target < final_target_threshold:
+                # 距离最终目标很近，直接以最终目标为VFH*目标
+                vfh_target = target_pos_2d
+                target_type = "最终目标"
+            else:
+                # 使用A*路径上的中间目标点
+                vfh_target = self._get_intermediate_target(current_pos_2d, current_path, intermediate_distance)
+                if vfh_target is None:
+                    return {
+                        'success': False,
+                        'reason': 'no_intermediate_target',
+                        'message': '无法找到中间目标点'
+                    }
+                target_type = "中间目标"
+            
+            # 更新VFH*目标
+            vfh_star.update_target(vfh_target)
+            print(f"VFH*目标更新为: {target_type} ({vfh_target[0]:.2f}, {vfh_target[1]:.2f})")
             
             # 获取当前占用地图
             observation = self.simulator.get_observation()
             depth_observation = observation.get('depth')
             if depth_observation is None:
-                print("[ERROR] 无法获取深度传感器数据")
-                return False
+                return {
+                    'success': False,
+                    'reason': 'no_depth_data',
+                    'message': '无法获取深度传感器数据'
+                }
             
             # 更新占用地图
             agent_pose = {'position': current_pos, 'rotation': current_rot}
-            map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
+            self.map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
             
             # 从占用地图提取局部障碍物
             robot_pos_2d = np.array([current_pos[0], current_pos[2]])
-            obstacles = map_builder.get_obstacles_from_map(robot_pos_2d, vfh_star.sensor_range)
+            obstacles = self.map_builder.get_obstacles_from_map(robot_pos_2d, vfh_star.sensor_range)
             
             # 获取机器人朝向角度
-            robot_theta = map_builder.get_robot_theta_from_quaternion(current_rot)
+            robot_theta = self.map_builder.get_robot_theta_from_quaternion(current_rot)
             
             # VFH*计算最佳方向
             ideal_direction = vfh_star.get_best_direction(robot_pos_2d, robot_theta, obstacles, prev_direction)
             
             if ideal_direction is None:
-                print("[ERROR] VFH*无法找到可行方向！")
                 return {
                     'success': False,
                     'reason': 'no_feasible_path',
@@ -392,16 +282,13 @@ class ActionProcessor:
                 
             action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
             
-            # 记录执行discrete action前的位置
-            pre_action_pos = current_pos.copy()
-            
             # 执行低层动作
             if action_name == "turn_left":
                 self._handle_turn_left({'angle': action_value})
             elif action_name == "turn_right":
                 self._handle_turn_right({'angle': action_value})
             else:
-                # 获取当前机器人状态
+                # 前进动作
                 current_state = self.simulator.get_robot_state()
                 current_pos = current_state['position']
                 current_rot = current_state['rotation']
@@ -424,60 +311,369 @@ class ActionProcessor:
                 # 执行移动到目标位置
                 self._animate_movement(current_pos, end_pos)
             
-            # Time step跟踪 - 每执行一个discrete action计为一个time step
-            time_step_count += 1
+            # 增加行动计数器
+            action_count += 1
             
-            # 获取执行动作后的状态
-            current_state = self.simulator.get_robot_state()
-            current_pos = current_state['position']
-            current_rot = current_state['rotation']
-            
-            # 更新位置历史
-            position_history.append(current_pos.copy())
-            
-            # 保持位置历史长度不超过time_steps_num
-            if len(position_history) > self.time_steps_num:
-                position_history.pop(0)
-            
-            # 检查是否卡住（在time_steps_num个time step窗口内位移小于min_displacement）
-            if len(position_history) >= self.time_steps_num:
-                start_pos_window = position_history[0]
-                end_pos_window = position_history[-1]
-                displacement_in_window = np.linalg.norm(end_pos_window - start_pos_window)
-                
-                print(f"Time step {time_step_count}: 最近{self.time_steps_num}步位移: {displacement_in_window:.3f}m")
-                
-                if displacement_in_window < self.min_displacement:
-                    print(f"[STUCK] Agent在最近{self.time_steps_num}个time step中位移({displacement_in_window:.3f}m)小于阈值({self.min_displacement}m)，认为已卡住")
-                    print(f"停止当前move_to动作")
-                    return {
-                        'success': False,
-                        'reason': 'stuck',
-                        'message': f'Agent在{self.time_steps_num}个time step中位移{displacement_in_window:.3f}m < {self.min_displacement}m'
-                    }
-            
-            # 重新获取深度传感器数据并更新地图
-            observation = self.simulator.get_observation()
-            depth_observation = observation.get('depth')
-            if depth_observation is not None:
-                agent_pose = {'position': current_pos, 'rotation': current_rot}
-                map_builder.update_map(depth_observation, agent_pose, 90.0)
-                
             # 更新前一个方向
             prev_direction = ideal_direction
             
-            # 添加视频帧（传入当前机器人状态和观察数据）
+            # 添加视频帧
             current_state = self.simulator.get_robot_state()
             current_observation = self.simulator.get_observation()
             self.composer.add_frame(robot_state=current_state, observation=current_observation)
         
-        print(f"[ERROR] 达到最大迭代次数 {max_iterations}，导航失败")
         return {
             'success': False,
             'reason': 'max_iterations_exceeded',
             'message': f'达到最大迭代次数{max_iterations}，导航失败'
         }
+    
+    def _plan_a_star_path(self, start_pos: np.ndarray, goal_pos: np.ndarray) -> Optional[List[np.ndarray]]:
+        """
+        使用A*算法规划路径
         
+        Args:
+            start_pos: 起始位置 [x, z]
+            goal_pos: 目标位置 [x, z]
+        
+        Returns:
+            A*路径点列表（世界坐标），如果无路径则返回None
+        """
+        try:
+            print(f"[DEBUG] A*路径规划开始")
+            print(f"[DEBUG] 起始位置 (世界坐标): {start_pos}")
+            print(f"[DEBUG] 目标位置 (世界坐标): {goal_pos}")
+            
+            # 获取占用地图
+            if self.map_builder.grid_map is None:
+                print("[ERROR] 占用地图未初始化")
+                return None
+            
+            print(f"[DEBUG] 地图尺寸: {self.map_builder.grid_map.shape}")
+            print(f"[DEBUG] 地图分辨率: {self.map_builder.map_resolution}")
+            print(f"[DEBUG] 地图边界: {self.map_builder.topdown_map_bounds}")
+            
+            # 添加机器人半径padding
+            # padded_map = self._add_robot_padding()
+            padded_map = self.map_builder.grid_map.copy()
+            print(f"[DEBUG] Padding后地图尺寸: {padded_map.shape}")
+            
+            # 临时测试：尝试不使用padding的地图
+            print(f"[DEBUG] 临时测试：尝试不使用padding的地图")
+            
+            # no_padding_map = self.map_builder.grid_map.copy()
+            # no_padding_free_cells = np.sum(no_padding_map == 255)
+            #no_padding_unknown_cells = np.sum(no_padding_map == 128)
+            #print(f"[DEBUG] 无padding地图 - 空闲: {no_padding_free_cells}, 未知: {no_padding_unknown_cells}")
+            
+            # 统计地图状态
+            total_cells = padded_map.size
+            free_cells = np.sum(padded_map == 255)
+            occupied_cells = np.sum(padded_map == 0)
+            unknown_cells = np.sum(padded_map == 128)
+            print(f"[DEBUG] 地图统计 - 总单元格: {total_cells}, 空闲: {free_cells} ({free_cells/total_cells*100:.1f}%), 占用: {occupied_cells} ({occupied_cells/total_cells*100:.1f}%), 未知: {unknown_cells} ({unknown_cells/total_cells*100:.1f}%)")
+            
+            # 将世界坐标转换为地图坐标
+            start_map_coords = self.map_builder._world_to_map_coords(np.array([[start_pos[0], 0, start_pos[1]]]))
+            goal_map_coords = self.map_builder._world_to_map_coords(np.array([[goal_pos[0], 0, goal_pos[1]]]))
+            
+            start_pixel = (int(start_map_coords[0, 0]), int(start_map_coords[0, 1]))
+            goal_pixel = (int(goal_map_coords[0, 0]), int(goal_map_coords[0, 1]))
+            
+            print(f"[DEBUG] 起始位置 (像素坐标): {start_pixel}")
+            print(f"[DEBUG] 目标位置 (像素坐标): {goal_pixel}")
+            
+            # 检查像素坐标是否在地图范围内
+            if (start_pixel[0] < 0 or start_pixel[0] >= padded_map.shape[1] or 
+                start_pixel[1] < 0 or start_pixel[1] >= padded_map.shape[0]):
+                print(f"[ERROR] 起始像素坐标超出地图范围: {start_pixel}, 地图尺寸: {padded_map.shape}")
+                return None
+            
+            if (goal_pixel[0] < 0 or goal_pixel[0] >= padded_map.shape[1] or 
+                goal_pixel[1] < 0 or goal_pixel[1] >= padded_map.shape[0]):
+                print(f"[ERROR] 目标像素坐标超出地图范围: {goal_pixel}, 地图尺寸: {padded_map.shape}")
+                return None
+            
+            # 检查起点和终点是否可行走
+            start_value = padded_map[start_pixel[1], start_pixel[0]]
+            goal_value = padded_map[goal_pixel[1], goal_pixel[0]]
+            
+            print(f"[DEBUG] 起始点地图值: {start_value} (255=可行走, 0=障碍物, 128=未知)")
+            print(f"[DEBUG] 目标点地图值: {goal_value} (255=可行走, 0=障碍物, 128=未知)")
+            
+            if start_value == 0:
+                print(f"[ERROR] 起始点不可行走 (地图值: {start_value})")
+                return None
+            
+            if goal_value == 0:
+                print(f"[ERROR] 目标点不可行走 (地图值: {goal_value})")
+                return None
+            
+            # 运行A*算法
+            print(f"[DEBUG] 开始运行A*算法...")
+            
+            # 检查起点和终点之间的连通性
+            print(f"[DEBUG] 检查连通性...")
+            start_accessible = self._check_connectivity(start_pixel, padded_map)
+            goal_accessible = self._check_connectivity(goal_pixel, padded_map)
+            print(f"[DEBUG] 起点连通性: {start_accessible}, 终点连通性: {goal_accessible}")
+            
+            path_pixels = self._a_star_pathfinding(start_pixel, goal_pixel, padded_map)
+            
+            if not path_pixels:
+                print("[ERROR] A*算法未找到路径")
+                return None
+            
+            print(f"[DEBUG] A*算法找到路径，像素点数: {len(path_pixels)}")
+            
+            # 将像素坐标转换回世界坐标
+            path_world = []
+            for pixel in path_pixels:
+                world_coord = self._pixel_to_world_coord(pixel)
+                path_world.append(world_coord)
+            
+            print(f"[DEBUG] 路径规划完成，世界坐标点数: {len(path_world)}")
+            return path_world
+            
+        except Exception as e:
+            print(f"[ERROR] A*路径规划失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _add_robot_padding(self) -> np.ndarray:
+        """
+        为占用地图添加机器人半径padding
+        
+        Returns:
+            添加padding后的地图
+        """
+        from scipy import ndimage
+        
+        # 复制原地图
+        padded_map = self.map_builder.grid_map.copy()
+        
+        # 机器人半径（像素）
+        robot_radius_pixels = max(1, int(0.14 / self.map_builder.map_resolution))  # 0.14m机器人半径
+        
+        print(f"[DEBUG] 机器人半径: 0.14m")
+        print(f"[DEBUG] 地图分辨率: {self.map_builder.map_resolution}m/pixel")
+        print(f"[DEBUG] 机器人半径 (像素): {robot_radius_pixels}")
+        
+        # 统计padding前的地图状态
+        total_cells = padded_map.size
+        free_cells_before = np.sum(padded_map == 255)
+        occupied_cells_before = np.sum(padded_map == 0)
+        unknown_cells_before = np.sum(padded_map == 128)
+        
+        print(f"[DEBUG] Padding前 - 空闲: {free_cells_before} ({free_cells_before/total_cells*100:.1f}%), 占用: {occupied_cells_before} ({occupied_cells_before/total_cells*100:.1f}%), 未知: {unknown_cells_before} ({unknown_cells_before/total_cells*100:.1f}%)")
+        
+        # 对障碍物进行膨胀操作
+        kernel = np.ones((2 * robot_radius_pixels + 1, 2 * robot_radius_pixels + 1), dtype=np.uint8)
+        dilated = ndimage.binary_dilation(padded_map == 0, structure=kernel)
+        
+        # 更新地图：膨胀后的区域标记为障碍物
+        padded_map[dilated] = 0
+        
+        # 统计padding后的地图状态
+        free_cells_after = np.sum(padded_map == 255)
+        occupied_cells_after = np.sum(padded_map == 0)
+        unknown_cells_after = np.sum(padded_map == 128)
+        
+        print(f"[DEBUG] Padding后 - 空闲: {free_cells_after} ({free_cells_after/total_cells*100:.1f}%), 占用: {occupied_cells_after} ({occupied_cells_after/total_cells*100:.1f}%), 未知: {unknown_cells_after} ({unknown_cells_after/total_cells*100:.1f}%)")
+        print(f"[DEBUG] Padding减少了 {free_cells_before - free_cells_after} 个空闲单元格")
+        
+        return padded_map
+    
+
+    
+    def _a_star_pathfinding(self, start: tuple, goal: tuple, wall_mask: np.ndarray) -> List[tuple]:
+        """
+        A*路径规划算法
+        
+        Args:
+            start: 起始位置 (x, y) 像素坐标
+            goal: 目标位置 (x, y) 像素坐标
+            wall_mask: 占用地图，0=障碍物，255=可行走
+        
+        Returns:
+            路径点列表，如果无路径则返回空列表
+        """
+        import heapq
+        
+        # 检查起点和终点是否可行走（允许未知区域）
+        if wall_mask[start[1], start[0]] == 0 or wall_mask[goal[1], goal[0]] == 0:
+            return []
+        
+        # 优先级队列: (f_score, g_score, position)
+        open_set = [(0.0, 0.0, start)]
+        came_from = {}
+        g_score = {start: 0.0}
+        f_score = {start: self._euclidean_distance(start, goal)}
+        
+        visited = set()
+        iterations = 0
+        max_iterations = 200000000000  # 大幅增加最大迭代次数
+        
+        print(f"[DEBUG] A*算法开始，最大迭代次数: {max_iterations}")
+        
+        while open_set and iterations < max_iterations:
+            iterations += 1
+            
+            if iterations % 20000 == 0:
+                print(f"[DEBUG] A*迭代次数: {iterations}, 开放集大小: {len(open_set)}, 已访问节点: {len(visited)}")
+                # 如果开放集过大，可能路径不存在
+                if len(open_set) > 10000:
+                    print(f"[DEBUG] 开放集过大({len(open_set)})，可能路径不存在，提前终止")
+                    break
+            
+            current_f, current_g, current = heapq.heappop(open_set)
+            
+            if current in visited:
+                continue
+            
+            visited.add(current)
+            
+            if current == goal:
+                # 重建路径
+                path = []
+                while current in came_from:
+                    path.append(current)
+                    current = came_from[current]
+                path.append(start)
+                path.reverse()
+                
+                print(f"[DEBUG] A*算法成功找到路径，迭代次数: {iterations}, 访问节点数: {len(visited)}")
+                return path
+            
+            # 8连通邻居
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    
+                    neighbor = (current[0] + dx, current[1] + dy)
+                    
+                    # 检查边界
+                    if (0 <= neighbor[0] < wall_mask.shape[1] and 
+                        0 <= neighbor[1] < wall_mask.shape[0]):
+                        
+                        # 检查是否可行走
+                        if wall_mask[neighbor[1], neighbor[0]] in [255, 128]:  # 空闲区域或未知区域都可行走
+                            
+                            # 计算移动成本
+                            movement_cost = 1.414 if (dx != 0 and dy != 0) else 1.0
+                            tentative_g_score = g_score[current] + movement_cost
+                            
+                            if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                                came_from[neighbor] = current
+                                g_score[neighbor] = tentative_g_score
+                                f_score[neighbor] = tentative_g_score + self._euclidean_distance(neighbor, goal)
+                                heapq.heappush(open_set, (f_score[neighbor], tentative_g_score, neighbor))
+        
+        print(f"[DEBUG] A*算法未找到路径，迭代次数: {iterations}, 访问节点数: {len(visited)}")
+        print(f"[DEBUG] 开放集大小: {len(open_set)}")
+        return []
+    
+    def _euclidean_distance(self, p1: tuple, p2: tuple) -> float:
+        """计算欧几里得距离"""
+        return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+    
+    def _get_intermediate_target(self, current_pos: np.ndarray, path: List[np.ndarray], target_distance: float) -> Optional[np.ndarray]:
+        """
+        从A*路径上找到距离当前位置指定距离的中间目标点
+        
+        Args:
+            current_pos: 当前位置 [x, z]
+            path: A*路径点列表
+            target_distance: 目标距离
+        
+        Returns:
+            中间目标点 [x, z]，如果找不到则返回None
+        """
+        if not path or len(path) < 2:
+            return None
+        
+        # 找到路径上距离当前位置最近的点
+        min_dist = float('inf')
+        closest_idx = 0
+        
+        for i, path_point in enumerate(path):
+            dist = np.sqrt((current_pos[0] - path_point[0])**2 + (current_pos[1] - path_point[1])**2)
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = i
+        
+        # 从最近点开始，沿路径计算弧长
+        accumulated_distance = 0.0
+        
+        for i in range(closest_idx, len(path) - 1):
+            # 计算当前段长度
+            segment_length = np.sqrt(
+                (path[i+1][0] - path[i][0])**2 + (path[i+1][1] - path[i][1])**2
+            )
+            
+            # 如果加上这段长度超过目标距离
+            if accumulated_distance + segment_length >= target_distance:
+                # 计算插值比例
+                remaining_distance = target_distance - accumulated_distance
+                ratio = remaining_distance / segment_length
+                
+                # 插值得到中间目标点
+                intermediate_x = path[i][0] + ratio * (path[i+1][0] - path[i][0])
+                intermediate_z = path[i][1] + ratio * (path[i+1][1] - path[i][1])
+                
+                return np.array([intermediate_x, intermediate_z])
+            
+            accumulated_distance += segment_length
+        
+        # 如果路径总长度小于目标距离，返回最后一个点
+        return np.array(path[-1])
+    
+    def _pixel_to_world_coord(self, pixel: tuple) -> np.ndarray:
+        """
+        将像素坐标转换为世界坐标
+        
+        Args:
+            pixel: 像素坐标 (x, y)
+        
+        Returns:
+            世界坐标 [x, z]
+        """
+        # 使用map_builder的逆变换
+        world_x = (pixel[0] + 0.5) * self.map_builder.map_resolution + self.map_builder.topdown_map_bounds['top_left'][0]
+        world_z = (pixel[1] + 0.5) * self.map_builder.map_resolution + self.map_builder.topdown_map_bounds['top_left'][1]
+        
+        return np.array([world_x, world_z])
+    
+    def _check_connectivity(self, point: tuple, wall_mask: np.ndarray) -> int:
+        """
+        检查一个点的连通性（周围可行走区域的数量）
+        
+        Args:
+            point: 检查的点 (x, y)
+            wall_mask: 地图
+            
+        Returns:
+            周围可行走区域的数量
+        """
+        x, y = point
+        accessible_count = 0
+        
+        # 检查8连通邻居
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                
+                nx, ny = x + dx, y + dy
+                
+                # 检查边界
+                if (0 <= nx < wall_mask.shape[1] and 0 <= ny < wall_mask.shape[0]):
+                    if wall_mask[ny, nx] in [255, 128]:
+                        accessible_count += 1
+        
+        return accessible_count
     
     def _handle_turn_left(self, params: Dict[str, Any]) -> bool:
         """
@@ -558,6 +754,52 @@ class ActionProcessor:
         
         return True
     
+    def get_execution_stats(self) -> Dict[str, Any]:
+        """
+        获取执行统计信息
+        
+        Returns:
+            统计信息字典
+        """
+        return {
+            'total_frames': self.composer.get_frame_count(),
+            'total_duration': self.composer.get_frame_count() / self.fps,
+            'linear_speed': self.linear_speed,
+            'angular_speed': self.angular_speed,
+            'fps': self.fps
+        }
+    
+    def _animate_movement(self, start_pos: np.ndarray, end_pos: np.ndarray):
+        """
+        执行移动动画
+        
+        Args:
+            start_pos: 起始位置
+            end_pos: 结束位置
+        """
+        # 计算距离和动画时长
+        distance = np.linalg.norm(end_pos - start_pos)
+        duration = distance / self.linear_speed
+        num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
+        
+        
+        # 获取当前旋转（保持不变）
+        current_state = self.simulator.get_robot_state()
+        current_rot = current_state['rotation']
+        
+        # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
+        for frame in range(1, num_frames + 1):
+            t = frame / num_frames
+            
+            # 线性插值位置
+            interpolated_pos = start_pos + (end_pos - start_pos) * t
+            
+            # 更新机器人姿态
+            self.simulator.set_robot_pose(interpolated_pos, current_rot)
+            
+            # 添加视频帧
+            self.composer.add_frame()
+    
     def _animate_rotation(self, start_rot: np.ndarray, end_rot: np.ndarray):
         """
         执行旋转动画
@@ -600,157 +842,3 @@ class ActionProcessor:
             
             # 添加视频帧
             self.composer.add_frame()
-    
-    def _animate_movement(self, start_pos: np.ndarray, end_pos: np.ndarray):
-        """
-        执行移动动画
-        
-        Args:
-            start_pos: 起始位置
-            end_pos: 结束位置
-        """
-        # 计算距离和动画时长
-        distance = np.linalg.norm(end_pos - start_pos)
-        duration = distance / self.linear_speed
-        num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
-        
-        
-        # 获取当前旋转（保持不变）
-        current_state = self.simulator.get_robot_state()
-        current_rot = current_state['rotation']
-        
-        # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
-        for frame in range(1, num_frames + 1):
-            t = frame / num_frames
-            
-            # 线性插值位置
-            interpolated_pos = start_pos + (end_pos - start_pos) * t
-            
-            # 更新机器人姿态
-            self.simulator.set_robot_pose(interpolated_pos, current_rot)
-            
-            # 添加视频帧
-            self.composer.add_frame()
-    
-    def get_execution_stats(self) -> Dict[str, Any]:
-        """
-        获取执行统计信息
-        
-        Returns:
-            统计信息字典
-        """
-        return {
-            'total_frames': self.composer.get_frame_count(),
-            'total_duration': self.composer.get_frame_count() / self.fps,
-            'linear_speed': self.linear_speed,
-            'angular_speed': self.angular_speed,
-            'fps': self.fps
-        }
-    
-
-    
-    def _detect_and_get_target_coords(self, target_object: str) -> Optional[np.ndarray]:
-        """
-        执行物体检测并获取目标坐标
-        
-        Args:
-            target_object: 目标物体名称
-            
-        Returns:
-            目标3D坐标 [x, y, z] 或 None
-        """
-        if not self.object_detector.is_enabled():
-            print("物体检测器未启用")
-            return None
-        
-        try:
-            # 获取当前观察
-            observations = self.simulator.get_observation()
-            rgb_image = observations['rgb']
-            depth_image = observations['depth']
-            
-
-            # 获取相机参数（从配置和图像尺寸计算）
-            
-            height, width = rgb_image.shape[:2]
-            hfov = self.config.get('OCCUPANCY_MAP', {}).get('HFOV', 90.0)
-            hfov_rad = np.deg2rad(hfov)
-            
-            # 使用与map_builder相同的计算方式
-            fx = width / (2.0 * np.tan(hfov_rad / 2.0))
-            fy = fx  # 假设像素是正方形的
-            cx = width / 2.0
-            cy = height / 2.0
-            
-            camera_params = {
-                'fx': fx,
-                'fy': fy,
-                'cx': cx,
-                'cy': cy
-            }
-            
-            # 执行物体检测
-            target_position = self.object_detector.detect_and_get_target_coords(
-                rgb_image, depth_image, target_object, camera_params
-            )
-            print(target_object)
-            
-            if target_position is not None:
-                # 将相机坐标系转换为世界坐标系
-                # 这里需要根据实际的坐标系转换逻辑进行调整
-                world_position = self._camera_to_world_coords(target_position)
-                return world_position
-            
-            return None
-            
-        except Exception as e:
-            print(f"物体检测过程中发生错误: {e}")
-            return None
-    
-    def _camera_to_world_coords(self, camera_coords: np.ndarray) -> np.ndarray:
-        """
-        将相机坐标系转换为世界坐标系
-        
-        Args:
-            camera_coords: 相机坐标系下的3D坐标 [x, y, z]
-            
-        Returns:
-            世界坐标系下的3D坐标 [x, y, z]
-        """
-        try:
-            # 获取机器人当前状态
-            robot_state = self.simulator.get_robot_state()
-            robot_position = robot_state['position']
-            robot_rotation = robot_state['rotation']
-            
-            # 基于map_builder.py中的_transform_points_to_world函数实现
-            # 1. 相机到智能体坐标系的转换（绕X轴旋转180度）
-            cam_to_agent_rot = np.array([
-                [1,  0,  0],
-                [0, -1,  0],
-                [0,  0, -1]
-            ], dtype=np.float32)
-            
-            # 将相机坐标转换到智能体坐标系
-            points_agent_frame = camera_coords @ cam_to_agent_rot.T
-            
-            # 2. 四元数到旋转矩阵的转换
-            x, y, z, w = robot_rotation
-            xx, yy, zz = x*x, y*y, z*z
-            xy, xz, yz = x*y, x*z, y*z
-            xw, yw, zw = x*w, y*w, z*w
-            
-            rot_mat = np.array([
-                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
-                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
-                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
-            ], dtype=np.float32)
-            
-            # 3. 智能体坐标系到世界坐标系的转换：旋转 + 平移
-            world_coords = points_agent_frame @ rot_mat.T + robot_position
-            
-            return world_coords
-            
-        except Exception as e:
-            print(f"坐标系转换错误: {e}")
-            return camera_coords  # 转换失败时返回原始坐标
