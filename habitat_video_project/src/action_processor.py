@@ -189,8 +189,9 @@ class ActionProcessor:
         
         # 跟踪变量
         action_count = 0  # 行动计数器
-        current_path = None  # 当前A*路径
-        current_path_points = None  # 当前路径点（世界坐标）
+        current_path_result = None  # 当前A*路径结果字典
+        current_path = None  # 当前A*路径点列表
+        adjusted_target_pos = target_pos_2d  # 调整后的目标位置
         
         max_iterations = 1000  # 防止无限循环
         iteration = 0
@@ -205,49 +206,55 @@ class ActionProcessor:
             current_rot = current_state['rotation']
             current_pos_2d = np.array([current_pos[0], current_pos[2]])
             
-            # 计算到最终目标的距离
-            dist_to_final_target = np.sqrt((current_pos[0] - target_pos_2d[0])**2 + (current_pos[2] - target_pos_2d[1])**2)
+            # 计算到调整后最终目标的距离
+            dist_to_final_target = np.sqrt((current_pos[0] - adjusted_target_pos[0])**2 + (current_pos[2] - adjusted_target_pos[1])**2)
             
             print(f"迭代 {iteration}: 到最终目标距离: {dist_to_final_target:.2f}m")
             
             # 检查是否到达最终目标
             if dist_to_final_target < final_stop_threshold:
-                print(f"[SUCCESS] 成功到达最终目标位置 ({target_pos_2d[0]}, {target_pos_2d[1]})")
+                print(f"[SUCCESS] 成功到达最终目标位置 ({adjusted_target_pos[0]}, {adjusted_target_pos[1]})")
                 return {'success': True}
             
             # 每5次行动（包括第一次）重新运行A*算法
             if action_count % a_star_interval == 0:
                 print(f"重新规划A*路径 (行动次数: {action_count})")
-                current_path = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+                current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
                 
-                if current_path is None:
+                if current_path_result is None:
                     return {
                         'success': False,
                         'reason': 'no_a_star_path',
                         'message': 'A*算法无法找到路径'
                     }
                 
+                # 提取路径和调整后的目标
+                current_path = current_path_result['path']
+                if current_path_result['was_adjusted']:
+                    adjusted_target_pos = current_path_result['adjusted_goal']
+                    print(f"[INFO] 目标点已调整: 原目标 {target_pos_2d} -> 新目标 {adjusted_target_pos}")
+                
                 print(f"A*路径规划成功，路径点数: {len(current_path)}")
             
             # 确定当前VFH*目标
-            if dist_to_final_target < final_target_threshold:
-                # 距离最终目标很近，直接以最终目标为VFH*目标
-                vfh_target = target_pos_2d
-                target_type = "最终目标"
-            else:
-                # 使用A*路径上的中间目标点
-                vfh_target = self._get_intermediate_target(current_pos_2d, current_path, intermediate_distance)
-                if vfh_target is None:
-                    return {
-                        'success': False,
-                        'reason': 'no_intermediate_target',
-                        'message': '无法找到中间目标点'
-                    }
-                target_type = "中间目标"
-            
-            # 更新VFH*目标
-            vfh_star.update_target(vfh_target)
-            print(f"VFH*目标更新为: {target_type} ({vfh_target[0]:.2f}, {vfh_target[1]:.2f})")
+                if dist_to_final_target < final_target_threshold:
+                    # 距离最终目标很近，直接以调整后的最终目标为VFH*目标
+                    vfh_target = adjusted_target_pos
+                    target_type = "最终目标"
+                else:
+                    # 使用A*路径上的中间目标点
+                    vfh_target = self._get_intermediate_target(current_pos_2d, current_path, intermediate_distance)
+                    if vfh_target is None:
+                        return {
+                            'success': False,
+                            'reason': 'no_intermediate_target',
+                            'message': '无法找到中间目标点'
+                        }
+                    target_type = "中间目标"
+                
+                # 更新VFH*目标
+                vfh_star.update_target(vfh_target)
+                print(f"VFH*目标更新为: {target_type} ({vfh_target[0]:.2f}, {vfh_target[1]:.2f})")
             
             # 获取当前占用地图
             observation = self.simulator.get_observation()
@@ -260,6 +267,7 @@ class ActionProcessor:
                 }
             
             # 更新占用地图
+            print(f"[DEBUG] 当前位置: {current_pos}")
             agent_pose = {'position': current_pos, 'rotation': current_rot}
             self.map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
             
@@ -311,8 +319,8 @@ class ActionProcessor:
                 # 执行移动到目标位置
                 self._animate_movement(current_pos, end_pos)
             
-            # 增加行动计数器
-            action_count += 1
+                # 增加行动计数器
+                action_count += 1
             
             # 更新前一个方向
             prev_direction = ideal_direction
@@ -328,7 +336,7 @@ class ActionProcessor:
             'message': f'达到最大迭代次数{max_iterations}，导航失败'
         }
     
-    def _plan_a_star_path(self, start_pos: np.ndarray, goal_pos: np.ndarray) -> Optional[List[np.ndarray]]:
+    def _plan_a_star_path(self, start_pos: np.ndarray, goal_pos: np.ndarray) -> Optional[Dict[str, Any]]:
         """
         使用A*算法规划路径
         
@@ -337,40 +345,26 @@ class ActionProcessor:
             goal_pos: 目标位置 [x, z]
         
         Returns:
-            A*路径点列表（世界坐标），如果无路径则返回None
+            包含路径信息的字典，如果无路径则返回None
+            字典格式: {
+                'path': List[np.ndarray],  # A*路径点列表（世界坐标）
+                'adjusted_goal': np.ndarray,  # 调整后的目标点（如果原目标在障碍物内）
+                'was_adjusted': bool  # 是否调整了目标点
+            }
         """
         try:
-            print(f"[DEBUG] A*路径规划开始")
-            print(f"[DEBUG] 起始位置 (世界坐标): {start_pos}")
-            print(f"[DEBUG] 目标位置 (世界坐标): {goal_pos}")
-            
             # 获取占用地图
             if self.map_builder.grid_map is None:
                 print("[ERROR] 占用地图未初始化")
                 return None
             
-            print(f"[DEBUG] 地图尺寸: {self.map_builder.grid_map.shape}")
-            print(f"[DEBUG] 地图分辨率: {self.map_builder.map_resolution}")
-            print(f"[DEBUG] 地图边界: {self.map_builder.topdown_map_bounds}")
-            
-            # 添加机器人半径padding
-            # padded_map = self._add_robot_padding()
-            padded_map = self.map_builder.grid_map.copy()
-            print(f"[DEBUG] Padding后地图尺寸: {padded_map.shape}")
-            
-            # 临时测试：尝试不使用padding的地图
-            print(f"[DEBUG] 临时测试：尝试不使用padding的地图")
-            
-            # no_padding_map = self.map_builder.grid_map.copy()
-            # no_padding_free_cells = np.sum(no_padding_map == 255)
-            #no_padding_unknown_cells = np.sum(no_padding_map == 128)
-            #print(f"[DEBUG] 无padding地图 - 空闲: {no_padding_free_cells}, 未知: {no_padding_unknown_cells}")
+            map = self.map_builder.grid_map.copy()
             
             # 统计地图状态
-            total_cells = padded_map.size
-            free_cells = np.sum(padded_map == 255)
-            occupied_cells = np.sum(padded_map == 0)
-            unknown_cells = np.sum(padded_map == 128)
+            total_cells = map.size
+            free_cells = np.sum(map == 255)
+            occupied_cells = np.sum(map == 0)
+            unknown_cells = np.sum(map == 128)
             print(f"[DEBUG] 地图统计 - 总单元格: {total_cells}, 空闲: {free_cells} ({free_cells/total_cells*100:.1f}%), 占用: {occupied_cells} ({occupied_cells/total_cells*100:.1f}%), 未知: {unknown_cells} ({unknown_cells/total_cells*100:.1f}%)")
             
             # 将世界坐标转换为地图坐标
@@ -384,19 +378,19 @@ class ActionProcessor:
             print(f"[DEBUG] 目标位置 (像素坐标): {goal_pixel}")
             
             # 检查像素坐标是否在地图范围内
-            if (start_pixel[0] < 0 or start_pixel[0] >= padded_map.shape[1] or 
-                start_pixel[1] < 0 or start_pixel[1] >= padded_map.shape[0]):
-                print(f"[ERROR] 起始像素坐标超出地图范围: {start_pixel}, 地图尺寸: {padded_map.shape}")
+            if (start_pixel[0] < 0 or start_pixel[0] >= map.shape[1] or 
+                start_pixel[1] < 0 or start_pixel[1] >= map.shape[0]):
+                print(f"[ERROR] 起始像素坐标超出地图范围: {start_pixel}, 地图尺寸: {map.shape}")
                 return None
             
-            if (goal_pixel[0] < 0 or goal_pixel[0] >= padded_map.shape[1] or 
-                goal_pixel[1] < 0 or goal_pixel[1] >= padded_map.shape[0]):
-                print(f"[ERROR] 目标像素坐标超出地图范围: {goal_pixel}, 地图尺寸: {padded_map.shape}")
+            if (goal_pixel[0] < 0 or goal_pixel[0] >= map.shape[1] or 
+                goal_pixel[1] < 0 or goal_pixel[1] >= map.shape[0]):
+                print(f"[ERROR] 目标像素坐标超出地图范围: {goal_pixel}, 地图尺寸: {map.shape}")
                 return None
             
             # 检查起点和终点是否可行走
-            start_value = padded_map[start_pixel[1], start_pixel[0]]
-            goal_value = padded_map[goal_pixel[1], goal_pixel[0]]
+            start_value = map[start_pixel[1], start_pixel[0]]
+            goal_value = map[goal_pixel[1], goal_pixel[0]]
             
             print(f"[DEBUG] 起始点地图值: {start_value} (255=可行走, 0=障碍物, 128=未知)")
             print(f"[DEBUG] 目标点地图值: {goal_value} (255=可行走, 0=障碍物, 128=未知)")
@@ -405,20 +399,39 @@ class ActionProcessor:
                 print(f"[ERROR] 起始点不可行走 (地图值: {start_value})")
                 return None
             
+            # 检查目标点是否在障碍物内
+            adjusted_goal = goal_pos
+            was_adjusted = False
+            
             if goal_value == 0:
-                print(f"[ERROR] 目标点不可行走 (地图值: {goal_value})")
-                return None
+                print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
+                adjusted_goal_pixel = self._find_nearest_walkable_point(goal_pixel, map)
+                
+                if adjusted_goal_pixel is None:
+                    print(f"[ERROR] 无法找到目标点附近的可行走区域")
+                    return None
+                
+                # 将调整后的像素坐标转换为世界坐标
+                adjusted_goal = self._pixel_to_world_coord(adjusted_goal_pixel)
+                was_adjusted = True
+                
+                print(f"[DEBUG] 目标点已调整: 原目标 {goal_pos} -> 新目标 {adjusted_goal}")
+                
+                # 更新goal_pixel为调整后的像素坐标
+                goal_pixel = adjusted_goal_pixel
+                goal_value = map[goal_pixel[1], goal_pixel[0]]
+                print(f"[DEBUG] 调整后目标点地图值: {goal_value}")
             
             # 运行A*算法
             print(f"[DEBUG] 开始运行A*算法...")
             
             # 检查起点和终点之间的连通性
             print(f"[DEBUG] 检查连通性...")
-            start_accessible = self._check_connectivity(start_pixel, padded_map)
-            goal_accessible = self._check_connectivity(goal_pixel, padded_map)
+            start_accessible = self._check_connectivity(start_pixel, map)
+            goal_accessible = self._check_connectivity(goal_pixel, map)
             print(f"[DEBUG] 起点连通性: {start_accessible}, 终点连通性: {goal_accessible}")
             
-            path_pixels = self._a_star_pathfinding(start_pixel, goal_pixel, padded_map)
+            path_pixels = self._a_star_pathfinding(start_pixel, goal_pixel, map)
             
             if not path_pixels:
                 print("[ERROR] A*算法未找到路径")
@@ -433,7 +446,12 @@ class ActionProcessor:
                 path_world.append(world_coord)
             
             print(f"[DEBUG] 路径规划完成，世界坐标点数: {len(path_world)}")
-            return path_world
+            
+            return {
+                'path': path_world,
+                'adjusted_goal': adjusted_goal,
+                'was_adjusted': was_adjusted
+            }
             
         except Exception as e:
             print(f"[ERROR] A*路径规划失败: {e}")
@@ -451,7 +469,7 @@ class ActionProcessor:
         from scipy import ndimage
         
         # 复制原地图
-        padded_map = self.map_builder.grid_map.copy()
+        map = self.map_builder.grid_map.copy()
         
         # 机器人半径（像素）
         robot_radius_pixels = max(1, int(0.14 / self.map_builder.map_resolution))  # 0.14m机器人半径
@@ -461,29 +479,29 @@ class ActionProcessor:
         print(f"[DEBUG] 机器人半径 (像素): {robot_radius_pixels}")
         
         # 统计padding前的地图状态
-        total_cells = padded_map.size
-        free_cells_before = np.sum(padded_map == 255)
-        occupied_cells_before = np.sum(padded_map == 0)
-        unknown_cells_before = np.sum(padded_map == 128)
+        total_cells = map.size
+        free_cells_before = np.sum(map == 255)
+        occupied_cells_before = np.sum(map == 0)
+        unknown_cells_before = np.sum(map == 128)
         
         print(f"[DEBUG] Padding前 - 空闲: {free_cells_before} ({free_cells_before/total_cells*100:.1f}%), 占用: {occupied_cells_before} ({occupied_cells_before/total_cells*100:.1f}%), 未知: {unknown_cells_before} ({unknown_cells_before/total_cells*100:.1f}%)")
         
         # 对障碍物进行膨胀操作
         kernel = np.ones((2 * robot_radius_pixels + 1, 2 * robot_radius_pixels + 1), dtype=np.uint8)
-        dilated = ndimage.binary_dilation(padded_map == 0, structure=kernel)
+        dilated = ndimage.binary_dilation(map == 0, structure=kernel)
         
         # 更新地图：膨胀后的区域标记为障碍物
-        padded_map[dilated] = 0
+        map[dilated] = 0
         
         # 统计padding后的地图状态
-        free_cells_after = np.sum(padded_map == 255)
-        occupied_cells_after = np.sum(padded_map == 0)
-        unknown_cells_after = np.sum(padded_map == 128)
+        free_cells_after = np.sum(map == 255)
+        occupied_cells_after = np.sum(map == 0)
+        unknown_cells_after = np.sum(map == 128)
         
         print(f"[DEBUG] Padding后 - 空闲: {free_cells_after} ({free_cells_after/total_cells*100:.1f}%), 占用: {occupied_cells_after} ({occupied_cells_after/total_cells*100:.1f}%), 未知: {unknown_cells_after} ({unknown_cells_after/total_cells*100:.1f}%)")
         print(f"[DEBUG] Padding减少了 {free_cells_before - free_cells_after} 个空闲单元格")
         
-        return padded_map
+        return map
     
 
     
@@ -645,6 +663,51 @@ class ActionProcessor:
         world_z = (pixel[1] + 0.5) * self.map_builder.map_resolution + self.map_builder.topdown_map_bounds['top_left'][1]
         
         return np.array([world_x, world_z])
+    
+    def _find_nearest_walkable_point(self, obstacle_pixel: tuple, map: np.ndarray, min_search_radius: int = 20, max_search_radius: int = 500) -> Optional[tuple]:
+        """
+        找到距离障碍物点最近的可行走点
+        
+        Args:
+            obstacle_pixel: 障碍物像素坐标 (x, y)
+            map: 占用地图，0=障碍物，255=可行走，128=未知
+            max_search_radius: 最大搜索半径（像素）
+        
+        Returns:
+            最近的可行走像素坐标，如果找不到则返回None
+        """
+        x, y = obstacle_pixel
+        height, width = map.shape
+        
+        # 从最小半径开始搜索
+        for radius in range(min_search_radius, max_search_radius + 1):
+            candidates = []
+            
+            # 在指定半径内搜索所有点
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+                    # 只检查半径边界上的点（避免重复检查内层）
+                    if abs(dx) == radius or abs(dy) == radius:
+                        nx, ny = x + dx, y + dy
+                        
+                        # 检查边界
+                        if 0 <= nx < width and 0 <= ny < height:
+                            # 检查是否为可行走区域（空闲或未知）
+                            if map[ny, nx] in [255, 128]:
+                                # 计算到原障碍物点的距离
+                                distance = np.sqrt(dx*dx + dy*dy)
+                                candidates.append((nx, ny, distance))
+            
+            # 如果找到候选点，返回最近的一个
+            if candidates:
+                # 按距离排序，对255和128一视同仁
+                candidates.sort(key=lambda c: c[2])  # 只按距离排序
+                nearest_pixel = (candidates[0][0], candidates[0][1])
+                print(f"[DEBUG] 找到最近可行走点: {nearest_pixel}, 距离: {candidates[0][2]:.2f}像素, 地图值: {map[nearest_pixel[1], nearest_pixel[0]]}")
+                return nearest_pixel
+        
+        print(f"[ERROR] 在半径{max_search_radius}内未找到可行走点")
+        return None
     
     def _check_connectivity(self, point: tuple, wall_mask: np.ndarray) -> int:
         """
