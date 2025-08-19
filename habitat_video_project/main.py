@@ -67,18 +67,7 @@ def parse_arguments():
         help='详细输出'
     )
     
-    parser.add_argument(
-        '--show-histogram',
-        action='store_true',
-        default=True,
-        help='在视频中显示VFH polar histogram（默认启用）'
-    )
-    
-    parser.add_argument(
-        '--no-histogram',
-        action='store_true',
-        help='在视频中隐藏VFH polar histogram'
-    )
+
     
     return parser.parse_args()
 
