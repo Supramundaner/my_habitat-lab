@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional, Union
 from .simulator import HabitatSimulator
 from .video_composer import VideoComposer
 from .vfh_star import VFHStar
+from .object_detector import ObjectDetector
 from .utils import (
     slerp, 
     quaternion_to_direction_yaw, 
@@ -19,6 +20,12 @@ from .utils import (
     use_mixed_precision,
     to_numpy
 )
+
+
+class NavigationPhase:
+    """导航阶段枚举"""
+    HYBRID_NAVIGATION = "hybrid"           # A* + VFH* 混合导航
+    OBJECT_DETECTION_NAVIGATION = "object_detection"  # 对象检测导航
 
 
 class NavigationConfig:
@@ -64,6 +71,9 @@ class ActionProcessor:
         
         # 初始化导航配置
         self.nav_config = NavigationConfig(config)
+        
+        # 初始化对象检测器
+        self.object_detector = ObjectDetector(config)
         
         # 动画参数
         self.linear_speed = config['agent']['linear_speed']  # m/s
@@ -111,6 +121,45 @@ class ActionProcessor:
             'raw_state': current_state
         }
     
+    def _should_switch_to_object_detection(self, current_pos_2d: np.ndarray, current_path: List[np.ndarray], target_pos_2d: np.ndarray) -> bool:
+        """
+        判断是否应该切换到对象检测阶段
+        
+        条件：
+        1. 有有效的A*路径
+        2. 沿着路径到目标的距离 < 1.5m
+        3. 对象检测模块可用
+        
+        Args:
+            current_pos_2d: 当前位置 [x, z]
+            current_path: A*路径点列表
+            target_pos_2d: 目标位置 [x, z]
+            
+        Returns:
+            bool: 是否应该切换到对象检测阶段
+        """
+        if current_path is None or len(current_path) < 2:
+            return False
+        
+        if not self.object_detector.is_enabled():
+            return False
+        
+        path_distance = self._calculate_path_distance_to_target(
+            current_pos_2d, current_path, target_pos_2d
+        )
+        
+        return path_distance < 1.5
+    
+    def _get_camera_params(self) -> Dict[str, float]:
+        """获取相机参数"""
+        # 从simulator或配置中获取相机参数
+        return {
+            'fx': 512.0,  # 焦距x
+            'fy': 512.0,  # 焦距y
+            'cx': 256.0,  # 主点x
+            'cy': 256.0   # 主点y
+        }
+    
     def _select_vfh_target(self, current_pos_2d: np.ndarray, adjusted_target_pos: np.ndarray, 
                           current_path: List[np.ndarray], dist_to_final_target: float) -> Dict[str, Any]:
         """
@@ -120,13 +169,16 @@ class ActionProcessor:
             current_pos_2d: 当前位置 [x, z]
             adjusted_target_pos: 调整后的目标位置 [x, z]
             current_path: A*路径点列表
-            dist_to_final_target: 到最终目标的距离
+            dist_to_final_target: 到最终目标的距离（直线距离，用于兼容性）
         
         Returns:
             包含目标点和类型的字典
         """
-        if dist_to_final_target < self.nav_config.final_target_threshold:
-            # 距离最终目标很近，直接以调整后的最终目标为VFH*目标
+        # 计算沿着路径到目标的弧长
+        path_distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, adjusted_target_pos)
+        
+        if path_distance_to_target < self.nav_config.final_target_threshold:
+            # 沿着路径到最终目标的距离很近，直接以调整后的最终目标为VFH*目标
             vfh_target = adjusted_target_pos
             target_type = "最终目标"
         else:
@@ -280,9 +332,244 @@ class ActionProcessor:
         # 执行混合导航（A* + VFH*）
         return self._execute_hybrid_navigation(target_pos_2d, target_name, vfh_star)
     
+    def _execute_hybrid_phase(self, current_pos_2d: np.ndarray, current_rot: np.ndarray, 
+                             target_pos_2d: np.ndarray, vfh_star: VFHStar, 
+                             current_path: List[np.ndarray], adjusted_target_pos: np.ndarray,
+                             action_count: int, prev_direction: Optional[float]) -> Dict[str, Any]:
+        """
+        执行混合导航阶段（A* + VFH*）
+        
+        Args:
+            current_pos_2d: 当前位置 [x, z]
+            current_rot: 当前旋转
+            target_pos_2d: 目标位置 [x, z]
+            vfh_star: VFH*算法实例
+            current_path: 当前A*路径
+            adjusted_target_pos: 调整后的目标位置
+            action_count: 行动计数器
+            prev_direction: 前一个方向
+            
+        Returns:
+            执行结果字典
+        """
+        # 检查是否到达最终目标
+        dist_to_final_target = np.sqrt((current_pos_2d[0] - adjusted_target_pos[0])**2 + 
+                                      (current_pos_2d[1] - adjusted_target_pos[1])**2)
+        
+        if dist_to_final_target < self.nav_config.final_stop_threshold:
+            return {'success': True}
+        
+        # 检查目标点是否在障碍物内
+        if self.map_builder.grid_map is not None:
+            # 将世界坐标转换为地图坐标
+            adjusted_target_map_coords = self.map_builder._world_to_map_coords(np.array([[adjusted_target_pos[0], 0, adjusted_target_pos[1]]]))
+            adjusted_target_pixel = (int(adjusted_target_map_coords[0, 0]), int(adjusted_target_map_coords[0, 1]))
+            
+            target_value = self.map_builder.grid_map[adjusted_target_pixel[1], adjusted_target_pixel[0]]
+            if target_value == 0:  # 障碍物
+                print(f"[WARNING] adjusted_target_pos在障碍物内，寻找最近的可行走点")
+                nearest_walkable_pixel = self._find_nearest_walkable_point(adjusted_target_pixel, self.map_builder.grid_map)
+                
+                if nearest_walkable_pixel is not None:
+                    # 将像素坐标转换为世界坐标
+                    nearest_walkable_world = self._pixel_to_world_coord(nearest_walkable_pixel)
+                    print(f"[INFO] adjusted_target_pos已更新: 原位置 {adjusted_target_pos} -> 新位置 {nearest_walkable_world}")
+                    adjusted_target_pos = nearest_walkable_world
+                else:
+                    print(f"[ERROR] 无法找到adjusted_target_pos附近的可行走区域")
+                    return {'failed': True, 'reason': 'no_walkable_area_near_target'}
+        
+        # 每5次行动重新规划A*路径
+        if action_count % self.nav_config.a_star_interval == 0:
+            current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+            if current_path_result is None:
+                return {'failed': True, 'reason': 'no_a_star_path'}
+            
+            current_path = current_path_result['path']
+            if current_path_result['was_adjusted']:
+                adjusted_target_pos = current_path_result['adjusted_goal']
+        
+        # 选择VFH*目标
+        vfh_target_result = self._select_vfh_target(
+            current_pos_2d, adjusted_target_pos, current_path, dist_to_final_target
+        )
+        
+        # 计算并显示路径距离信息
+        if current_path is not None:
+            path_distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, adjusted_target_pos)
+            print(f"距离信息 - 直线距离: {dist_to_final_target:.2f}m, 路径距离: {path_distance_to_target:.2f}m")
+        
+        if not vfh_target_result['success']:
+            return {'failed': True, 'reason': vfh_target_result['reason']}
+        
+        # 执行VFH*导航
+        result = self._execute_vfh_navigation(
+            current_pos_2d, current_rot, vfh_star, vfh_target_result['target'], prev_direction
+        )
+        
+        return {
+            'success': False,
+            'failed': False,
+            'current_path': current_path,
+            'adjusted_target_pos': adjusted_target_pos,
+            'action_count': action_count + 1,
+            'prev_direction': result.get('prev_direction', prev_direction)
+        }
+    
+    def _execute_object_detection_phase(self, current_pos_2d: np.ndarray, current_rot: np.ndarray, 
+                                       target_name: str, vfh_star: VFHStar, 
+                                       prev_direction: Optional[float], original_target_pos: np.ndarray,
+                                       detected_target_pos: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        """
+        执行对象检测导航阶段
+        
+        Args:
+            current_pos_2d: 当前位置 [x, z]
+            current_rot: 当前旋转
+            target_name: 目标名称
+            vfh_star: VFH*算法实例
+            prev_direction: 前一个方向
+            original_target_pos: 原始目标位置（当检测失败时使用）
+            detected_target_pos: 已检测到的目标位置（如果为None则进行检测）
+            
+        Returns:
+            执行结果字典
+        """
+        # 如果还没有检测到目标，则进行检测
+        if detected_target_pos is None:
+            # 获取当前观测
+            observation = self.simulator.get_observation()
+            rgb_image = observation.get('rgb')
+            depth_image = observation.get('depth')
+            
+            if rgb_image is None or depth_image is None:
+                return {'failed': True, 'reason': 'no_observation_data'}
+            
+            # 相机参数
+            camera_params = self._get_camera_params()
+            
+            # 对象检测
+            detected_target_pos = self.object_detector.detect_and_get_target_coords(
+                rgb_image, depth_image, target_name, camera_params
+            )
+            
+            if detected_target_pos is None:
+                print(f"[OBJECT DETECTION] 未能检测到目标: {target_name}，使用原始目标位置")
+                # 使用原始目标位置进行导航
+                target_pos_2d = original_target_pos
+            else:
+                print(f"[OBJECT DETECTION] 首次检测到目标位置: {detected_target_pos}")
+                # 将3D坐标转换为2D导航坐标
+                target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
+        else:
+            # 已经检测到目标，直接使用
+            print(f"[OBJECT DETECTION] 使用已检测到的目标位置: {detected_target_pos}")
+            target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
+        
+        # 检查目标点是否在障碍物内
+        if self.map_builder.grid_map is not None:
+            # 将世界坐标转换为地图坐标
+            target_map_coords = self.map_builder._world_to_map_coords(np.array([[target_pos_2d[0], 0, target_pos_2d[1]]]))
+            target_pixel = (int(target_map_coords[0, 0]), int(target_map_coords[0, 1]))
+            
+            target_value = self.map_builder.grid_map[target_pixel[1], target_pixel[0]]
+            if target_value == 0:  # 障碍物
+                print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
+                nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map)
+                
+                if nearest_walkable_pixel is not None:
+                    # 将像素坐标转换为世界坐标
+                    nearest_walkable_world = self._pixel_to_world_coord(nearest_walkable_pixel)
+                    print(f"[INFO] 目标点已调整: 原位置 {target_pos_2d} -> 新位置 {nearest_walkable_world}")
+                    target_pos_2d = nearest_walkable_world
+                    if detected_target_pos is not None:
+                        detected_target_pos = nearest_walkable_world
+                else:
+                    print(f"[ERROR] 无法找到目标点附近的可行走区域")
+                    return {'failed': True, 'reason': 'no_walkable_area_near_target'}
+        
+        # 检查是否足够接近目标
+        distance_to_target = np.linalg.norm(current_pos_2d - target_pos_2d)
+        if distance_to_target < self.nav_config.final_stop_threshold:
+            print(f"[SUCCESS] 成功导航到目标")
+            return {'success': True}
+        
+        # 使用VFH*导航到目标
+        vfh_star.update_target(target_pos_2d)
+        
+        result = self._execute_vfh_navigation(
+            current_pos_2d, current_rot, vfh_star, target_pos_2d, prev_direction
+        )
+        
+        return {
+            'success': False,
+            'failed': False,
+            'prev_direction': result.get('prev_direction', prev_direction),
+            'detected_target_pos': detected_target_pos,  # 传递检测到的目标位置,
+            'target_pos_2d': target_pos_2d
+        }
+    
+    def _execute_vfh_navigation(self, current_pos_2d: np.ndarray, current_rot: np.ndarray,
+                               vfh_star: VFHStar, vfh_target: np.ndarray, 
+                               prev_direction: Optional[float]) -> Dict[str, Any]:
+        """
+        执行VFH*导航
+        
+        Args:
+            current_pos_2d: 当前位置 [x, z]
+            current_rot: 当前旋转
+            vfh_star: VFH*算法实例
+            vfh_target: VFH*目标位置
+            prev_direction: 前一个方向
+            
+        Returns:
+            执行结果字典
+        """
+        # 更新VFH*目标
+        vfh_star.update_target(vfh_target)
+        
+        # 获取当前占用地图
+        observation = self.simulator.get_observation()
+        depth_observation = observation.get('depth')
+        if depth_observation is None:
+            return {'failed': True, 'reason': 'no_depth_data'}
+        
+        # 更新占用地图
+        current_pos = np.array([current_pos_2d[0], 0, current_pos_2d[1]])
+        agent_pose = {'position': current_pos, 'rotation': current_rot}
+        self.map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
+        
+        # 从占用地图提取局部障碍物
+        obstacles = self.map_builder.get_obstacles_from_map(current_pos_2d, vfh_star.sensor_range)
+        
+        # 获取机器人朝向角度
+        robot_theta = self.map_builder.get_robot_theta_from_quaternion(current_rot)
+        
+        # VFH*计算最佳方向
+        ideal_direction = vfh_star.get_best_direction(current_pos_2d, robot_theta, obstacles, prev_direction)
+        
+        if ideal_direction is None:
+            return {'failed': True, 'reason': 'no_feasible_path'}
+            
+        action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
+        
+        # 执行低层动作
+        self._execute_vfh_action(action_name, action_value, current_pos, current_rot)
+        
+        # 添加视频帧
+        current_state = self.simulator.get_robot_state()
+        current_observation = self.simulator.get_observation()
+        self.composer.add_frame(robot_state=current_state, observation=current_observation)
+        
+        return {
+            'success': False,
+            'failed': False,
+            'prev_direction': ideal_direction
+        }
+    
     def _execute_hybrid_navigation(self, target_pos_2d: np.ndarray, target_name: str, vfh_star: VFHStar) -> Dict[str, Any]:
         """
-        执行混合导航（A* + VFH*）
+        主导航控制器 - 支持混合导航和对象检测导航两阶段
         
         Args:
             target_pos_2d: 目标位置 [x, z]
@@ -292,15 +579,16 @@ class ActionProcessor:
         Returns:
             导航结果
         """
-        print(f"开始A* + VFH*混合导航到目标: {target_name}")
+        print(f"开始主导航控制器，目标: {target_name}")
         
-        # 跟踪变量
-        action_count = 0  # 行动计数器
-        current_path_result = None  # 当前A*路径结果字典
-        current_path = None  # 当前A*路径点列表
-        adjusted_target_pos = target_pos_2d  # 调整后的目标位置
+        # 初始化导航状态
+        navigation_phase = NavigationPhase.HYBRID_NAVIGATION
+        current_path = None
+        adjusted_target_pos = target_pos_2d
+        detected_target_pos = None  # 检测到的目标位置
         
         iteration = 0
+        action_count = 0
         prev_direction = None
         
         while iteration < self.nav_config.max_iterations:
@@ -311,121 +599,52 @@ class ActionProcessor:
             current_pos = robot_state['position']
             current_rot = robot_state['rotation']
             current_pos_2d = robot_state['position_2d']
-
-            if self.map_builder.grid_map is not None:
-                # 将世界坐标转换为地图坐标
-                adjusted_target_map_coords = self.map_builder._world_to_map_coords(np.array([[adjusted_target_pos[0], 0, adjusted_target_pos[1]]]))
-                adjusted_target_pixel = (int(adjusted_target_map_coords[0, 0]), int(adjusted_target_map_coords[0, 1]))
+            
+            # 检查阶段切换
+            if (navigation_phase == NavigationPhase.HYBRID_NAVIGATION and 
+                self._should_switch_to_object_detection(current_pos_2d, current_path, target_pos_2d)):
                 
-                target_value = self.map_builder.grid_map[adjusted_target_pixel[1], adjusted_target_pixel[0]]
-                if target_value == 0:  # 障碍物
-                    print(f"[WARNING] adjusted_target_pos在障碍物内，寻找最近的可行走点")
-                    nearest_walkable_pixel = self._find_nearest_walkable_point(adjusted_target_pixel, self.map_builder.grid_map)
-                    
-                    if nearest_walkable_pixel is not None:
-                        # 将像素坐标转换为世界坐标
-                        nearest_walkable_world = self._pixel_to_world_coord(nearest_walkable_pixel)
-                        print(f"[INFO] adjusted_target_pos已更新: 原位置 {adjusted_target_pos} -> 新位置 {nearest_walkable_world}")
-                        adjusted_target_pos = nearest_walkable_world
-                    else:
-                        print(f"[ERROR] 无法找到adjusted_target_pos附近的可行走区域")
-                        return {
-                            'success': False,
-                            'reason': 'no_walkable_area_near_target',
-                            'message': '无法找到目标附近的可行走区域'
-                        }
+                navigation_phase = NavigationPhase.OBJECT_DETECTION_NAVIGATION
+                print(f"[PHASE SWITCH] 切换到对象检测导航阶段")
+                if current_path is not None:
+                    path_distance = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
+                    print(f"当前路径距离: {path_distance:.2f}m")
             
-            # 计算到调整后最终目标的距离
-            dist_to_final_target = np.sqrt((current_pos[0] - adjusted_target_pos[0])**2 + (current_pos[2] - adjusted_target_pos[1])**2)
-            
-            print(f"迭代 {iteration}: 到最终目标距离: {dist_to_final_target:.2f}m")
-            
-
-            # 检查是否到达最终目标
-            if dist_to_final_target < self.nav_config.final_stop_threshold:
-                print(f"[SUCCESS] 成功到达最终目标位置 ({adjusted_target_pos[0]}, {adjusted_target_pos[1]})")
-                return {'success': True}
-            
-            # 每5次行动（包括第一次）重新运行A*算法
-            if action_count % self.nav_config.a_star_interval == 0:
-                print(f"重新规划A*路径 (行动次数: {action_count})")
-                current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+            # 根据当前阶段执行相应的导航逻辑
+            if navigation_phase == NavigationPhase.HYBRID_NAVIGATION:
+                print(f"迭代 {iteration}: 执行混合导航阶段")
+                result = self._execute_hybrid_phase(
+                    current_pos_2d, current_rot, target_pos_2d, 
+                    vfh_star, current_path, adjusted_target_pos, 
+                    action_count, prev_direction
+                )
                 
-                if current_path_result is None:
-                    return {
-                        'success': False,
-                        'reason': 'no_a_star_path',
-                        'message': 'A*算法无法找到路径'
-                    }
+                if result['success']:
+                    return result
+                elif result['failed']:
+                    return result
                 
-                # 提取路径和调整后的目标
-                current_path = current_path_result['path']
-                if current_path_result['was_adjusted']:
-                    adjusted_target_pos = current_path_result['adjusted_goal']
-                    print(f"[INFO] 目标点已调整: 原目标 {target_pos_2d} -> 新目标 {adjusted_target_pos}")
+                # 更新状态
+                current_path = result.get('current_path', current_path)
+                adjusted_target_pos = result.get('adjusted_target_pos', adjusted_target_pos)
+                action_count = result.get('action_count', action_count)
+                prev_direction = result.get('prev_direction', prev_direction)
                 
-                print(f"A*路径规划成功，路径点数: {len(current_path)}")
-            
-            # 确定当前VFH*目标
-            vfh_target_result = self._select_vfh_target(current_pos_2d, adjusted_target_pos, current_path, dist_to_final_target)
-            
-            if not vfh_target_result['success']:
-                return vfh_target_result # 如果无法找到中间目标，则导航失败
-            
-            vfh_target = vfh_target_result['target']
-            target_type = vfh_target_result['type']
-            
-            # 更新VFH*目标
-            vfh_star.update_target(vfh_target)
-            print(f"VFH*目标更新为: {target_type} ({vfh_target[0]:.2f}, {vfh_target[1]:.2f})")
-            
-            # 获取当前占用地图
-            observation = self.simulator.get_observation()
-            depth_observation = observation.get('depth')
-            if depth_observation is None:
-                return {
-                    'success': False,
-                    'reason': 'no_depth_data',
-                    'message': '无法获取深度传感器数据'
-                }
-            
-            # 更新占用地图
-            print(f"[DEBUG] 当前位置: {current_pos}")
-            agent_pose = {'position': current_pos, 'rotation': current_rot}
-            self.map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
-            
-            # 从占用地图提取局部障碍物
-            robot_pos_2d = np.array([current_pos[0], current_pos[2]])
-            obstacles = self.map_builder.get_obstacles_from_map(robot_pos_2d, vfh_star.sensor_range)
-            
-            # 获取机器人朝向角度
-            robot_theta = self.map_builder.get_robot_theta_from_quaternion(current_rot)
-            
-            # VFH*计算最佳方向
-            ideal_direction = vfh_star.get_best_direction(robot_pos_2d, robot_theta, obstacles, prev_direction)
-            
-            if ideal_direction is None:
-                return {
-                    'success': False,
-                    'reason': 'no_feasible_path',
-                    'message': 'VFH*无法找到可行方向'
-                }
+            elif navigation_phase == NavigationPhase.OBJECT_DETECTION_NAVIGATION:
+                print(f"迭代 {iteration}: 执行对象检测导航阶段")
+                result = self._execute_object_detection_phase(
+                    current_pos_2d, current_rot, target_name, vfh_star, prev_direction,
+                    adjusted_target_pos, detected_target_pos
+                )
                 
-            action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
-            
-            # 执行低层动作
-            self._execute_vfh_action(action_name, action_value, current_pos, current_rot)
-            
-            # 增加行动计数器
-            action_count += 1
-            
-            # 更新前一个方向
-            prev_direction = ideal_direction
-            
-            # 添加视频帧
-            current_state = self.simulator.get_robot_state()
-            current_observation = self.simulator.get_observation()
-            self.composer.add_frame(robot_state=current_state, observation=current_observation)
+                if result['success']:
+                    return result
+                elif result['failed']:
+                    return result
+                
+                prev_direction = result.get('prev_direction', prev_direction)
+                detected_target_pos = result.get('detected_target_pos', detected_target_pos)
+                adjusted_target_pos = result.get('target_pos_2d', adjusted_target_pos)
         
         return {
             'success': False,
@@ -693,6 +912,55 @@ class ActionProcessor:
         """计算欧几里得距离"""
         return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
     
+    def _calculate_path_distance_to_target(self, current_pos: np.ndarray, path: List[np.ndarray], target_pos: np.ndarray) -> float:
+        """
+        计算沿着路径到目标位置的弧长
+        
+        Args:
+            current_pos: 当前位置 [x, z]
+            path: A*路径点列表
+            target_pos: 目标位置 [x, z]
+        
+        Returns:
+            沿着路径到目标的弧长
+        """
+        if not path or len(path) < 2:
+            # 如果路径为空，返回直线距离
+            return np.sqrt((current_pos[0] - target_pos[0])**2 + (current_pos[1] - target_pos[1])**2)
+        
+        # 找到路径上距离当前位置最近的点
+        min_dist = float('inf')
+        closest_idx = 0
+        
+        for i, path_point in enumerate(path):
+            dist = np.sqrt((current_pos[0] - path_point[0])**2 + (current_pos[1] - path_point[1])**2)
+            if dist < min_dist:
+                min_dist = dist
+                closest_idx = i
+        
+        # 从最近点开始，沿路径计算弧长到目标
+        accumulated_distance = 0.0
+        
+        # 首先计算从当前位置到最近路径点的距离
+        if closest_idx < len(path):
+            accumulated_distance += np.sqrt(
+                (current_pos[0] - path[closest_idx][0])**2 + (current_pos[1] - path[closest_idx][1])**2
+            )
+        
+        # 然后沿着路径计算到目标的弧长
+        for i in range(closest_idx, len(path) - 1):
+            # 计算当前段长度
+            segment_length = np.sqrt(
+                (path[i+1][0] - path[i][0])**2 + (path[i+1][1] - path[i][1])**2
+            )
+            accumulated_distance += segment_length
+            
+            # 检查是否到达目标（如果路径点接近目标）
+            if np.sqrt((path[i+1][0] - target_pos[0])**2 + (path[i+1][1] - target_pos[1])**2) < 0.1:
+                break
+        
+        return accumulated_distance
+
     def _get_intermediate_target(self, current_pos: np.ndarray, path: List[np.ndarray], target_distance: float) -> Optional[np.ndarray]:
         """
         从A*路径上找到距离当前位置指定距离的中间目标点
