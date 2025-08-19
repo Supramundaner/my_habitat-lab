@@ -160,6 +160,81 @@ class ActionProcessor:
             'cy': 256.0   # 主点y
         }
     
+    def _downsample_map(self, map: np.ndarray, factor: int) -> np.ndarray:
+        """
+        对地图进行下采样
+        
+        Args:
+            map: 原始地图
+            factor: 下采样因子（宽高都缩小到1/factor）
+            
+        Returns:
+            下采样后的地图
+        """
+        # 使用最大池化进行下采样，确保障碍物信息不丢失
+        from scipy import ndimage
+        
+        # 将地图值转换为二值：0=障碍物，1=可行走
+        binary_map = (map != 0).astype(np.uint8)
+        
+        # 使用最大池化下采样
+        downsampled_binary = ndimage.maximum_filter(binary_map, size=factor)
+        downsampled_binary = downsampled_binary[::factor, ::factor]
+        
+        # 转换回原始值：0=障碍物，255=可行走，128=未知
+        downsampled_map = np.zeros_like(downsampled_binary, dtype=np.uint8)
+        downsampled_map[downsampled_binary == 1] = 255
+        
+        return downsampled_map
+    
+    def _camera_to_world_coords(self, camera_coords: np.ndarray) -> np.ndarray:
+        """
+        将相机坐标系转换为世界坐标系
+        
+        Args:
+            camera_coords: 相机坐标系下的3D坐标 [x, y, z]
+            
+        Returns:
+            世界坐标系下的3D坐标 [x, y, z]
+        """
+        try:
+            # 获取机器人当前状态
+            robot_state = self.simulator.get_robot_state()
+            robot_position = robot_state['position']
+            robot_rotation = robot_state['rotation']
+            
+            # 基于map_builder.py中的_transform_points_to_world函数实现
+            # 1. 相机到智能体坐标系的转换（绕X轴旋转180度）
+            cam_to_agent_rot = np.array([
+                [1,  0,  0],
+                [0, -1,  0],
+                [0,  0, -1]
+            ], dtype=np.float32)
+            
+            # 将相机坐标转换到智能体坐标系
+            points_agent_frame = camera_coords @ cam_to_agent_rot.T
+            
+            # 2. 四元数到旋转矩阵的转换
+            x, y, z, w = robot_rotation
+            xx, yy, zz = x*x, y*y, z*z
+            xy, xz, yz = x*y, x*z, y*z
+            xw, yw, zw = x*w, y*w, z*w
+            
+            rot_mat = np.array([
+                [1 - 2*(yy + zz), 2*(xy - zw), 2*(xz + yw)],
+                [2*(xy + zw), 1 - 2*(xx + zz), 2*(yz - xw)],
+                [2*(xz - yw), 2*(yz + xw), 1 - 2*(xx + yy)]
+            ], dtype=np.float32)
+            
+            # 3. 智能体坐标系到世界坐标系的转换：旋转 + 平移
+            world_coords = points_agent_frame @ rot_mat.T + robot_position
+            
+            return world_coords
+            
+        except Exception as e:
+            print(f"坐标系转换错误: {e}")
+            return camera_coords  # 转换失败时返回原始坐标
+    
     def _select_vfh_target(self, current_pos_2d: np.ndarray, adjusted_target_pos: np.ndarray, 
                           current_path: List[np.ndarray], dist_to_final_target: float) -> Dict[str, Any]:
         """
@@ -449,16 +524,20 @@ class ActionProcessor:
             camera_params = self._get_camera_params()
             
             # 对象检测
-            detected_target_pos = self.object_detector.detect_and_get_target_coords(
+            detected_target_pos_camera = self.object_detector.detect_and_get_target_coords(
                 rgb_image, depth_image, target_name, camera_params
             )
             
-            if detected_target_pos is None:
+            if detected_target_pos_camera is None:
                 print(f"[OBJECT DETECTION] 未能检测到目标: {target_name}，使用原始目标位置")
                 # 使用原始目标位置进行导航
                 target_pos_2d = original_target_pos
+                detected_target_pos = None
             else:
-                print(f"[OBJECT DETECTION] 首次检测到目标位置: {detected_target_pos}")
+                print(f"[OBJECT DETECTION] 检测到目标相机坐标: {detected_target_pos_camera}")
+                # 将相机坐标转换为世界坐标
+                detected_target_pos = self._camera_to_world_coords(detected_target_pos_camera)
+                print(f"[OBJECT DETECTION] 转换为世界坐标: {detected_target_pos}")
                 # 将3D坐标转换为2D导航坐标
                 target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
         else:
@@ -501,12 +580,24 @@ class ActionProcessor:
             current_pos_2d, current_rot, vfh_star, target_pos_2d, prev_direction
         )
         
+        # 根据是否检测到目标，更新相应的位置信息
+        if detected_target_pos is not None:
+            # 如果检测到目标，更新检测到的目标位置（包含障碍物调整）
+            updated_detected_target_pos = detected_target_pos.copy()
+            updated_detected_target_pos[0] = target_pos_2d[0]  # X坐标
+            updated_detected_target_pos[2] = target_pos_2d[1]  # Z坐标
+            updated_original_target_pos = original_target_pos
+        else:
+            # 如果没有检测到目标，更新原始目标位置（包含障碍物调整）
+            updated_detected_target_pos = None
+            updated_original_target_pos = target_pos_2d.copy()
+        
         return {
             'success': False,
             'failed': False,
             'prev_direction': result.get('prev_direction', prev_direction),
-            'detected_target_pos': detected_target_pos,  # 传递检测到的目标位置,
-            'target_pos_2d': target_pos_2d
+            'detected_target_pos': updated_detected_target_pos,
+            'original_target_pos': updated_original_target_pos
         }
     
     def _execute_vfh_navigation(self, current_pos_2d: np.ndarray, current_rot: np.ndarray,
@@ -683,6 +774,11 @@ class ActionProcessor:
             unknown_cells = np.sum(map == 128)
             print(f"[DEBUG] 地图统计 - 总单元格: {total_cells}, 空闲: {free_cells} ({free_cells/total_cells*100:.1f}%), 占用: {occupied_cells} ({occupied_cells/total_cells*100:.1f}%), 未知: {unknown_cells} ({unknown_cells/total_cells*100:.1f}%)")
             
+            # 下采样地图以提高A*性能（宽高都缩小到1/4）
+            downsample_factor = 4
+            downsampled_map = self._downsample_map(map, downsample_factor)
+            print(f"[DEBUG] 地图下采样: 原始尺寸 {map.shape} -> 下采样尺寸 {downsampled_map.shape}")
+            
             # 将世界坐标转换为地图坐标
             start_map_coords = self.map_builder._world_to_map_coords(np.array([[start_pos[0], 0, start_pos[1]]]))
             goal_map_coords = self.map_builder._world_to_map_coords(np.array([[goal_pos[0], 0, goal_pos[1]]]))
@@ -690,23 +786,27 @@ class ActionProcessor:
             start_pixel = (int(start_map_coords[0, 0]), int(start_map_coords[0, 1]))
             goal_pixel = (int(goal_map_coords[0, 0]), int(goal_map_coords[0, 1]))
             
+            # 将像素坐标转换为下采样地图的坐标
+            start_pixel_downsampled = (start_pixel[0] // downsample_factor, start_pixel[1] // downsample_factor)
+            goal_pixel_downsampled = (goal_pixel[0] // downsample_factor, goal_pixel[1] // downsample_factor)
+            
             print(f"[DEBUG] 起始位置 (像素坐标): {start_pixel}")
             print(f"[DEBUG] 目标位置 (像素坐标): {goal_pixel}")
             
-            # 检查像素坐标是否在地图范围内
-            if (start_pixel[0] < 0 or start_pixel[0] >= map.shape[1] or 
-                start_pixel[1] < 0 or start_pixel[1] >= map.shape[0]):
-                print(f"[ERROR] 起始像素坐标超出地图范围: {start_pixel}, 地图尺寸: {map.shape}")
+            # 检查下采样像素坐标是否在地图范围内
+            if (start_pixel_downsampled[0] < 0 or start_pixel_downsampled[0] >= downsampled_map.shape[1] or 
+                start_pixel_downsampled[1] < 0 or start_pixel_downsampled[1] >= downsampled_map.shape[0]):
+                print(f"[ERROR] 起始下采样像素坐标超出地图范围: {start_pixel_downsampled}, 下采样地图尺寸: {downsampled_map.shape}")
                 return None
             
-            if (goal_pixel[0] < 0 or goal_pixel[0] >= map.shape[1] or 
-                goal_pixel[1] < 0 or goal_pixel[1] >= map.shape[0]):
-                print(f"[ERROR] 目标像素坐标超出地图范围: {goal_pixel}, 地图尺寸: {map.shape}")
+            if (goal_pixel_downsampled[0] < 0 or goal_pixel_downsampled[0] >= downsampled_map.shape[1] or 
+                goal_pixel_downsampled[1] < 0 or goal_pixel_downsampled[1] >= downsampled_map.shape[0]):
+                print(f"[ERROR] 目标下采样像素坐标超出地图范围: {goal_pixel_downsampled}, 下采样地图尺寸: {downsampled_map.shape}")
                 return None
             
-            # 检查起点和终点是否可行走
-            start_value = map[start_pixel[1], start_pixel[0]]
-            goal_value = map[goal_pixel[1], goal_pixel[0]]
+            # 检查起点和终点是否可行走（在下采样地图上）
+            start_value = downsampled_map[start_pixel_downsampled[1], start_pixel_downsampled[0]]
+            goal_value = downsampled_map[goal_pixel_downsampled[1], goal_pixel_downsampled[0]]
             
             print(f"[DEBUG] 起始点地图值: {start_value} (255=可行走, 0=障碍物, 128=未知)")
             print(f"[DEBUG] 目标点地图值: {goal_value} (255=可行走, 0=障碍物, 128=未知)")
@@ -721,11 +821,15 @@ class ActionProcessor:
             
             if goal_value == 0:
                 print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
-                adjusted_goal_pixel = self._find_nearest_walkable_point(goal_pixel, map)
+                adjusted_goal_pixel_downsampled = self._find_nearest_walkable_point(goal_pixel_downsampled, downsampled_map)
                 
-                if adjusted_goal_pixel is None:
+                if adjusted_goal_pixel_downsampled is None:
                     print(f"[ERROR] 无法找到目标点附近的可行走区域")
                     return None
+                
+                # 将下采样的像素坐标转换回原始像素坐标
+                adjusted_goal_pixel = (adjusted_goal_pixel_downsampled[0] * downsample_factor, 
+                                     adjusted_goal_pixel_downsampled[1] * downsample_factor)
                 
                 # 将调整后的像素坐标转换为世界坐标
                 adjusted_goal = self._pixel_to_world_coord(adjusted_goal_pixel)
@@ -733,27 +837,36 @@ class ActionProcessor:
                 
                 print(f"[DEBUG] 目标点已调整: 原目标 {goal_pos} -> 新目标 {adjusted_goal}")
                 
-                # 更新goal_pixel为调整后的像素坐标
-                goal_pixel = adjusted_goal_pixel
-                goal_value = map[goal_pixel[1], goal_pixel[0]]
+                # 更新goal_pixel_downsampled为调整后的下采样像素坐标
+                goal_pixel_downsampled = adjusted_goal_pixel_downsampled
+                goal_value = downsampled_map[goal_pixel_downsampled[1], goal_pixel_downsampled[0]]
                 print(f"[DEBUG] 调整后目标点地图值: {goal_value}")
             
             # 运行A*算法
             print(f"[DEBUG] 开始运行A*算法...")
             
-            # 检查起点和终点之间的连通性
+            # 检查起点和终点之间的连通性（在下采样地图上）
             print(f"[DEBUG] 检查连通性...")
-            start_accessible = self._check_connectivity(start_pixel, map)
-            goal_accessible = self._check_connectivity(goal_pixel, map)
+            start_accessible = self._check_connectivity(start_pixel_downsampled, downsampled_map)
+            goal_accessible = self._check_connectivity(goal_pixel_downsampled, downsampled_map)
             print(f"[DEBUG] 起点连通性: {start_accessible}, 终点连通性: {goal_accessible}")
             
-            path_pixels = self._a_star_pathfinding(start_pixel, goal_pixel, map)
+            # 在下采样地图上运行A*算法
+            path_pixels_downsampled = self._a_star_pathfinding(start_pixel_downsampled, goal_pixel_downsampled, downsampled_map)
             
-            if not path_pixels:
+            if not path_pixels_downsampled:
                 print("[ERROR] A*算法未找到路径")
                 return None
             
-            print(f"[DEBUG] A*算法找到路径，像素点数: {len(path_pixels)}")
+            print(f"[DEBUG] A*算法找到下采样路径，像素点数: {len(path_pixels_downsampled)}")
+            
+            # 将下采样的像素坐标转换回原始分辨率
+            path_pixels = []
+            for pixel_downsampled in path_pixels_downsampled:
+                pixel_original = (pixel_downsampled[0] * downsample_factor, pixel_downsampled[1] * downsample_factor)
+                path_pixels.append(pixel_original)
+            
+            print(f"[DEBUG] 路径上采样到原始分辨率，像素点数: {len(path_pixels)}")
             
             # 将像素坐标转换回世界坐标
             path_world = []
