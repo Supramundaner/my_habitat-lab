@@ -21,6 +21,29 @@ from .utils import (
 )
 
 
+class NavigationConfig:
+    """导航配置类，集中管理所有导航相关参数"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        # A*路径规划参数
+        self.a_star_interval = 5  # 每5次行动重新规划A*
+        
+        # 目标点距离参数
+        self.intermediate_distance = 1.5  # 中间目标点距离
+        self.final_target_threshold = 1.5  # 切换到最终目标的阈值
+        self.final_stop_threshold = 0.8  # 最终停止阈值
+        
+        # 搜索参数
+        self.min_search_radius = 20  # 最小搜索半径（像素）
+        self.max_search_radius = 500  # 最大搜索半径（像素）
+        
+        # 前进参数
+        self.forward_distance = 0.25  # 前进距离（米）
+        
+        # 最大迭代次数
+        self.max_iterations = 1000  # 防止无限循环
+
+
 class ActionProcessor:
     """动作处理和动画控制的核心类"""
     
@@ -38,6 +61,9 @@ class ActionProcessor:
         self.composer = composer
         self.config = config
         self.map_builder = map_builder
+        
+        # 初始化导航配置
+        self.nav_config = NavigationConfig(config)
         
         # 动画参数
         self.linear_speed = config['agent']['linear_speed']  # m/s
@@ -65,6 +91,93 @@ class ActionProcessor:
         print(f"Time step检测窗口: {self.time_steps_num} steps")
         print(f"最小位移阈值: {self.min_displacement} m")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
+    
+    def _get_robot_state(self) -> Dict[str, Any]:
+        """
+        获取当前机器人状态
+        
+        Returns:
+            包含位置、旋转和2D位置的字典
+        """
+        current_state = self.simulator.get_robot_state()
+        current_pos = current_state['position']
+        current_rot = current_state['rotation']
+        current_pos_2d = np.array([current_pos[0], current_pos[2]])
+        
+        return {
+            'position': current_pos,
+            'rotation': current_rot,
+            'position_2d': current_pos_2d,
+            'raw_state': current_state
+        }
+    
+    def _select_vfh_target(self, current_pos_2d: np.ndarray, adjusted_target_pos: np.ndarray, 
+                          current_path: List[np.ndarray], dist_to_final_target: float) -> Dict[str, Any]:
+        """
+        选择VFH*的目标点
+        
+        Args:
+            current_pos_2d: 当前位置 [x, z]
+            adjusted_target_pos: 调整后的目标位置 [x, z]
+            current_path: A*路径点列表
+            dist_to_final_target: 到最终目标的距离
+        
+        Returns:
+            包含目标点和类型的字典
+        """
+        if dist_to_final_target < self.nav_config.final_target_threshold:
+            # 距离最终目标很近，直接以调整后的最终目标为VFH*目标
+            vfh_target = adjusted_target_pos
+            target_type = "最终目标"
+        else:
+            # 使用A*路径上的中间目标点
+            vfh_target = self._get_intermediate_target(current_pos_2d, current_path, self.nav_config.intermediate_distance)
+            if vfh_target is None:
+                return {
+                    'success': False,
+                    'reason': 'no_intermediate_target',
+                    'message': '无法找到中间目标点'
+                }
+            target_type = "中间目标"
+        
+        return {
+            'success': True,
+            'target': vfh_target,
+            'type': target_type
+        }
+    
+    def _execute_vfh_action(self, action_name: str, action_value: float, current_pos: np.ndarray, current_rot: np.ndarray) -> None:
+        """
+        执行VFH*计算出的动作
+        
+        Args:
+            action_name: 动作名称
+            action_value: 动作值
+            current_pos: 当前位置
+            current_rot: 当前旋转
+        """
+        if action_name == "turn_left":
+            self._handle_turn_left({'angle': action_value})
+        elif action_name == "turn_right":
+            self._handle_turn_right({'angle': action_value})
+        else:
+            # 前进动作
+            # 从四元数提取偏航角
+            from .utils import euler_from_quaternion, yaw_to_unified_angle, unified_angle_to_direction_vector
+            roll, pitch, yaw = euler_from_quaternion(current_rot)
+            yaw_rad = np.radians(yaw)
+            
+            # 转换为统一角度系统
+            unified_angle = yaw_to_unified_angle(yaw_rad)
+            
+            # 计算前进方向向量（使用统一角度系统）
+            forward_direction = unified_angle_to_direction_vector(unified_angle)
+            
+            # 计算向前目标位置
+            end_pos = current_pos + forward_direction * self.nav_config.forward_distance
+            
+            # 执行移动到目标位置
+            self._animate_movement(current_pos, end_pos)
     
     def execute_sequence(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -181,43 +294,60 @@ class ActionProcessor:
         """
         print(f"开始A* + VFH*混合导航到目标: {target_name}")
         
-        # 导航参数
-        a_star_interval = 5  # 每5次行动重新规划A*
-        intermediate_distance = 1.5  # 中间目标点距离
-        final_target_threshold = 1.5  # 切换到最终目标的阈值
-        final_stop_threshold = 0.8  # 最终停止阈值
-        
         # 跟踪变量
         action_count = 0  # 行动计数器
         current_path_result = None  # 当前A*路径结果字典
         current_path = None  # 当前A*路径点列表
         adjusted_target_pos = target_pos_2d  # 调整后的目标位置
         
-        max_iterations = 1000  # 防止无限循环
         iteration = 0
         prev_direction = None
         
-        while iteration < max_iterations:
+        while iteration < self.nav_config.max_iterations:
             iteration += 1
             
             # 获取当前机器人状态
-            current_state = self.simulator.get_robot_state()
-            current_pos = current_state['position']
-            current_rot = current_state['rotation']
-            current_pos_2d = np.array([current_pos[0], current_pos[2]])
+            robot_state = self._get_robot_state()
+            current_pos = robot_state['position']
+            current_rot = robot_state['rotation']
+            current_pos_2d = robot_state['position_2d']
+
+            if self.map_builder.grid_map is not None:
+                # 将世界坐标转换为地图坐标
+                adjusted_target_map_coords = self.map_builder._world_to_map_coords(np.array([[adjusted_target_pos[0], 0, adjusted_target_pos[1]]]))
+                adjusted_target_pixel = (int(adjusted_target_map_coords[0, 0]), int(adjusted_target_map_coords[0, 1]))
+                
+                target_value = self.map_builder.grid_map[adjusted_target_pixel[1], adjusted_target_pixel[0]]
+                if target_value == 0:  # 障碍物
+                    print(f"[WARNING] adjusted_target_pos在障碍物内，寻找最近的可行走点")
+                    nearest_walkable_pixel = self._find_nearest_walkable_point(adjusted_target_pixel, self.map_builder.grid_map)
+                    
+                    if nearest_walkable_pixel is not None:
+                        # 将像素坐标转换为世界坐标
+                        nearest_walkable_world = self._pixel_to_world_coord(nearest_walkable_pixel)
+                        print(f"[INFO] adjusted_target_pos已更新: 原位置 {adjusted_target_pos} -> 新位置 {nearest_walkable_world}")
+                        adjusted_target_pos = nearest_walkable_world
+                    else:
+                        print(f"[ERROR] 无法找到adjusted_target_pos附近的可行走区域")
+                        return {
+                            'success': False,
+                            'reason': 'no_walkable_area_near_target',
+                            'message': '无法找到目标附近的可行走区域'
+                        }
             
             # 计算到调整后最终目标的距离
             dist_to_final_target = np.sqrt((current_pos[0] - adjusted_target_pos[0])**2 + (current_pos[2] - adjusted_target_pos[1])**2)
             
             print(f"迭代 {iteration}: 到最终目标距离: {dist_to_final_target:.2f}m")
             
+
             # 检查是否到达最终目标
-            if dist_to_final_target < final_stop_threshold:
+            if dist_to_final_target < self.nav_config.final_stop_threshold:
                 print(f"[SUCCESS] 成功到达最终目标位置 ({adjusted_target_pos[0]}, {adjusted_target_pos[1]})")
                 return {'success': True}
             
             # 每5次行动（包括第一次）重新运行A*算法
-            if action_count % a_star_interval == 0:
+            if action_count % self.nav_config.a_star_interval == 0:
                 print(f"重新规划A*路径 (行动次数: {action_count})")
                 current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
                 
@@ -237,24 +367,17 @@ class ActionProcessor:
                 print(f"A*路径规划成功，路径点数: {len(current_path)}")
             
             # 确定当前VFH*目标
-                if dist_to_final_target < final_target_threshold:
-                    # 距离最终目标很近，直接以调整后的最终目标为VFH*目标
-                    vfh_target = adjusted_target_pos
-                    target_type = "最终目标"
-                else:
-                    # 使用A*路径上的中间目标点
-                    vfh_target = self._get_intermediate_target(current_pos_2d, current_path, intermediate_distance)
-                    if vfh_target is None:
-                        return {
-                            'success': False,
-                            'reason': 'no_intermediate_target',
-                            'message': '无法找到中间目标点'
-                        }
-                    target_type = "中间目标"
-                
-                # 更新VFH*目标
-                vfh_star.update_target(vfh_target)
-                print(f"VFH*目标更新为: {target_type} ({vfh_target[0]:.2f}, {vfh_target[1]:.2f})")
+            vfh_target_result = self._select_vfh_target(current_pos_2d, adjusted_target_pos, current_path, dist_to_final_target)
+            
+            if not vfh_target_result['success']:
+                return vfh_target_result # 如果无法找到中间目标，则导航失败
+            
+            vfh_target = vfh_target_result['target']
+            target_type = vfh_target_result['type']
+            
+            # 更新VFH*目标
+            vfh_star.update_target(vfh_target)
+            print(f"VFH*目标更新为: {target_type} ({vfh_target[0]:.2f}, {vfh_target[1]:.2f})")
             
             # 获取当前占用地图
             observation = self.simulator.get_observation()
@@ -291,36 +414,10 @@ class ActionProcessor:
             action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
             
             # 执行低层动作
-            if action_name == "turn_left":
-                self._handle_turn_left({'angle': action_value})
-            elif action_name == "turn_right":
-                self._handle_turn_right({'angle': action_value})
-            else:
-                # 前进动作
-                current_state = self.simulator.get_robot_state()
-                current_pos = current_state['position']
-                current_rot = current_state['rotation']
-                
-                # 从四元数提取偏航角
-                from .utils import euler_from_quaternion, yaw_to_unified_angle, unified_angle_to_direction_vector
-                roll, pitch, yaw = euler_from_quaternion(current_rot)
-                yaw_rad = np.radians(yaw)
-                
-                # 转换为统一角度系统
-                unified_angle = yaw_to_unified_angle(yaw_rad)
-                
-                # 计算前进方向向量（使用统一角度系统）
-                forward_direction = unified_angle_to_direction_vector(unified_angle)
-                
-                # 计算向前0.25米的目标位置
-                distance = 0.25  # 前进距离
-                end_pos = current_pos + forward_direction * distance
-                
-                # 执行移动到目标位置
-                self._animate_movement(current_pos, end_pos)
+            self._execute_vfh_action(action_name, action_value, current_pos, current_rot)
             
-                # 增加行动计数器
-                action_count += 1
+            # 增加行动计数器
+            action_count += 1
             
             # 更新前一个方向
             prev_direction = ideal_direction
@@ -333,7 +430,7 @@ class ActionProcessor:
         return {
             'success': False,
             'reason': 'max_iterations_exceeded',
-            'message': f'达到最大迭代次数{max_iterations}，导航失败'
+            'message': f'达到最大迭代次数{self.nav_config.max_iterations}，导航失败'
         }
     
     def _plan_a_star_path(self, start_pos: np.ndarray, goal_pos: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -531,9 +628,8 @@ class ActionProcessor:
         
         visited = set()
         iterations = 0
-        max_iterations = 200000000000  # 大幅增加最大迭代次数
-        
-        print(f"[DEBUG] A*算法开始，最大迭代次数: {max_iterations}")
+        max_iterations = 2000000 # 大幅增加最大迭代次数
+
         
         while open_set and iterations < max_iterations:
             iterations += 1
@@ -664,14 +760,13 @@ class ActionProcessor:
         
         return np.array([world_x, world_z])
     
-    def _find_nearest_walkable_point(self, obstacle_pixel: tuple, map: np.ndarray, min_search_radius: int = 20, max_search_radius: int = 500) -> Optional[tuple]:
+    def _find_nearest_walkable_point(self, obstacle_pixel: tuple, map: np.ndarray) -> Optional[tuple]:
         """
         找到距离障碍物点最近的可行走点
         
         Args:
             obstacle_pixel: 障碍物像素坐标 (x, y)
             map: 占用地图，0=障碍物，255=可行走，128=未知
-            max_search_radius: 最大搜索半径（像素）
         
         Returns:
             最近的可行走像素坐标，如果找不到则返回None
@@ -680,7 +775,7 @@ class ActionProcessor:
         height, width = map.shape
         
         # 从最小半径开始搜索
-        for radius in range(min_search_radius, max_search_radius + 1):
+        for radius in range(self.nav_config.min_search_radius, self.nav_config.max_search_radius + 1):
             candidates = []
             
             # 在指定半径内搜索所有点
@@ -706,7 +801,7 @@ class ActionProcessor:
                 print(f"[DEBUG] 找到最近可行走点: {nearest_pixel}, 距离: {candidates[0][2]:.2f}像素, 地图值: {map[nearest_pixel[1], nearest_pixel[0]]}")
                 return nearest_pixel
         
-        print(f"[ERROR] 在半径{max_search_radius}内未找到可行走点")
+        print(f"[ERROR] 在半径{self.nav_config.max_search_radius}内未找到可行走点")
         return None
     
     def _check_connectivity(self, point: tuple, wall_mask: np.ndarray) -> int:
