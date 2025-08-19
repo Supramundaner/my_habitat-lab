@@ -40,8 +40,6 @@ class NavigationConfig:
         self.final_target_threshold = 1.5  # 切换到最终目标的阈值
         self.final_stop_threshold = 0.8  # 最终停止阈值
         
-        # 搜索参数
-        self.min_search_radius = 20  # 最小搜索半径（像素）
         self.max_search_radius = 500  # 最大搜索半径（像素）
         
         # 前进参数
@@ -400,9 +398,6 @@ class ActionProcessor:
         target_pos_2d = np.array([target_x, target_z])
         vfh_config = self.config.get('vfh', {})
         vfh_star = VFHStar(target_pos_2d, vfh_config)
-        
-        # 将VFH实例传递给video_composer以启用histogram可视化
-        self.composer.set_vfh_instance(vfh_star)
         
         # 执行混合导航（A* + VFH*）
         return self._execute_hybrid_navigation(target_pos_2d, target_name, vfh_star)
@@ -767,17 +762,10 @@ class ActionProcessor:
             
             map = self.map_builder.grid_map.copy()
             
-            # 统计地图状态
-            total_cells = map.size
-            free_cells = np.sum(map == 255)
-            occupied_cells = np.sum(map == 0)
-            unknown_cells = np.sum(map == 128)
-            print(f"[DEBUG] 地图统计 - 总单元格: {total_cells}, 空闲: {free_cells} ({free_cells/total_cells*100:.1f}%), 占用: {occupied_cells} ({occupied_cells/total_cells*100:.1f}%), 未知: {unknown_cells} ({unknown_cells/total_cells*100:.1f}%)")
             
             # 下采样地图以提高A*性能（宽高都缩小到1/4）
             downsample_factor = 4
             downsampled_map = self._downsample_map(map, downsample_factor)
-            print(f"[DEBUG] 地图下采样: 原始尺寸 {map.shape} -> 下采样尺寸 {downsampled_map.shape}")
             
             # 将世界坐标转换为地图坐标
             start_map_coords = self.map_builder._world_to_map_coords(np.array([[start_pos[0], 0, start_pos[1]]]))
@@ -789,9 +777,7 @@ class ActionProcessor:
             # 将像素坐标转换为下采样地图的坐标
             start_pixel_downsampled = (start_pixel[0] // downsample_factor, start_pixel[1] // downsample_factor)
             goal_pixel_downsampled = (goal_pixel[0] // downsample_factor, goal_pixel[1] // downsample_factor)
-            
-            print(f"[DEBUG] 起始位置 (像素坐标): {start_pixel}")
-            print(f"[DEBUG] 目标位置 (像素坐标): {goal_pixel}")
+
             
             # 检查下采样像素坐标是否在地图范围内
             if (start_pixel_downsampled[0] < 0 or start_pixel_downsampled[0] >= downsampled_map.shape[1] or 
@@ -807,9 +793,6 @@ class ActionProcessor:
             # 检查起点和终点是否可行走（在下采样地图上）
             start_value = downsampled_map[start_pixel_downsampled[1], start_pixel_downsampled[0]]
             goal_value = downsampled_map[goal_pixel_downsampled[1], goal_pixel_downsampled[0]]
-            
-            print(f"[DEBUG] 起始点地图值: {start_value} (255=可行走, 0=障碍物, 128=未知)")
-            print(f"[DEBUG] 目标点地图值: {goal_value} (255=可行走, 0=障碍物, 128=未知)")
             
             if start_value == 0:
                 print(f"[ERROR] 起始点不可行走 (地图值: {start_value})")
@@ -835,21 +818,11 @@ class ActionProcessor:
                 adjusted_goal = self._pixel_to_world_coord(adjusted_goal_pixel)
                 was_adjusted = True
                 
-                print(f"[DEBUG] 目标点已调整: 原目标 {goal_pos} -> 新目标 {adjusted_goal}")
-                
                 # 更新goal_pixel_downsampled为调整后的下采样像素坐标
                 goal_pixel_downsampled = adjusted_goal_pixel_downsampled
                 goal_value = downsampled_map[goal_pixel_downsampled[1], goal_pixel_downsampled[0]]
-                print(f"[DEBUG] 调整后目标点地图值: {goal_value}")
-            
-            # 运行A*算法
-            print(f"[DEBUG] 开始运行A*算法...")
-            
-            # 检查起点和终点之间的连通性（在下采样地图上）
-            print(f"[DEBUG] 检查连通性...")
-            start_accessible = self._check_connectivity(start_pixel_downsampled, downsampled_map)
-            goal_accessible = self._check_connectivity(goal_pixel_downsampled, downsampled_map)
-            print(f"[DEBUG] 起点连通性: {start_accessible}, 终点连通性: {goal_accessible}")
+                
+
             
             # 在下采样地图上运行A*算法
             path_pixels_downsampled = self._a_star_pathfinding(start_pixel_downsampled, goal_pixel_downsampled, downsampled_map)
@@ -858,24 +831,18 @@ class ActionProcessor:
                 print("[ERROR] A*算法未找到路径")
                 return None
             
-            print(f"[DEBUG] A*算法找到下采样路径，像素点数: {len(path_pixels_downsampled)}")
-            
             # 将下采样的像素坐标转换回原始分辨率
             path_pixels = []
             for pixel_downsampled in path_pixels_downsampled:
                 pixel_original = (pixel_downsampled[0] * downsample_factor, pixel_downsampled[1] * downsample_factor)
                 path_pixels.append(pixel_original)
             
-            print(f"[DEBUG] 路径上采样到原始分辨率，像素点数: {len(path_pixels)}")
-            
             # 将像素坐标转换回世界坐标
             path_world = []
             for pixel in path_pixels:
                 world_coord = self._pixel_to_world_coord(pixel)
                 path_world.append(world_coord)
-            
-            print(f"[DEBUG] 路径规划完成，世界坐标点数: {len(path_world)}")
-            
+
             return {
                 'path': path_world,
                 'adjusted_goal': adjusted_goal,
@@ -903,18 +870,13 @@ class ActionProcessor:
         # 机器人半径（像素）
         robot_radius_pixels = max(1, int(0.14 / self.map_builder.map_resolution))  # 0.14m机器人半径
         
-        print(f"[DEBUG] 机器人半径: 0.14m")
-        print(f"[DEBUG] 地图分辨率: {self.map_builder.map_resolution}m/pixel")
-        print(f"[DEBUG] 机器人半径 (像素): {robot_radius_pixels}")
         
         # 统计padding前的地图状态
         total_cells = map.size
         free_cells_before = np.sum(map == 255)
         occupied_cells_before = np.sum(map == 0)
         unknown_cells_before = np.sum(map == 128)
-        
-        print(f"[DEBUG] Padding前 - 空闲: {free_cells_before} ({free_cells_before/total_cells*100:.1f}%), 占用: {occupied_cells_before} ({occupied_cells_before/total_cells*100:.1f}%), 未知: {unknown_cells_before} ({unknown_cells_before/total_cells*100:.1f}%)")
-        
+ 
         # 对障碍物进行膨胀操作
         kernel = np.ones((2 * robot_radius_pixels + 1, 2 * robot_radius_pixels + 1), dtype=np.uint8)
         dilated = ndimage.binary_dilation(map == 0, structure=kernel)
@@ -922,13 +884,6 @@ class ActionProcessor:
         # 更新地图：膨胀后的区域标记为障碍物
         map[dilated] = 0
         
-        # 统计padding后的地图状态
-        free_cells_after = np.sum(map == 255)
-        occupied_cells_after = np.sum(map == 0)
-        unknown_cells_after = np.sum(map == 128)
-        
-        print(f"[DEBUG] Padding后 - 空闲: {free_cells_after} ({free_cells_after/total_cells*100:.1f}%), 占用: {occupied_cells_after} ({occupied_cells_after/total_cells*100:.1f}%), 未知: {unknown_cells_after} ({unknown_cells_after/total_cells*100:.1f}%)")
-        print(f"[DEBUG] Padding减少了 {free_cells_before - free_cells_after} 个空闲单元格")
         
         return map
     
@@ -967,10 +922,8 @@ class ActionProcessor:
             iterations += 1
             
             if iterations % 20000 == 0:
-                print(f"[DEBUG] A*迭代次数: {iterations}, 开放集大小: {len(open_set)}, 已访问节点: {len(visited)}")
                 # 如果开放集过大，可能路径不存在
                 if len(open_set) > 10000:
-                    print(f"[DEBUG] 开放集过大({len(open_set)})，可能路径不存在，提前终止")
                     break
             
             current_f, current_g, current = heapq.heappop(open_set)
@@ -989,7 +942,6 @@ class ActionProcessor:
                 path.append(start)
                 path.reverse()
                 
-                print(f"[DEBUG] A*算法成功找到路径，迭代次数: {iterations}, 访问节点数: {len(visited)}")
                 return path
             
             # 8连通邻居
@@ -1017,8 +969,6 @@ class ActionProcessor:
                                 f_score[neighbor] = tentative_g_score + self._euclidean_distance(neighbor, goal)
                                 heapq.heappush(open_set, (f_score[neighbor], tentative_g_score, neighbor))
         
-        print(f"[DEBUG] A*算法未找到路径，迭代次数: {iterations}, 访问节点数: {len(visited)}")
-        print(f"[DEBUG] 开放集大小: {len(open_set)}")
         return []
     
     def _euclidean_distance(self, p1: tuple, p2: tuple) -> float:
@@ -1156,7 +1106,7 @@ class ActionProcessor:
         height, width = map.shape
         
         # 从最小半径开始搜索
-        for radius in range(self.nav_config.min_search_radius, self.nav_config.max_search_radius + 1):
+        for radius in range(0, self.nav_config.max_search_radius + 1):
             candidates = []
             
             # 在指定半径内搜索所有点
@@ -1179,7 +1129,6 @@ class ActionProcessor:
                 # 按距离排序，对255和128一视同仁
                 candidates.sort(key=lambda c: c[2])  # 只按距离排序
                 nearest_pixel = (candidates[0][0], candidates[0][1])
-                print(f"[DEBUG] 找到最近可行走点: {nearest_pixel}, 距离: {candidates[0][2]:.2f}像素, 地图值: {map[nearest_pixel[1], nearest_pixel[0]]}")
                 return nearest_pixel
         
         print(f"[ERROR] 在半径{self.nav_config.max_search_radius}内未找到可行走点")
