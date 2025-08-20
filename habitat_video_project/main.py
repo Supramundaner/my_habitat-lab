@@ -36,15 +36,22 @@ def parse_arguments():
     parser.add_argument(
         '--config',
         type=str,
-        default='configs/default_config.json',
+        default='/home/awangas/my_habitat-lab/habitat_video_project/configs/default_config.json',
         help='配置文件路径'
     )
     
     parser.add_argument(
         '--actions',
         type=str,
-        default='configs/example_actions.json',
+        default='/home/awangas/my_habitat-lab/habitat_video_project/configs/new_action_format.json',
         help='动作序列文件路径'
+    )
+    
+    parser.add_argument(
+        '--wall-mask',
+        type=str,
+        default="/home/awangas/my_habitat-lab/habitat_video_project/eval/output/y9hTuugGdiq/preprocess/wall_mask.png",
+        help='Wall mask 图像路径，用于初始化占用地图（黑色区域表示墙壁）'
     )
     
     parser.add_argument(
@@ -60,18 +67,7 @@ def parse_arguments():
         help='详细输出'
     )
     
-    parser.add_argument(
-        '--show-histogram',
-        action='store_true',
-        default=True,
-        help='在视频中显示VFH polar histogram（默认启用）'
-    )
-    
-    parser.add_argument(
-        '--no-histogram',
-        action='store_true',
-        help='在视频中隐藏VFH polar histogram'
-    )
+
     
     return parser.parse_args()
 
@@ -110,11 +106,34 @@ def main():
         
         # 检查动作序列格式并处理
         if 'action' in actions:
-            # 新格式：包含target参数的动作序列
-            print("检测到新的动作序列格式（包含target参数）")
+            # 旧格式：包含target参数的动作序列
+            print("检测到旧的动作序列格式（包含action参数）")
             # 只测试第一个action对象
             action_sequences = [actions['action'][0]]
             print(f"测试第一个action对象，目标: {action_sequences[0].get('target', 'None')}")
+        elif 'target_info' in actions:
+            # 新格式：包含target_info和wall_mask
+            print("检测到新的动作序列格式（包含target_info和wall_mask）")
+            target_info = actions['target_info']
+            wall_mask_path = actions.get('wall_mask', None)
+            
+            # 如果命令行参数提供了wall_mask，优先使用命令行参数
+            if args.wall_mask:
+                wall_mask_path = args.wall_mask
+                print(f"使用命令行参数提供的wall_mask: {wall_mask_path}")
+            elif wall_mask_path:
+                print(f"使用action文件中的wall_mask: {wall_mask_path}")
+            
+            # 将wall_mask路径存储到actions中，供后续使用
+            actions['wall_mask_path'] = wall_mask_path
+            
+            # 创建简化的action_sequences格式，保持向后兼容
+            action_sequences = [{
+                'target_info': target_info,
+                'wall_mask_path': wall_mask_path
+            }]
+            
+            print(f"目标信息: {target_info}")
         else:
             # 旧格式：直接的动作序列
             print("使用旧的动作序列格式")
@@ -158,6 +177,26 @@ def main():
         use_gpu = config.get('gpu', {}).get('enabled', False)
         map_builder = OccupancyMapBuilder(use_gpu=use_gpu, config=config)
         composer.set_map_builder(map_builder, config)
+        
+        # 7.5. 如果提供了 wall mask，则用它初始化占用地图
+        wall_mask_path = None
+        if args.wall_mask:
+            wall_mask_path = args.wall_mask
+            print("7.5. 使用命令行参数提供的 wall mask 初始化占用地图...")
+        elif 'wall_mask_path' in actions and actions['wall_mask_path']:
+            wall_mask_path = actions['wall_mask_path']
+            print("7.5. 使用 action 文件中的 wall mask 初始化占用地图...")
+        
+        if wall_mask_path:
+            if os.path.exists(wall_mask_path):
+                success = map_builder.initialize_from_wall_mask(wall_mask_path)
+                if not success:
+                    print("警告: Wall mask 初始化失败，将使用默认的空地图")
+            else:
+                print(f"警告: Wall mask 文件不存在: {wall_mask_path}")
+                print("将使用默认的空地图")
+        else:
+            print("7.5. 未提供 wall mask，使用默认的空地图")
         
         print("8. 初始化动作处理器...")
         processor = ActionProcessor(simulator, composer, config, map_builder)
@@ -228,15 +267,7 @@ def main():
         print(f"执行时间: {execution_time:.2f} 秒")
         print(f"生成帧数: {execution_stats['total_frames']}")
         print(f"视频时长: {execution_stats['total_duration']:.2f} 秒")
-        total_actions = sum(len(group['sequence']) for group in action_sequences)
-        print(f"成功动作: {len(all_completed_actions)}/{total_actions}")
         
-        if all_collision_action:
-            collision_info = all_collision_action
-            print(f"碰撞检测: 在第 {collision_info['index'] + 1} 个动作处检测到碰撞")
-            print(f"碰撞动作: {collision_info['action']}")
-        else:
-            print("碰撞检测: 无碰撞")
         
         print(f"\n输出文件:")
         print(f"  视频: {paths['video']}")
