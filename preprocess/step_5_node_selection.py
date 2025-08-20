@@ -83,24 +83,25 @@ def load_prompt_template(prompt_path: str) -> str:
     with open(prompt_path, 'r', encoding='utf-8') as f:
         return f.read().strip()
 
-def select_node_with_llm(room_image: np.ndarray, nodes_in_room: List[Dict], 
-                        config: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-    """Use LLM to select optimal navigation node."""
+def select_node_with_llm(original_room_image: np.ndarray, 
+                         room_image_with_nodes: np.ndarray, 
+                         nodes_in_room: List[Dict], 
+                         config: Dict[str, Any], 
+                         output_dir: str) -> Dict[str, Any]:
+    """Use LLM to select optimal navigation node using two images."""
     
     if genai is None:
         raise RuntimeError("google-generativeai package not installed")
     
-    # Get LLM configuration
+    # ... (前面的LLM配置和prompt加载部分保持不变) ...
     llm_config = config['llm_config']
     api_key = llm_config['api_key']
-    model = llm_config.get('model', 'gemini-2.0-flash')
+    model = llm_config.get('model', 'gemini-1.5-flash') # 建议使用支持多图的模型
     max_tokens = llm_config.get('max_tokens', 1000)
     
-    # Load prompt template
     prompt_path = config['prompts']['choose_node_prompt']
     prompt_template = load_prompt_template(prompt_path)
     
-    # Get goal object and replace placeholder
     goal_object = config['scene_config']['goal_object']
     prompt_template = prompt_template.format(goal_object=goal_object)
     
@@ -110,7 +111,6 @@ def select_node_with_llm(room_image: np.ndarray, nodes_in_room: List[Dict],
     print(f"  - Available nodes: {len(nodes_in_room)}")
     print(f"  - Prompt from: {prompt_path}")
     
-    # Add context about available nodes to prompt
     node_list = ", ".join([str(node['node_id']) for node in nodes_in_room])
     enhanced_prompt = f"{prompt_template}\n\nAvailable nodes in this room: {node_list}"
     
@@ -118,34 +118,44 @@ def select_node_with_llm(room_image: np.ndarray, nodes_in_room: List[Dict],
         if genai is None:
             raise RuntimeError("google packages not installed")
         
-        # Set up client with proxy using environment variable and HttpOptions
+        # ... (API client设置部分保持不变) ...
         api_key = llm_config['api_key']
         base_url = llm_config.get('base_url', 'https://api.openai-proxy.org/google')
-        
         os.environ['API_KEY'] = api_key
         http_options = types.HttpOptions(base_url=base_url)
         client = genai.Client(api_key=api_key, http_options=http_options)
         
-        print("🚀 Sending node selection request to LLM...")
+        print("🚀 Sending node selection request to LLM with two images...")
         
-        # Save room image temporarily and convert to bytes
-        temp_image_path = os.path.join(output_dir, "temp_room_image.png")
-        cv2.imwrite(temp_image_path, room_image)
+        # --- 修改点 1: 处理两张图片 ---
+        # 保存并读取第一张图 (原图)
+        temp_original_image_path = os.path.join(output_dir, "temp_original_room_image.png")
+        cv2.imwrite(temp_original_image_path, original_room_image)
+        with open(temp_original_image_path, 'rb') as f:
+            original_image_bytes = f.read()
         
-        # Read image as bytes
-        with open(temp_image_path, 'rb') as f:
-            room_image_bytes = f.read()
-        
-        # Create image part
-        room_image_part = types.Part.from_bytes(
-            data=room_image_bytes,
+        # 保存并读取第二张图 (带nodes的图)
+        temp_nodes_image_path = os.path.join(output_dir, "temp_room_with_nodes.png")
+        cv2.imwrite(temp_nodes_image_path, room_image_with_nodes)
+        with open(temp_nodes_image_path, 'rb') as f:
+            nodes_image_bytes = f.read()
+
+        # --- 修改点 2: 创建两个图像Part ---
+        original_image_part = types.Part.from_bytes(
+            data=original_image_bytes,
             mime_type='image/png'
         )
         
-        # Prepare prompt parts
+        nodes_image_part = types.Part.from_bytes(
+            data=nodes_image_bytes,
+            mime_type='image/png'
+        )
+        
+        # --- 修改点 3: 准备包含两张图片的prompt parts ---
         prompt_parts = [
             enhanced_prompt,
-            room_image_part
+            original_image_part,  # 第一张图
+            nodes_image_part      # 第二张图
         ]
         
         # Generate content
@@ -154,23 +164,23 @@ def select_node_with_llm(room_image: np.ndarray, nodes_in_room: List[Dict],
             contents=prompt_parts
         )
         
-        # Clean up temp file
-        os.remove(temp_image_path)
+        # --- 修改点 4: 清理两个临时文件 ---
+        os.remove(temp_original_image_path)
+        os.remove(temp_nodes_image_path)
         
+        # ... (后面的响应解析部分保持不变) ...
         if not response or not response.text:
             raise RuntimeError("Empty response from LLM")
         
         raw_response = response.text.strip()
         print(f"📝 Raw LLM response: '{raw_response}'")
         
-        # Parse selected node
         selected_node_id = None
         try:
             import re
             numbers = re.findall(r'\d+', raw_response)
             if numbers:
                 candidate_id = int(numbers[0])
-                # Verify the node ID exists in available nodes
                 available_ids = [node['node_id'] for node in nodes_in_room]
                 if candidate_id in available_ids:
                     selected_node_id = candidate_id
@@ -182,7 +192,6 @@ def select_node_with_llm(room_image: np.ndarray, nodes_in_room: List[Dict],
         except Exception as e:
             print(f"⚠️ Error parsing node ID: {e}")
         
-        # Find selected node data
         selected_node_data = None
         if selected_node_id is not None:
             for node in nodes_in_room:
@@ -256,15 +265,31 @@ def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[s
         nodes_in_room,
         config['graph_generation'].get('node_radius_pixels', 8)
     )
-    original_graph=crop_image_to_bbox(topdown_image, room_bbox)
-    # Save room with graph
+    original_graph = crop_image_to_bbox(topdown_image, room_bbox)
+    
+    # 这张是画了nodes的图
+    room_with_graph = draw_nodes_on_cropped_image(
+        original_graph, # 使用已经裁剪好的原图作为底图
+        nodes_in_room,
+        config['graph_generation'].get('node_radius_pixels', 8)
+    )
+    
+    # 保存 room_with_graph (这部分逻辑不变)
     room_with_graph_path = os.path.join(output_dir, "room_with_graph.png")
     cv2.imwrite(room_with_graph_path, room_with_graph)
     print(f"✓ Room with graph saved to: {room_with_graph_path}")
     
-    # Use LLM to select node (or fallback to first node)
+    # 使用 LLM 来选择节点
     try:
-        llm_result = select_node_with_llm(room_with_graph, nodes_in_room, config, output_dir)
+        # --- 修改点 5: 调用函数时传入两张图片 ---
+        llm_result = select_node_with_llm(
+            original_room_image=original_graph,         # 传入裁剪后的原图
+            room_image_with_nodes=room_with_graph,      # 传入画了nodes的图
+            nodes_in_room=nodes_in_room,
+            config=config,
+            output_dir=output_dir
+        )
+        
         selected_node_data = llm_result['selected_node_data']
         llm_response = llm_result
         
@@ -273,6 +298,7 @@ def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[s
             selected_node_data = nodes_in_room[0]
             llm_response['selected_node_id'] = selected_node_data['node_id']
             llm_response['selected_node_data'] = selected_node_data
+            
             
     except Exception as e:
         print(f"⚠️ LLM node selection failed: {e}")
