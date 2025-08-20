@@ -410,16 +410,6 @@ class EpisodeEvaluator:
 
             if success:
                 print("✓ Video generation completed successfully")
-                video_dir = self.output_dir / "video"
-                video_files = list(video_dir.glob("*.mp4"))
-                if video_files:
-                    print(f"✓ Video file generated: {video_files[0]}")
-                    shutil.copy2(video_files[0], self.output_dir / "output.mp4")
-                    return True
-                else:
-                    error_msg = "Video generation completed but no video file found"
-                    self.results["errors"].append(error_msg)
-                    return False
             else:
                 error_msg = "Video generation failed."
                 self.results["errors"].append(error_msg)
