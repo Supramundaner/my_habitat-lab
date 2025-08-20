@@ -81,15 +81,10 @@ class WorkflowOrchestrator:
         print("STEP 0: Generating topdown view and metadata")
         print("="*60)
         
-        try:
-            result = generate_topdown_view(self.config, self.output_dir)
-            self._update_step_status("step_0_topdown_generation", True, result)
-            return True
-        except Exception as e:
-            error_msg = f"Step 0 failed: {str(e)}"
-            print(f"✗ {error_msg}")
-            self._update_step_status("step_0_topdown_generation", False, {"error": error_msg})
-            return False
+        result = generate_topdown_view(self.config, self.output_dir)
+        self._update_step_status("step_0_topdown_generation", True, result)
+        return True
+
     
     def run_step_1(self) -> bool:
         """Step 1: Generate wall mask."""

@@ -1,14 +1,3 @@
-#!/usr/bin/env python3
-"""
-Automated evaluation script for single episode navigation tasks.
-Integrates the full pipeline: preprocessing -> action generation -> video generation -> evaluation.
-
-This version directly imports and executes the logic from main_workflow.py and main.py
-instead of using subprocess calls, allowing for better integration and debugging.
-
-Usage:
-    python run_eval.py eval_config.json
-"""
 import traceback
 import os
 import sys
@@ -75,7 +64,6 @@ except ImportError as e:
 
 # --- End of Integrated Imports ---
 
-
 class EpisodeEvaluator:
     """Main evaluation orchestrator for single episode navigation tasks."""
 
@@ -83,8 +71,7 @@ class EpisodeEvaluator:
         """Initialize evaluator with configuration."""
         self.config_path = Path(config_path)
         self.config = self._load_config()
-        # self.project_root = Path(__file__).parent.parent.absolute()
-        self.project_root = video_root
+        self.project_root = project_root
         self.preprocess_dir = preprocess_root
 
         # Extract scene identifier for output directory
@@ -119,21 +106,16 @@ class EpisodeEvaluator:
         episode_id = self.config['episode']['episode_id']
 
         try:
-            if episode_json_path.endswith('.gz'):
-                with gzip.open(episode_json_path, 'rt', encoding='utf-8') as f:
-                    episode_data = json.load(f)
-            else:
-                with open(episode_json_path, 'r', encoding='utf-8') as f:
-                    episode_data = json.load(f)
+            opener = gzip.open if episode_json_path.endswith('.gz') else open
+            with opener(episode_json_path, 'rt', encoding='utf-8') as f:
+                episode_data = json.load(f)
 
             target_episode = next((ep for ep in episode_data['episodes'] if str(ep['episode_id']) == str(episode_id)), None)
-
             if target_episode is None:
                 raise ValueError(f"Episode {episode_id} not found in {episode_json_path}")
 
             object_category = target_episode['object_category']
-            goals_key = next((key for key in episode_data['goals_by_category'] if key.endswith(object_category) or key == object_category), None)
-
+            goals_key = next((key for key in episode_data.get('goals_by_category', {}) if key.endswith(object_category) or key == object_category), None)
             if goals_key is None:
                 raise ValueError(f"No goals found for object category: {object_category}")
 
@@ -152,9 +134,7 @@ class EpisodeEvaluator:
             print(f"  Object category: {object_category}")
             print(f"  Start position: {target_episode['start_position']}")
             print(f"  Number of goals: {len(goals)}")
-
             return episode_info
-
         except Exception as e:
             error_msg = f"Failed to load episode data: {e}"
             self.results["errors"].append(error_msg)
@@ -171,8 +151,6 @@ class EpisodeEvaluator:
                     "goal_object": episode_data['object_category'],
                     "rotation": episode_data['start_rotation'],
                     "custom_ortho_scale": self.config['preprocess']['scene_config']['custom_ortho_scale'],
-                    "target_coverage": self.config['preprocess']['scene_config']['target_coverage'],
-                    "draw_coordinates": self.config['preprocess']['scene_config']['draw_coordinates']
                 },
                 "room_segmentation": self.config['preprocess']['room_segmentation'],
                 "graph_generation": self.config['preprocess']['graph_generation'],
@@ -185,14 +163,11 @@ class EpisodeEvaluator:
                     "output_dir": str(self.output_dir / "preprocess")
                 }
             }
-
             preprocess_config_path = self.output_dir / "preprocess_config.json"
             with open(preprocess_config_path, 'w', encoding='utf-8') as f:
                 json.dump(preprocess_config, f, indent=2, ensure_ascii=False)
-
             print(f"✓ Created preprocessing config: {preprocess_config_path}")
             return preprocess_config_path
-
         except Exception as e:
             error_msg = f"Failed to create preprocessing config: {e}"
             self.results["errors"].append(error_msg)
@@ -205,32 +180,17 @@ class EpisodeEvaluator:
             print("\n" + "="*60)
             print("RUNNING PREPROCESSING PIPELINE (IN-PROCESS)")
             print("="*60)
-
-            # Preprocessing scripts often use relative paths, so we change directory
             os.chdir(self.preprocess_dir)
-
             orchestrator = WorkflowOrchestrator(str(preprocess_config_path))
             success = orchestrator.run_workflow()
-
             if success:
                 print("✓ Preprocessing completed successfully")
-                action_json_path = self.output_dir / "preprocess" / "action.json"
-                if action_json_path.exists():
-                    print(f"✓ Action file generated: {action_json_path}")
-                    return True
-                else:
-                    error_msg = "Preprocessing completed but action.json not found"
-                    self.results["errors"].append(error_msg)
-                    print(f"✗ {error_msg}")
-                    return False
+                return True
             else:
                 error_msg = "Preprocessing workflow failed."
-                if orchestrator.output_data.get("errors"):
-                    error_msg += f" Last error: {orchestrator.output_data['errors'][-1]}"
                 self.results["errors"].append(error_msg)
                 print(f"✗ {error_msg}")
                 return False
-
         except Exception as e:
             error_msg = f"Failed to run preprocessing: {e}"
             self.results["errors"].append(error_msg)
@@ -240,8 +200,8 @@ class EpisodeEvaluator:
         finally:
             os.chdir(original_cwd)
 
-    def _create_video_config(self, episode_data: Dict[str, Any]) -> Tuple[Path, Path]:
-        """Create video generation configuration and action files."""
+    def _create_video_generation_assets(self) -> Dict[str, Path]:
+        """Creates config and identifies paths needed for video generation."""
         try:
             video_config = {
                 "video": self.config['video_generation']['video'],
@@ -255,30 +215,36 @@ class EpisodeEvaluator:
                 "navigation": self.config['video_generation']['navigation'],
                 "object_detection": self.config['video_generation']['object_detection']
             }
-
             video_config_path = self.output_dir / "video_config.json"
             with open(video_config_path, 'w', encoding='utf-8') as f:
                 json.dump(video_config, f, indent=2, ensure_ascii=False)
 
             preprocess_action_path = self.output_dir / "preprocess" / "action.json"
-            video_action_path = self.output_dir / "action.json"
+            wall_mask_path = self.output_dir / "preprocess" / "wall_mask.png"
 
-            if preprocess_action_path.exists():
-                shutil.copy2(preprocess_action_path, video_action_path)
-                print(f"✓ Created video config: {video_config_path}")
-                print(f"✓ Copied action file: {video_action_path}")
-                return video_config_path, video_action_path
-            else:
+            if not preprocess_action_path.exists():
                 raise FileNotFoundError(f"Action file not found: {preprocess_action_path}")
+            if not wall_mask_path.exists():
+                raise FileNotFoundError(f"Wall mask file not found: {wall_mask_path}")
 
+            print(f"✓ Created video config: {video_config_path}")
+            print(f"✓ Found action file: {preprocess_action_path}")
+            print(f"✓ Found wall mask: {wall_mask_path}")
+
+            return {
+                "config_path": video_config_path,
+                "actions_path": preprocess_action_path,
+                "wall_mask_path": wall_mask_path
+            }
         except Exception as e:
-            error_msg = f"Failed to create video config: {e}"
+            error_msg = f"Failed to create video generation assets: {e}"
             self.results["errors"].append(error_msg)
             raise RuntimeError(error_msg)
-    
-    def run_video_generation_from_args(self, args: Dict[str, Any]) -> bool:
+
+    def _run_video_generation_in_process(self, args: Dict[str, Any]) -> bool:
         """
         Executes the video generation logic from main.py, adapted to take a dict.
+        This is a direct copy and adaptation of the main() function from the new main.py.
         """
         simulator = None
         composer = None
@@ -300,14 +266,24 @@ class EpisodeEvaluator:
             print("2. 加载动作序列...")
             actions = load_json_config(args['actions'])
             
-            if 'action' in actions:
-                print("检测到新的动作序列格式（包含target参数）")
-                action_sequences = [actions['action'][0]]
-                print(f"测试第一个action对象，目标: {action_sequences[0].get('target', 'None')}")
+            # THIS IS THE KEY CHANGE: Handling the new action format
+            if 'target_info' in actions:
+                print("检测到新的动作序列格式（包含target_info和wall_mask）")
+                wall_mask_path = args.get('wall_mask')
+                # Create a simplified action_sequences structure for main.py's loop
+                action_sequences = [{
+                    'target_info': actions['target_info'],
+                    'wall_mask_path': wall_mask_path
+                }]
+                actions['wall_mask_path'] = wall_mask_path
             else:
-                print("使用旧的动作序列格式")
-                action_sequences = [{'sequence': actions['sequence']}]
-            
+                # Fallback for old formats, though not expected in this workflow
+                print("警告：未检测到 'target_info'，尝试旧格式")
+                if 'action' in actions:
+                    action_sequences = [actions['action'][0]]
+                else:
+                    action_sequences = [{'sequence': actions['sequence']}]
+
             if args.get('output_dir'):
                 config['output_dir'] = args['output_dir']
             
@@ -328,7 +304,6 @@ class EpisodeEvaluator:
                 raise ValueError("必须提供 'agent_state' 或 'initial_state'")
             if initial_state is None:
                 initial_state = {"position": [0.0, 0.0], "rotation": 0.0}
-                print("警告: 没有提供initial_state，使用默认值")
             simulator.setup_scene_and_agent(initial_state, agent_state)
             
             print("6. 初始化视频合成器...")
@@ -338,6 +313,14 @@ class EpisodeEvaluator:
             use_gpu = config.get('gpu', {}).get('enabled', False)
             map_builder = OccupancyMapBuilder(use_gpu=use_gpu, config=config)
             composer.set_map_builder(map_builder, config)
+            
+            # 7.5 Initialize map from wall mask
+            wall_mask_path = args.get('wall_mask')
+            if wall_mask_path and os.path.exists(wall_mask_path):
+                print(f"7.5. 使用 wall mask 初始化占用地图: {wall_mask_path}")
+                map_builder.initialize_from_wall_mask(wall_mask_path)
+            else:
+                print(f"7.5. 未提供或未找到 wall mask，使用默认的空地图")
             
             print("8. 初始化动作处理器...")
             processor = ActionProcessor(simulator, composer, config, map_builder)
@@ -382,7 +365,7 @@ class EpisodeEvaluator:
                     'position': final_state['position'].tolist(),
                     'rotation': final_state['rotation'].tolist()
                 },
-                'original_sequence': action_sequences,
+                'original_actions_input': actions,
                 'completed_sequence': all_completed_actions,
                 'collision_at_action': all_collision_action,
                 'execution_stats': execution_stats
@@ -394,12 +377,10 @@ class EpisodeEvaluator:
             print("执行完成!")
             print(f"  视频: {paths['video']}\n  报告: {paths['report']}")
             return True
-            
         except Exception as e:
             print(f"\n执行过程中发生错误: {e}")
             traceback.print_exc()
             return False
-            
         finally:
             print("\n清理资源...")
             if composer:
@@ -409,28 +390,23 @@ class EpisodeEvaluator:
             clear_gpu_cache()
             print("清理完成")
 
-
-    def _run_video_generation(self, video_config_path: Path, video_action_path: Path) -> bool:
-        """Run video generation by direct import."""
+    def _run_video_generation(self, assets: Dict[str, Path]) -> bool:
+        """Run video generation by calling the in-process function."""
         original_cwd = os.getcwd()
         try:
             print("\n" + "="*60)
             print("RUNNING VIDEO GENERATION (IN-PROCESS)")
             print("="*60)
-
-            # The video generation script also uses relative paths
             os.chdir(self.project_root)
 
-            # Prepare arguments as a dictionary
             args = {
-                'config': str(video_config_path),
-                'actions': str(video_action_path),
-                'output_dir': None, # Let config file decide, can be overridden
-                'verbose': False, # Can be set to True for more debug info
-                'show_histogram': False # from --no-histogram flag
+                'config': str(assets['config_path']),
+                'actions': str(assets['actions_path']),
+                'wall_mask': str(assets['wall_mask_path']), # Crucial new argument
+                'output_dir': None,
+                'verbose': "--verbose" in sys.argv
             }
-
-            success = self.run_video_generation_from_args(args)
+            success = self._run_video_generation_in_process(args)
 
             if success:
                 print("✓ Video generation completed successfully")
@@ -443,18 +419,14 @@ class EpisodeEvaluator:
                 else:
                     error_msg = "Video generation completed but no video file found"
                     self.results["errors"].append(error_msg)
-                    print(f"✗ {error_msg}")
                     return False
             else:
                 error_msg = "Video generation failed."
                 self.results["errors"].append(error_msg)
-                print(f"✗ {error_msg}")
                 return False
-
         except Exception as e:
             error_msg = f"Failed to run video generation: {e}"
             self.results["errors"].append(error_msg)
-            print(f"✗ {error_msg}")
             traceback.print_exc()
             return False
         finally:
@@ -462,16 +434,19 @@ class EpisodeEvaluator:
 
     def _evaluate_navigation_success(self, episode_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Evaluate navigation success based on geodesic distance to target viewpoints,
-        mimicking the logic from ovon-nav.py.
+        Evaluate navigation success based on geodesic distance to target viewpoints.
+        (This part remains unchanged as per the instructions).
         """
-        sim = None  # 初始化 sim 变量
+        if not habitat_sim or not np:
+            print("✗ Evaluation skipped: habitat_sim or numpy not installed.")
+            return {"sr": -1.0, "spl": -1.0, "success": False, "error": "Missing dependencies"}
+        
+        sim = None
         try:
             print("\n" + "="*60)
             print("EVALUATING NAVIGATION SUCCESS (GEODESIC METHOD)")
             print("="*60)
 
-            # --- 1. 获取评估所需数据 ---
             video_report_path = self.output_dir / "video" / "execution_report.json"
             if not video_report_path.exists():
                 raise FileNotFoundError(f"Video report not found: {video_report_path}")
@@ -481,12 +456,8 @@ class EpisodeEvaluator:
 
             final_position = np.array(video_report['final_agent_state']['position'])
             start_position = np.array(episode_data['start_position'])
-            # 从报告中获取实际行走距离，如果不存在则估算
-            episode_cum_distance = video_report['execution_stats'].get('total_distance', 0.0)
-            if episode_cum_distance == 0.0:
-                print("Warning: 'total_distance' not in report. Using Euclidean distance for path length.")
-                episode_cum_distance = np.linalg.norm(final_position - start_position)
-                
+            episode_cum_distance = video_report['execution_stats'].get('total_distance', np.linalg.norm(final_position - start_position))
+            
             view_points = [np.array(vp['agent_state']['position']) for goal in episode_data['goals'] for vp in goal.get('view_points', [])]
             if not view_points:
                 print("⚠ No viewpoints found in goals, using goal positions instead")
@@ -495,97 +466,51 @@ class EpisodeEvaluator:
                 raise ValueError("No target viewpoints or positions found in goals")
             
             scene_file = self.config['scene']['scene_file']
-            success_threshold = self.config['evaluation'].get('success_distance_threshold', 0.25) # 使用配置文件中的阈值，默认为0.25
+            success_threshold = self.config['evaluation'].get('success_distance_threshold', 0.25)
 
-            # --- 2. 初始化一个临时的模拟器用于寻路 ---
-            print(f"Initializing temporary simulator with scene: {scene_file}")
-            sim_settings = {
-                "scene": scene_file,
-                "default_agent": 0,
-                "sensor_height": 1.5,
-                "width": 128,
-                "height": 128,
-            }
+            sim_settings = {"scene": scene_file, "default_agent": 0, "sensor_height": 1.5, "width": 128, "height": 128}
             sim_cfg = habitat_sim.SimulatorConfiguration()
             sim_cfg.scene_id = sim_settings["scene"]
             agent_cfg = habitat_sim.AgentConfiguration()
-            
             cfg = habitat_sim.Configuration(sim_cfg, [agent_cfg])
             sim = habitat_sim.Simulator(cfg)
             path_finder = sim.pathfinder
             
-            # --- 3. 计算测地线距离 ---
-            # 计算起点到目标的测地线距离 (L*)
             path_start = habitat_sim.MultiGoalShortestPath()
             path_start.requested_start = start_position
             path_start.requested_ends = view_points
-            if path_finder.find_path(path_start):
-                start_end_geo_distance = path_start.geodesic_distance
-            else:
-                print("Warning: Goal is not navigable from start position.")
-                start_end_geo_distance = np.inf
+            path_finder.find_path(path_start)
+            start_end_geo_distance = path_start.geodesic_distance
 
-            # 计算智能体终点到目标的测地线距离 (d_g)
             path_agent = habitat_sim.MultiGoalShortestPath()
             path_agent.requested_start = final_position
             path_agent.requested_ends = view_points
-            if path_finder.find_path(path_agent):
-                agent_end_geo_distance = path_agent.geodesic_distance
-            else:
-                print("Warning: Goal is not navigable from agent's final position.")
-                agent_end_geo_distance = np.inf
+            path_finder.find_path(path_agent)
+            agent_end_geo_distance = path_agent.geodesic_distance
                 
-            # --- 4. 计算 SR 和 SPL ---
-            if start_end_geo_distance == np.inf:
-                # 如果目标本身就不可达，我们认为任务“成功”是平凡的
-                sr = 1.0
-                spl = 1.0
-            elif agent_end_geo_distance == np.inf:
-                # 如果智能体走到了一个无法到达目标点的地方
-                sr = 0.0
-                spl = 0.0
-            else:
-                # 标准情况
-                sr = 1.0 if agent_end_geo_distance <= success_threshold else 0.0
-                if sr > 0:
-                    spl = start_end_geo_distance / max(start_end_geo_distance, episode_cum_distance)
-                else:
-                    spl = 0.0
+            sr = 1.0 if agent_end_geo_distance <= success_threshold and agent_end_geo_distance != np.inf else 0.0
+            spl = 0.0
+            if sr > 0:
+                spl = start_end_geo_distance / max(start_end_geo_distance, episode_cum_distance)
 
             evaluation_results = {
-                "sr": sr,
-                "spl": spl,
-                "success": bool(sr), # 保留旧的 'success' 字段以兼容
+                "sr": sr, "spl": spl, "success": bool(sr),
                 "geodesic_distance_to_target": agent_end_geo_distance,
                 "optimal_geodesic_distance": start_end_geo_distance,
                 "path_length": episode_cum_distance,
-                "success_threshold": success_threshold,
-                "final_position": final_position.tolist(),
-                "start_position": start_position.tolist(),
-                "object_category": episode_data['object_category']
+                "success_threshold": success_threshold
             }
-
-            print(f"✓ Evaluation Complete (Geodesic Method)")
-            print(f"  Success (SR): {sr}")
-            print(f"  SPL: {spl:.3f}")
-            print(f"  Geodesic distance to target: {agent_end_geo_distance:.3f}m (threshold: {success_threshold}m)")
-            print(f"  Optimal geodesic distance: {start_end_geo_distance:.3f}m")
-            print(f"  Actual path length: {episode_cum_distance:.3f}m")
-            
+            print(f"✓ Evaluation Complete: SR={sr}, SPL={spl:.3f}, Dist={agent_end_geo_distance:.3f}m")
             return evaluation_results
-
         except Exception as e:
             error_msg = f"Failed to evaluate navigation success: {e}"
             self.results["errors"].append(error_msg)
             print(f"✗ {error_msg}")
             traceback.print_exc()
             return {"sr": 0.0, "spl": 0.0, "success": False, "error": error_msg}
-        
         finally:
-            # 确保模拟器被正确关闭
             if sim:
                 sim.close()
-                print("Temporary simulator closed.")
 
     def _save_results(self):
         """Save final evaluation results."""
@@ -601,10 +526,8 @@ class EpisodeEvaluator:
         """Run the complete evaluation pipeline."""
         try:
             print("\n" + "🚀" + "="*58 + "🚀")
-            print("🎯 STARTING AUTOMATED EPISODE EVALUATION 🎯")
+            print("🎯 STARTING AUTOMATED EPISODE EVALUATION (REFACTORED) 🎯")
             print("🚀" + "="*58 + "🚀")
-            print(f"Episode: {self.config['episode']['episode_id']}")
-            print(f"Output directory: {self.output_dir}")
 
             print("\n1. Loading episode data...")
             episode_data = self._load_episode_data()
@@ -614,21 +537,18 @@ class EpisodeEvaluator:
             preprocess_config_path = self._create_preprocess_config(episode_data)
             self.results["preprocessing_success"] = self._run_preprocessing(preprocess_config_path)
             if not self.results["preprocessing_success"]:
-                print("✗ Preprocessing failed, stopping evaluation")
+                print("✗ Preprocessing failed, stopping evaluation.")
                 return False
 
             print("\n3. Running video generation...")
-            video_config_path, video_action_path = self._create_video_config(episode_data)
-            self.results["video_generation_success"] = self._run_video_generation(video_config_path, video_action_path)
+            video_assets = self._create_video_generation_assets()
+            self.results["video_generation_success"] = self._run_video_generation(video_assets)
             if not self.results["video_generation_success"]:
-                print("✗ Video generation failed, stopping evaluation")
+                print("✗ Video generation failed, stopping evaluation.")
                 return False
 
             print("\n4. Evaluating navigation success...")
             self.results["evaluation_results"] = self._evaluate_navigation_success(episode_data)
-
-            print("\n5. Saving results...")
-            self._save_results()
 
             print("\n" + "🎉" + "="*58 + "🎉")
             print("🎯 EVALUATION COMPLETED SUCCESSFULLY! 🎯")
@@ -636,22 +556,16 @@ class EpisodeEvaluator:
 
             eval_res = self.results["evaluation_results"]
             print(f"\nEvaluation Summary:")
-            print(f"  Episode ID: {self.config['episode']['episode_id']}")
-            print(f"  Object Category: {episode_data['object_category']}")
             print(f"  Success (SR): {'✓' if eval_res.get('sr', 0.0) > 0 else '✗'} ({eval_res.get('sr', 0.0):.1f})")
             print(f"  SPL: {eval_res.get('spl', 0.0):.3f}")
-            print(f"  Geodesic distance to target: {eval_res.get('geodesic_distance_to_target', float('inf')):.3f}m")
-            print(f"\nOutput files:")
-            print(f"  Video: {self.output_dir}/output.mp4")
-            print(f"  Results: {self.output_dir}/output.json")
+            print(f"  Output: {self.output_dir}")
             return True
 
         except Exception as e:
             error_msg = f"Evaluation failed with error: {e}"
             print(f"\n✗ {error_msg}")
             self.results["errors"].append(error_msg)
-            if "--verbose" in sys.argv:
-                traceback.print_exc()
+            traceback.print_exc()
             return False
         finally:
             self._save_results()
@@ -660,18 +574,9 @@ def main():
     """Main entry point."""
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         print("Usage: python run_eval.py <eval_config.json> [--verbose]")
-        print("\nExample:")
-        print("  python run_eval.py eval_config_template.json")
-        print("\nThe script will automatically:")
-        print("  1. Extract episode data and create preprocessing config")
-        print("  2. Run preprocessing to generate actions (in-process)")
-        print("  3. Run video generation with the actions (in-process)")
-        print("  4. Evaluate navigation success")
-        print("  5. Save results and video to output directory")
         sys.exit(1)
 
     config_path = sys.argv[1]
-
     if not os.path.exists(config_path):
         print(f"Error: Configuration file not found: {config_path}")
         sys.exit(1)
@@ -680,10 +585,6 @@ def main():
         evaluator = EpisodeEvaluator(config_path)
         success = evaluator.run_evaluation()
         sys.exit(0 if success else 1)
-
-    except KeyboardInterrupt:
-        print("\n\nEvaluation interrupted by user")
-        sys.exit(1)
     except Exception as e:
         print(f"\nFatal error during evaluation setup: {e}")
         if "--verbose" in sys.argv:

@@ -517,7 +517,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
     if meta_data:
       print(f"\nCalculated Metadata:")
       print(f"  Pixel spacing: {meta_data['spacing_in_meters_per_pixel']:.6f} m/pixel")
-      print(f"  World Origin (0,0) at pixel: (x={meta_a['origin_in_pixels'][0]:.2f}, y={meta_data['origin_in_pixels'][1]:.2f})")
+      print(f"  World Origin (0,0) at pixel: (x={meta_data['origin_in_pixels'][0]:.2f}, y={meta_data['origin_in_pixels'][1]:.2f})")
     
     if draw_coordinates and unprojected_coords:
         print("\n--- Step 4: Drawing Coordinate System ---")
@@ -537,7 +537,7 @@ if __name__ == '__main__':
     try:
         # 请确保这里的路径是正确的
         # hm3d_scene_path = "/path/to/your/scene.glb" 
-        hm3d_scene_path = "/home/yaoaa/habitat-lab/processed_data/scenes_subset/00800-TEEsavR23oF/TEEsavR23oF.basis.glb"
+        hm3d_scene_path = "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00808-y9hTuugGdiq/y9hTuugGdiq.basis.glb"
         if not os.path.exists(hm3d_scene_path):
              raise FileNotFoundError(f"Scene file not found at: {hm3d_scene_path}. Please check the path.")
     except Exception as e:
@@ -581,8 +581,10 @@ if __name__ == '__main__':
     print("### RUNNING EXAMPLE 2: RENDER BY 3D COORDINATE ###")
     try:
         target_point = [
-      100,3.4,100
-    ]
+            8.86527,
+            -2.78861,
+            4.09266
+        ]
         result_image_pt, _, meta_data_pt = render_topdown_view(
             hm3d_scene_path, 
             target_floor=target_point,
