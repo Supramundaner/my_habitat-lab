@@ -36,21 +36,21 @@ def parse_arguments():
     parser.add_argument(
         '--config',
         type=str,
-        default='/home/awangas/my_habitat-lab/habitat_video_project/configs/default_config.json',
+        default='/home/yaoaa/habitat-lab/habitat_video_project/configs/default_config.json',
         help='配置文件路径'
     )
     
     parser.add_argument(
         '--actions',
         type=str,
-        default='/home/awangas/my_habitat-lab/habitat_video_project/configs/new_action_format.json',
+        default='/home/yaoaa/habitat-lab/habitat_video_project/configs/new_action_format.json',
         help='动作序列文件路径'
     )
     
     parser.add_argument(
         '--wall-mask',
         type=str,
-        default="/home/awangas/my_habitat-lab/habitat_video_project/eval/output/y9hTuugGdiq/preprocess/wall_mask.png",
+        default="/home/yaoaa/habitat-lab/habitat_video_project/eval/output/y9hTuugGdiq/preprocess/wall_mask.png",
         help='Wall mask 图像路径，用于初始化占用地图（黑色区域表示墙壁）'
     )
     
