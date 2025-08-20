@@ -209,7 +209,7 @@ class WorkflowOrchestrator:
     def run_step_6(self) -> bool:
         """Step 6: Path planning from target_coordinate to selected node."""
         print("\\n" + "="*60)
-        print("STEP 6: Path planning and action generation")
+        print("STEP 6: Generating action.json")
         print("="*60)
         
         try:

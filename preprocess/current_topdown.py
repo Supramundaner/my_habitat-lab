@@ -407,7 +407,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
         print("Error: No floors were detected in the scene. Cannot render.")
         return None, None, None
 
-    # --- 新增：选择目标楼层 ---
+    # --- 选择目标楼层 ---
     target_fext = None
     if isinstance(target_floor, int):
         if 0 <= target_floor < len(floor_extents):
@@ -415,43 +415,32 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
             print(f"\nSuccessfully targeted floor by index: {target_floor}")
         else:
             raise ValueError(f"Invalid floor index {target_floor}. Scene has {len(floor_extents)} floors (indices 0 to {len(floor_extents)-1}).")
+    # --- 修改后的楼层选择逻辑 ---
     elif isinstance(target_floor, (list, tuple, np.ndarray)) and len(target_floor) == 3:
         point_y = target_floor[1]
-        # Add tolerance for floor matching (0.1m tolerance)
-        tolerance = 0.1
+        print(f"\nSearching for floor with bottom Y-level closest to coordinate Y={point_y:.2f}...")
+
+        closest_floor_info = None
+        min_abs_distance = float('inf')
+
+        # 遍历所有楼层，找到其底部(min)与给定Y坐标绝对距离最小的那个
         for i, fext in enumerate(floor_extents):
-            # 使用楼层的 min 和 max Y坐标来判断点是否在该楼层内，增加容差
-            if (fext['min'] - tolerance) <= point_y <= (fext['max'] + tolerance):
-                target_fext = fext
-                print(f"\nSuccessfully targeted floor {i} using coordinate {target_floor}.")
-                print(f"Point Y ({point_y:.2f}) is within floor range Y=[{fext['min']:.2f}, {fext['max']:.2f}] (with tolerance: ±{tolerance:.2f})")
-                break
-        if target_fext is None:
-            # Find the closest floor if no exact match
-            closest_floor = None
-            min_distance = float('inf')
-            for i, fext in enumerate(floor_extents):
-                # Calculate distance to floor range
-                if point_y < fext['min']:
-                    distance = fext['min'] - point_y
-                elif point_y > fext['max']:
-                    distance = point_y - fext['max']
-                else:
-                    distance = 0  # Point is within range
-                
-                if distance < min_distance:
-                    min_distance = distance
-                    closest_floor = (i, fext)
-            
-            if closest_floor and min_distance < 0.5:  # Allow up to 0.5m deviation
-                target_fext = closest_floor[1]
-                print(f"\nUsing closest floor {closest_floor[0]} for coordinate {target_floor}.")
-                print(f"Point Y ({point_y:.2f}) is {min_distance:.2f}m away from floor range Y=[{closest_floor[1]['min']:.2f}, {closest_floor[1]['max']:.2f}]")
-            else:
-                raise ValueError(f"Point {target_floor} (Y={point_y:.2f}) does not fall within any detected navigable floor extents. Closest floor is {min_distance:.2f}m away.")
+            distance = abs(point_y - fext['min'])
+            if distance < min_abs_distance:
+                min_abs_distance = distance
+                closest_floor_info = (i, fext)
+
+        if closest_floor_info:
+            selected_floor_index, target_fext = closest_floor_info
+            print(f"✓ Found closest floor: Index {selected_floor_index}")
+            print(f"  - Floor's bottom Y: {target_fext['min']:.2f}")
+            print(f"  - Absolute distance to point Y: {min_abs_distance:.2f}m")
+        else:
+            # 这个错误理论上不应该发生，因为前面的代码已经检查过 floor_extents 是否为空
+            raise ValueError("Could not determine the closest floor. This should not happen if floors were detected.")
+    # --- 楼层选择逻辑结束 ---
     else:
         raise TypeError("`target_floor` must be an integer (floor index) or a 3-element list/tuple (world coordinate).")
-    # --- 楼层选择结束 ---
     
     x_center, z_center = scene_info['center']
     final_image = None
@@ -528,7 +517,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
     if meta_data:
       print(f"\nCalculated Metadata:")
       print(f"  Pixel spacing: {meta_data['spacing_in_meters_per_pixel']:.6f} m/pixel")
-      print(f"  World Origin (0,0) at pixel: (x={meta_data['origin_in_pixels'][0]:.2f}, y={meta_data['origin_in_pixels'][1]:.2f})")
+      print(f"  World Origin (0,0) at pixel: (x={meta_a['origin_in_pixels'][0]:.2f}, y={meta_data['origin_in_pixels'][1]:.2f})")
     
     if draw_coordinates and unprojected_coords:
         print("\n--- Step 4: Drawing Coordinate System ---")
@@ -539,7 +528,6 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
         print(f"  - Coordinate system drawn, image shape: {final_image.shape}")
 
     return final_image, unprojected_coords, meta_data
-
 
 # ==============================================================================
 # 主程序入口
