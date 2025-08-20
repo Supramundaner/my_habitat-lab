@@ -106,6 +106,92 @@ class OccupancyMapBuilder:
 
         print(f"占用地图坐标系已设置：分辨率={self.map_resolution:.4f} m/pixel, 尺寸={self.map_shape}")
 
+    def initialize_from_wall_mask(self, wall_mask_path: str):
+        """
+        用 wall mask 初始化占用地图
+        
+        Args:
+            wall_mask_path: wall mask 图像路径，黑色区域(0)表示墙壁，其他区域表示可行走
+        """
+        if self.grid_map is None:
+            print("[ERROR] 占用地图未初始化，请先调用 set_global_reference")
+            return False
+            
+        try:
+            # 读取 wall mask 图像
+            wall_mask = cv2.imread(wall_mask_path, cv2.IMREAD_GRAYSCALE)
+            if wall_mask is None:
+                print(f"[ERROR] 无法读取 wall mask 图像: {wall_mask_path}")
+                return False
+                
+            # 检查图像尺寸是否匹配
+            if wall_mask.shape != self.map_shape:
+                print(f"[ERROR] Wall mask 尺寸 {wall_mask.shape} 与地图尺寸 {self.map_shape} 不匹配")
+                print(f"尝试调整 wall mask 尺寸...")
+                wall_mask = cv2.resize(wall_mask, (self.map_shape[1], self.map_shape[0]), 
+                                     interpolation=cv2.INTER_NEAREST)
+            
+            # 将 wall mask 转换为占用地图格式
+            # 黑色区域(0) -> 占用(0) - 墙壁
+            # 其他区域 -> 未知(128) - 待探索区域
+            self.grid_map = np.where(wall_mask == 0, 0, 128).astype(np.uint8)
+            
+            # 统计初始化结果
+            total_cells = self.grid_map.size
+            unknown_cells = np.sum(self.grid_map == 128)
+            occupied_cells = np.sum(self.grid_map == 0)
+            
+            print(f"✓ Wall mask 初始化完成:")
+            print(f"  - 总单元格: {total_cells}")
+            print(f"  - 未知区域: {unknown_cells} ({unknown_cells/total_cells*100:.1f}%)")
+            print(f"  - 占用区域: {occupied_cells} ({occupied_cells/total_cells*100:.1f}%)")
+            
+            return True
+            
+        except Exception as e:
+            print(f"[ERROR] Wall mask 初始化失败: {e}")
+            return False
+
+    def initialize_from_wall_mask_array(self, wall_mask: np.ndarray):
+        """
+        用 wall mask 数组初始化占用地图
+        
+        Args:
+            wall_mask: wall mask 数组，0表示墙壁，255表示可行走
+        """
+        if self.grid_map is None:
+            print("[ERROR] 占用地图未初始化，请先调用 set_global_reference")
+            return False
+            
+        try:
+            # 检查图像尺寸是否匹配
+            if wall_mask.shape != self.map_shape:
+                print(f"[ERROR] Wall mask 尺寸 {wall_mask.shape} 与地图尺寸 {self.map_shape} 不匹配")
+                print(f"尝试调整 wall mask 尺寸...")
+                wall_mask = cv2.resize(wall_mask, (self.map_shape[1], self.map_shape[0]), 
+                                     interpolation=cv2.INTER_NEAREST)
+            
+            # 将 wall mask 转换为占用地图格式
+            # 黑色区域(0) -> 占用(0) - 墙壁
+            # 其他区域 -> 未知(128) - 待探索区域
+            self.grid_map = np.where(wall_mask == 0, 0, 128).astype(np.uint8)
+            
+            # 统计初始化结果
+            total_cells = self.grid_map.size
+            unknown_cells = np.sum(self.grid_map == 128)
+            occupied_cells = np.sum(self.grid_map == 0)
+            
+            print(f"✓ Wall mask 数组初始化完成:")
+            print(f"  - 总单元格: {total_cells}")
+            print(f"  - 未知区域: {unknown_cells} ({unknown_cells/total_cells*100:.1f}%)")
+            print(f"  - 占用区域: {occupied_cells} ({occupied_cells/total_cells*100:.1f}%)")
+            
+            return True
+            
+        except Exception as e:
+            print(f"[ERROR] Wall mask 数组初始化失败: {e}")
+            return False
+
     def update_map(self, depth_observation: np.ndarray, agent_pose: Dict[str, np.ndarray], hfov: float):
         """
         使用新的传感器数据更新占用地图。
