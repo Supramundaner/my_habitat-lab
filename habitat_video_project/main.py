@@ -43,14 +43,14 @@ def parse_arguments():
     parser.add_argument(
         '--actions',
         type=str,
-        default='/home/awangas/my_habitat-lab/habitat_video_project/configs/new_action_format.json',
+        default='/home/awangas/my_habitat-lab/habitat_video_project/configs/test_action.json',
         help='动作序列文件路径'
     )
     
     parser.add_argument(
         '--wall-mask',
         type=str,
-        default="/home/awangas/my_habitat-lab/habitat_video_project/eval/output/y9hTuugGdiq/preprocess/wall_mask.png",
+        default=None,
         help='Wall mask 图像路径，用于初始化占用地图（黑色区域表示墙壁）'
     )
     
@@ -117,20 +117,10 @@ def main():
             target_info = actions['target_info']
             wall_mask_path = actions.get('wall_mask', None)
             
-            # 如果命令行参数提供了wall_mask，优先使用命令行参数
-            if args.wall_mask:
-                wall_mask_path = args.wall_mask
-                print(f"使用命令行参数提供的wall_mask: {wall_mask_path}")
-            elif wall_mask_path:
-                print(f"使用action文件中的wall_mask: {wall_mask_path}")
-            
-            # 将wall_mask路径存储到actions中，供后续使用
-            actions['wall_mask_path'] = wall_mask_path
-            
             # 创建简化的action_sequences格式，保持向后兼容
             action_sequences = [{
                 'target_info': target_info,
-                'wall_mask_path': wall_mask_path
+                'wall_mask': wall_mask_path
             }]
             
             print(f"目标信息: {target_info}")
@@ -179,13 +169,6 @@ def main():
         composer.set_map_builder(map_builder, config)
         
         # 7.5. 如果提供了 wall mask，则用它初始化占用地图
-        wall_mask_path = None
-        if args.wall_mask:
-            wall_mask_path = args.wall_mask
-            print("7.5. 使用命令行参数提供的 wall mask 初始化占用地图...")
-        elif 'wall_mask_path' in actions and actions['wall_mask_path']:
-            wall_mask_path = actions['wall_mask_path']
-            print("7.5. 使用 action 文件中的 wall mask 初始化占用地图...")
         
         if wall_mask_path:
             if os.path.exists(wall_mask_path):

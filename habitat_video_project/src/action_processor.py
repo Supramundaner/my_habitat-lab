@@ -35,6 +35,11 @@ class NavigationConfig:
         # A*路径规划参数
         self.a_star_interval = 5  # 每5次行动重新规划A*
         
+        # A*距离变换参数
+        self.a_star_weight_w = config.get('navigation', {}).get('a_star_weight_w', 10)  # 距离惩罚权重
+        self.a_star_epsilon = config.get('navigation', {}).get('a_star_epsilon', 0.01)  # 防止除零的小正数
+        self.unknown_region_distance = config.get('navigation', {}).get('unknown_region_distance', 5.0)  # 未知区域距离值
+        
         # 目标点距离参数
         self.intermediate_distance = 1.5  # 中间目标点距离
         self.final_target_threshold = 1.5  # 切换到最终目标的阈值
@@ -297,6 +302,7 @@ class ActionProcessor:
             
             # 计算前进方向向量（使用统一角度系统）
             forward_direction = unified_angle_to_direction_vector(unified_angle)
+
             
             # 计算向前目标位置
             end_pos = current_pos + forward_direction * self.nav_config.forward_distance
@@ -613,6 +619,7 @@ class ActionProcessor:
         """
         # 更新VFH*目标
         vfh_star.update_target(vfh_target)
+
         
         # 获取当前占用地图
         observation = self.simulator.get_observation()
@@ -621,7 +628,8 @@ class ActionProcessor:
             return {'failed': True, 'reason': 'no_depth_data'}
         
         # 更新占用地图
-        current_pos = np.array([current_pos_2d[0], 0, current_pos_2d[1]])
+        # current_pos = np.array([current_pos_2d[0], 0, current_pos_2d[1]])
+        current_pos = self._get_robot_state()['position']
         agent_pose = {'position': current_pos, 'rotation': current_rot}
         self.map_builder.update_map(depth_observation, agent_pose, 90.0)  # 90度FOV
         
@@ -891,7 +899,7 @@ class ActionProcessor:
     
     def _a_star_pathfinding(self, start: tuple, goal: tuple, wall_mask: np.ndarray) -> List[tuple]:
         """
-        A*路径规划算法
+        A*路径规划算法 - 修改版，倾向于远离障碍物
         
         Args:
             start: 起始位置 (x, y) 像素坐标
@@ -902,16 +910,29 @@ class ActionProcessor:
             路径点列表，如果无路径则返回空列表
         """
         import heapq
+        from scipy import ndimage
         
         # 检查起点和终点是否可行走（允许未知区域）
         if wall_mask[start[1], start[0]] == 0 or wall_mask[goal[1], goal[0]] == 0:
             return []
         
+        # 1. 预处理：生成距离变换图
+        distance_map = self._compute_distance_transform(wall_mask)
+        
+        # 调试信息：显示距离变换的统计信息
+        min_dist = np.min(distance_map)
+        max_dist = np.max(distance_map)
+        mean_dist = np.mean(distance_map)
+        
+        # 2. 设置参数
+        weight_w = self.nav_config.a_star_weight_w  # 权重系数，控制远离障碍物的程度
+        epsilon = self.nav_config.a_star_epsilon  # 防止除零的小正数
+        
         # 优先级队列: (f_score, g_score, position)
         open_set = [(0.0, 0.0, start)]
         came_from = {}
         g_score = {start: 0.0}
-        f_score = {start: self._euclidean_distance(start, goal)}
+        f_score = {start: self._calculate_f_score(start, 0.0, goal, distance_map, weight_w, epsilon)}
         
         visited = set()
         iterations = 0
@@ -966,10 +987,68 @@ class ActionProcessor:
                             if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                                 came_from[neighbor] = current
                                 g_score[neighbor] = tentative_g_score
-                                f_score[neighbor] = tentative_g_score + self._euclidean_distance(neighbor, goal)
+                                f_score[neighbor] = self._calculate_f_score(
+                                    neighbor, tentative_g_score, goal, distance_map, weight_w, epsilon
+                                )
                                 heapq.heappush(open_set, (f_score[neighbor], tentative_g_score, neighbor))
         
         return []
+    
+    def _compute_distance_transform(self, wall_mask: np.ndarray) -> np.ndarray:
+        """
+        计算距离变换图
+        
+        Args:
+            wall_mask: 占用地图，0=障碍物，255=可行走，128=未知
+            
+        Returns:
+            距离变换图，每个像素值表示到最近障碍物的距离
+        """
+        from scipy import ndimage
+        
+        # 创建二值地图：0=障碍物，1=自由空间
+        binary_map = (wall_mask != 0).astype(np.uint8)
+        
+        # 使用scipy的distance_transform_edt计算欧几里得距离变换
+        # 这个函数计算每个像素到最近障碍物的欧几里得距离
+        distance_map = ndimage.distance_transform_edt(binary_map)
+        
+        # 对于未知区域（128），给予中等距离值，避免过度惩罚
+        unknown_mask = (wall_mask == 128)
+        if np.any(unknown_mask):
+            # 未知区域给予一个合理的距离值
+            unknown_distance = self.nav_config.unknown_region_distance
+            distance_map[unknown_mask] = np.maximum(distance_map[unknown_mask], unknown_distance)
+        
+        return distance_map
+    
+    def _calculate_f_score(self, node: tuple, g_score: float, goal: tuple, 
+                          distance_map: np.ndarray, weight_w: float, epsilon: float) -> float:
+        """
+        计算修改后的f分数：f(n) = g(n) + h(n) + w * C(n)
+        
+        Args:
+            node: 当前节点 (x, y)
+            g_score: 从起点到当前节点的实际成本
+            goal: 目标节点 (x, y)
+            distance_map: 距离变换图
+            weight_w: 权重系数
+            epsilon: 防止除零的小正数
+            
+        Returns:
+            修改后的f分数
+        """
+        # 计算h(n) - 启发式成本（欧几里得距离）
+        h_n = self._euclidean_distance(node, goal)
+        
+        # 获取D(n) - 当前节点到最近障碍物的距离
+        d_n = distance_map[node[1], node[0]]
+        
+        # 计算C(n) - 基于距离的惩罚项（反比关系）
+        c_n = 1.0 / (d_n + epsilon)
+        
+        # 计算总f分数：f(n) = g(n) + h(n) + w * C(n)
+        return g_score + h_n + weight_w * c_n
     
     def _euclidean_distance(self, p1: tuple, p2: tuple) -> float:
         """计算欧几里得距离"""
