@@ -1,10 +1,25 @@
 import os
 import sys
+
+# Suppress verbose logging from habitat-sim - MUST be set before any habitat imports
+os.environ['GLOG_minloglevel'] = '3'  # 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL
+os.environ['MAGNUM_LOG'] = 'quiet'
+os.environ['HABITAT_SIM_LOG'] = 'quiet'
+# Additional environment variables to suppress C++ logging
+os.environ['GLOG_logtostderr'] = '0'
+os.environ['GLOG_stderrthreshold'] = '3'
+os.environ['GLOG_v'] = '0'
+
 import json
 import shutil
 import traceback
 from pathlib import Path
 from typing import Dict, Any
+
+# Configure Python logging
+import logging
+logging.getLogger("habitat").setLevel(logging.ERROR)
+logging.getLogger("habitat_sim").setLevel(logging.ERROR)
 
 # Ensure the local run_eval module can be imported
 # This assumes batch_eval.py and run_eval.py are in the same directory.

@@ -1,6 +1,16 @@
 import traceback
 import os
 import sys
+
+# Suppress verbose logging from habitat-sim - MUST be set before any habitat imports
+os.environ['GLOG_minloglevel'] = '3'  # 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL
+os.environ['MAGNUM_LOG'] = 'quiet'
+os.environ['HABITAT_SIM_LOG'] = 'quiet'
+# Additional environment variables to suppress C++ logging
+os.environ['GLOG_logtostderr'] = '0'
+os.environ['GLOG_stderrthreshold'] = '3'
+os.environ['GLOG_v'] = '0'
+
 import json
 import tempfile
 import shutil
@@ -10,6 +20,11 @@ import numpy as np
 import gzip
 import traceback
 from datetime import datetime
+
+# Configure Python logging
+import logging
+logging.getLogger("habitat").setLevel(logging.ERROR)
+logging.getLogger("habitat_sim").setLevel(logging.ERROR)
 
 # --- Start of Integrated Imports ---
 
@@ -69,6 +84,12 @@ class EpisodeEvaluator:
 
     def __init__(self, config_path: str):
         """Initialize evaluator with configuration."""
+        # Additional logging suppression
+        logging.getLogger().setLevel(logging.ERROR)
+        logging.getLogger("habitat").setLevel(logging.ERROR)
+        logging.getLogger("habitat_sim").setLevel(logging.ERROR)
+        logging.getLogger("magnum").setLevel(logging.ERROR)
+        
         self.config_path = Path(config_path)
         self.config = self._load_config()
         self.project_root = project_root
@@ -410,9 +431,11 @@ class EpisodeEvaluator:
 
             if success:
                 print("✓ Video generation completed successfully")
+                return True
             else:
                 error_msg = "Video generation failed."
                 self.results["errors"].append(error_msg)
+                print(f"✗ {error_msg}")
                 return False
         except Exception as e:
             error_msg = f"Failed to run video generation: {e}"
@@ -458,6 +481,9 @@ class EpisodeEvaluator:
             scene_file = self.config['scene']['scene_file']
             success_threshold = self.config['evaluation'].get('success_distance_threshold', 0.25)
 
+            # Suppress additional logging before creating simulator
+            logging.getLogger().setLevel(logging.CRITICAL)
+            
             sim_settings = {"scene": scene_file, "default_agent": 0, "sensor_height": 1.5, "width": 128, "height": 128}
             sim_cfg = habitat_sim.SimulatorConfiguration()
             sim_cfg.scene_id = sim_settings["scene"]
