@@ -1196,16 +1196,55 @@ class ActionProcessor:
         
         return np.array([world_x, world_z])
     
+    def _is_safe_walkable_point(self, pixel: tuple, map: np.ndarray, safety_radius_m: float = 0.1) -> bool:
+        """
+        检查一个点是否为安全的可行走点（周围指定半径内都是非障碍物）
+        
+        Args:
+            pixel: 像素坐标 (x, y)
+            map: 占用地图，0=障碍物，255=可行走，128=未知
+            safety_radius_m: 安全半径（米）
+        
+        Returns:
+            True表示该点周围安全区域内都是非障碍物
+        """
+        x, y = pixel
+        height, width = map.shape
+        
+        # 将安全半径转换为像素单位
+        safety_radius_pixels = int(np.ceil(safety_radius_m / self.map_builder.map_resolution))
+        
+        # 检查安全区域内的所有点
+        for dx in range(-safety_radius_pixels, safety_radius_pixels + 1):
+            for dy in range(-safety_radius_pixels, safety_radius_pixels + 1):
+                # 计算实际距离（欧几里得距离）
+                distance_pixels = np.sqrt(dx * dx + dy * dy)
+                
+                # 只检查在安全半径内的点
+                if distance_pixels <= safety_radius_pixels:
+                    nx, ny = x + dx, y + dy
+                    
+                    # 检查边界
+                    if 0 <= nx < width and 0 <= ny < height:
+                        # 如果发现障碍物，则不安全
+                        if map[ny, nx] == 0:
+                            return False
+                    else:
+                        # 超出边界也视为不安全
+                        return False
+        
+        return True
+
     def _find_nearest_walkable_point(self, obstacle_pixel: tuple, map: np.ndarray) -> Optional[tuple]:
         """
-        找到距离障碍物点最近的可行走点
+        找到距离障碍物点最近的安全可行走点（确保周围0.1米内都是非障碍物）
         
         Args:
             obstacle_pixel: 障碍物像素坐标 (x, y)
             map: 占用地图，0=障碍物，255=可行走，128=未知
         
         Returns:
-            最近的可行走像素坐标，如果找不到则返回None
+            最近的安全可行走像素坐标，如果找不到则返回None
         """
         x, y = obstacle_pixel
         height, width = map.shape
@@ -1225,18 +1264,20 @@ class ActionProcessor:
                         if 0 <= nx < width and 0 <= ny < height:
                             # 检查是否为可行走区域（空闲或未知）
                             if map[ny, nx] in [255, 128]:
-                                # 计算到原障碍物点的距离
-                                distance = np.sqrt(dx*dx + dy*dy)
-                                candidates.append((nx, ny, distance))
+                                # 进一步检查是否为安全的可行走点
+                                if self._is_safe_walkable_point((nx, ny), map):
+                                    # 计算到原障碍物点的距离
+                                    distance = np.sqrt(dx*dx + dy*dy)
+                                    candidates.append((nx, ny, distance))
             
             # 如果找到候选点，返回最近的一个
             if candidates:
-                # 按距离排序，对255和128一视同仁
-                candidates.sort(key=lambda c: c[2])  # 只按距离排序
+                # 按距离排序
+                candidates.sort(key=lambda c: c[2])
                 nearest_pixel = (candidates[0][0], candidates[0][1])
                 return nearest_pixel
         
-        print(f"[ERROR] 在半径{self.nav_config.max_search_radius}内未找到可行走点")
+        print(f"[ERROR] 在半径{self.nav_config.max_search_radius}内未找到安全可行走点")
         return None
     
     def _check_connectivity(self, point: tuple, wall_mask: np.ndarray) -> int:
