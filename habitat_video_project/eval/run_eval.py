@@ -510,7 +510,7 @@ class EpisodeEvaluator:
             cfg = habitat_sim.Configuration(sim_cfg, [agent_cfg])
             sim = habitat_sim.Simulator(cfg)
             path_finder = sim.pathfinder
-            
+            #start_position = np.array(episode_data['start_position'])
             path_start = habitat_sim.MultiGoalShortestPath()
             path_start.requested_start = start_position
             path_start.requested_ends = view_points
@@ -523,10 +523,15 @@ class EpisodeEvaluator:
             path_finder.find_path(path_agent)
             agent_end_geo_distance = path_agent.geodesic_distance
                 
-            sr = 1.0 if agent_end_geo_distance <= success_threshold and agent_end_geo_distance != np.inf else 0.0
-            spl = 0.0
-            if sr > 0:
-                spl = start_end_geo_distance / max(start_end_geo_distance, episode_cum_distance)
+            if start_end_geo_distance == np.inf:
+                sr = 1
+                spl = 1
+            elif agent_end_geo_distance == np.inf:
+                sr = 0
+                spl = 0
+            else:
+                sr = agent_end_geo_distance <= 0.25
+                spl = sr * start_end_geo_distance / max(start_end_geo_distance, episode_cum_distance)
 
             evaluation_results = {
                 "sr": sr, "spl": spl, "success": bool(sr),
