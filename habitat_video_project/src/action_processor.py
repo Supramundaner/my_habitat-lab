@@ -553,7 +553,16 @@ class ActionProcessor:
         else:
             # 已经检测到目标，直接使用
             print(f"[OBJECT DETECTION] 使用已检测到的目标位置: {detected_target_pos}")
-            target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
+            # 安全地处理2D/3D坐标转换
+            if len(detected_target_pos) >= 3:
+                # 3D坐标 [x, y, z]
+                target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
+            elif len(detected_target_pos) == 2:
+                # 2D坐标 [x, z]
+                target_pos_2d = detected_target_pos.copy()
+            else:
+                print(f"[ERROR] 意外的坐标维度: {len(detected_target_pos)}")
+                return {'failed': True, 'reason': 'invalid_coordinates'}
         
         # 检查目标点是否在障碍物内
         if self.map_builder.grid_map is not None:
@@ -595,7 +604,15 @@ class ActionProcessor:
             # 如果检测到目标，更新检测到的目标位置（包含障碍物调整）
             updated_detected_target_pos = detected_target_pos.copy()
             updated_detected_target_pos[0] = target_pos_2d[0]  # X坐标
-            updated_detected_target_pos[2] = target_pos_2d[1]  # Z坐标
+            
+            # 处理Z坐标：检查数组维度
+            if len(detected_target_pos) >= 3:
+                # 3D坐标 [x, y, z]，更新Z坐标
+                updated_detected_target_pos[2] = target_pos_2d[1]  # Z坐标
+            elif len(detected_target_pos) == 2:
+                # 2D坐标 [x, z]，更新第二个元素
+                updated_detected_target_pos[1] = target_pos_2d[1]  # Z坐标
+            
             updated_original_target_pos = original_target_pos
         else:
             # 如果没有检测到目标，更新原始目标位置（包含障碍物调整）

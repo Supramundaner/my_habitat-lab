@@ -99,9 +99,18 @@ class EpisodeEvaluator:
         episode_json_path = Path(self.config['episode']['episode_json_path'])
         self.scene_id = episode_json_path.stem
 
-        # Setup output directory
-        self.output_dir = self.project_root / "eval" / "output" / self.scene_id
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Setup output directory (allow override from config)
+        if 'output_dir' in self.config:
+            self.output_dir = Path(self.config['output_dir'])
+        else:
+            self.output_dir = self.project_root / "eval" / "output" / self.scene_id
+        
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            print(f"✓ Output directory created/verified: {self.output_dir}")
+        except Exception as e:
+            print(f"✗ Failed to create output directory {self.output_dir}: {e}")
+            raise RuntimeError(f"Cannot create output directory: {e}")
 
         # Initialize results
         self.results = {
@@ -185,6 +194,8 @@ class EpisodeEvaluator:
                 }
             }
             preprocess_config_path = self.output_dir / "preprocess_config.json"
+            # Ensure the parent directory exists before writing the file
+            preprocess_config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(preprocess_config_path, 'w', encoding='utf-8') as f:
                 json.dump(preprocess_config, f, indent=2, ensure_ascii=False)
             print(f"✓ Created preprocessing config: {preprocess_config_path}")
@@ -237,6 +248,8 @@ class EpisodeEvaluator:
                 "object_detection": self.config['video_generation']['object_detection']
             }
             video_config_path = self.output_dir / "video_config.json"
+            # Ensure the parent directory exists before writing the file
+            video_config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(video_config_path, 'w', encoding='utf-8') as f:
                 json.dump(video_config, f, indent=2, ensure_ascii=False)
 
@@ -538,6 +551,8 @@ class EpisodeEvaluator:
         """Save final evaluation results."""
         try:
             output_json_path = self.output_dir / "output.json"
+            # Ensure the parent directory exists before writing the file
+            output_json_path.parent.mkdir(parents=True, exist_ok=True)
             with open(output_json_path, 'w', encoding='utf-8') as f:
                 json.dump(self.results, f, indent=2, ensure_ascii=False)
             print(f"✓ Results saved to: {output_json_path}")

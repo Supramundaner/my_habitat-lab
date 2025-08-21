@@ -14,7 +14,7 @@ import json
 import shutil
 import traceback
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 # Configure Python logging
 import logging
@@ -48,6 +48,7 @@ class BatchEvaluator:
         self.project_root = Path(__file__).resolve().parent.parent
         self.base_output_dir = self.project_root / "eval" / "output"
         self.results_summary = {"succeeded": [], "failed": []}
+        self.episode_results = {}  # Store detailed results for each episode
 
     def _load_config(self) -> Dict[str, Any]:
         """Loads the batch JSON configuration file."""
@@ -55,13 +56,14 @@ class BatchEvaluator:
         with open(self.batch_config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    def _create_single_episode_config(self, task: Dict[str, Any], episode_id: str) -> Dict[str, Any]:
+    def _create_single_episode_config(self, task: Dict[str, Any], episode_id: str, output_dir: Path) -> Dict[str, Any]:
         """
         Dynamically creates a configuration dictionary for a single episode.
 
         Args:
             task: The task dictionary from the batch config, containing scene info.
             episode_id: The specific episode ID to run.
+            output_dir: The desired output directory for this episode.
 
         Returns:
             A dictionary formatted for the EpisodeEvaluator.
@@ -70,7 +72,8 @@ class BatchEvaluator:
         single_config = {
             "preprocess": self.config["preprocess"],
             "video_generation": self.config["video_generation"],
-            "evaluation": self.config["evaluation"]
+            "evaluation": self.config["evaluation"],
+            "output_dir": str(output_dir)  # Override the output directory
         }
         
         # Add the episode-specific information
@@ -86,6 +89,78 @@ class BatchEvaluator:
         }
         
         return single_config
+
+    def _load_episode_results(self, output_dir: Path, episode_key: str) -> Optional[Dict[str, Any]]:
+        """Load evaluation results from an episode's output.json file."""
+        try:
+            output_file = output_dir / "output.json"
+            if output_file.exists():
+                with open(output_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if "evaluation_results" in data:
+                        results = data["evaluation_results"]
+                        # Store the results with episode key
+                        self.episode_results[episode_key] = {
+                            "sr": results.get("sr", 0.0),
+                            "spl": results.get("spl", 0.0),
+                            "success": results.get("success", False),
+                            "geodesic_distance_to_target": results.get("geodesic_distance_to_target", float('inf')),
+                            "path_length": results.get("path_length", 0.0),
+                            "object_category": results.get("object_category", "unknown")
+                        }
+                        return self.episode_results[episode_key]
+            return None
+        except Exception as e:
+            print(f"Warning: Could not load results for {episode_key}: {e}")
+            return None
+
+    def _save_batch_results(self):
+        """Save detailed batch results to batch_output.json."""
+        try:
+            # Calculate overall statistics
+            successful_episodes = []
+            failed_episodes = []
+            total_sr = 0.0
+            total_spl = 0.0
+            total_episodes = len(self.episode_results)
+
+            for episode_key, results in self.episode_results.items():
+                if results["success"]:
+                    successful_episodes.append(episode_key)
+                    total_sr += results["sr"]
+                    total_spl += results["spl"]
+                else:
+                    failed_episodes.append(episode_key)
+
+            # Calculate averages
+            num_successful = len(successful_episodes)
+            avg_sr = total_sr / total_episodes if total_episodes > 0 else 0.0
+            avg_spl = total_spl / total_episodes if total_episodes > 0 else 0.0
+
+            # Create batch results dictionary
+            batch_results = {
+                "batch_summary": {
+                    "total_episodes_processed": total_episodes,
+                    "succeeded": num_successful,
+                    "failed": len(failed_episodes),
+                    "overall_sr": avg_sr,
+                    "overall_spl": avg_spl
+                },
+                "successful_episodes": successful_episodes,
+                "failed_episodes": failed_episodes,
+                "episode_details": self.episode_results,
+                "config_used": self.config
+            }
+
+            # Save to batch_output.json
+            batch_output_file = self.base_output_dir / "batch_output.json"
+            with open(batch_output_file, 'w', encoding='utf-8') as f:
+                json.dump(batch_results, f, indent=2)
+            
+            print(f"\n📊 Batch results saved to: {batch_output_file}")
+
+        except Exception as e:
+            print(f"Warning: Could not save batch results: {e}")
 
     def run_batch_evaluation(self):
         """Executes the evaluation for all tasks and episodes in the config."""
@@ -112,61 +187,44 @@ class BatchEvaluator:
                 final_output_dir.mkdir(parents=True, exist_ok=True)
 
                 # 2. Create the temporary single-episode config
-                temp_config_data = self._create_single_episode_config(task, episode_id)
+                temp_config_data = self._create_single_episode_config(task, episode_id, final_output_dir)
                 temp_config_path = final_output_dir / f"temp_eval_config_{episode_id}.json"
                 
                 with open(temp_config_path, 'w', encoding='utf-8') as f:
                     json.dump(temp_config_data, f, indent=4)
                 
-                # The EpisodeEvaluator will write to `eval/output/<scene_stem>`
-                intermediate_output_dir = self.base_output_dir / scene_stem
-                
                 try:
                     # 3. Instantiate and run the single episode evaluator
                     evaluator = EpisodeEvaluator(str(temp_config_path))
                     
-                    # The EpisodeEvaluator's output dir will be the intermediate one.
-                    # We need to ensure it's not the same as our final one to avoid recursion.
-                    if evaluator.output_dir.resolve() == final_output_dir.resolve():
-                        raise SystemExit(f"Logic Error: Intermediate path {evaluator.output_dir} is the same as final path {final_output_dir}. Aborting.")
-
-                    # Ensure the intermediate directory doesn't already exist from a failed previous run
-                    if intermediate_output_dir.exists() and intermediate_output_dir.is_dir():
-                         if any(intermediate_output_dir.iterdir()):
-                            print(f"Warning: Cleaning up unexpected files in intermediate directory: {intermediate_output_dir}")
-                            shutil.rmtree(intermediate_output_dir)
-
+                    # The evaluator will now write directly to final_output_dir
                     success = evaluator.run_evaluation()
 
-                    # 4. Move the results from the intermediate path to the final path
-                    if intermediate_output_dir.exists():
-                        print(f"Moving results from '{intermediate_output_dir}' to '{final_output_dir}'...")
-                        # We rename the directory, which is an atomic operation
-                        os.rename(intermediate_output_dir, final_output_dir)
-                    else:
-                        print(f"Warning: Evaluator finished but no output directory found at '{intermediate_output_dir}'")
-
+                    # 4. Load episode results for batch summary
+                    episode_key = f"{scene_stem}/{episode_id}"
+                    episode_result = self._load_episode_results(final_output_dir, episode_key)
 
                     if success:
                         print(f"✅ SUCCESS: Episode '{episode_id}' completed successfully.")
-                        self.results_summary["succeeded"].append(f"{scene_stem}/{episode_id}")
+                        self.results_summary["succeeded"].append(episode_key)
+                        if episode_result:
+                            print(f"   SR: {episode_result['sr']:.3f}, SPL: {episode_result['spl']:.3f}")
                     else:
                         print(f"❌ FAILED: Episode '{episode_id}' finished with errors (check logs).")
-                        self.results_summary["failed"].append(f"{scene_stem}/{episode_id}")
+                        self.results_summary["failed"].append(episode_key)
 
                 except Exception as e:
                     print(f"💥 CRITICAL FAILURE: An unhandled exception occurred for episode '{episode_id}'.")
                     traceback.print_exc()
-                    self.results_summary["failed"].append(f"{scene_stem}/{episode_id}")
+                    episode_key = f"{scene_stem}/{episode_id}"
+                    self.results_summary["failed"].append(episode_key)
                 finally:
                     # 5. Clean up temporary config file
                     if temp_config_path.exists():
                         temp_config_path.unlink()
-                    # If the rename failed for some reason and the intermediate dir still exists, clean it.
-                    if intermediate_output_dir.exists() and not any(intermediate_output_dir.iterdir()):
-                        intermediate_output_dir.rmdir()
 
 
+        self._save_batch_results()
         self._print_summary()
 
     def _print_summary(self):
@@ -183,10 +241,24 @@ class BatchEvaluator:
         print(f"  ✅ Succeeded: {num_succeeded}")
         print(f"  ❌ Failed:    {num_failed}")
 
+        # Calculate and display overall metrics
+        if self.episode_results:
+            successful_results = [r for r in self.episode_results.values() if r["success"]]
+            if successful_results:
+                avg_sr = sum(r["sr"] for r in self.episode_results.values()) / len(self.episode_results)
+                avg_spl = sum(r["spl"] for r in self.episode_results.values()) / len(self.episode_results)
+                print(f"\nOverall Metrics:")
+                print(f"  📈 Success Rate (SR): {avg_sr:.3f}")
+                print(f"  🎯 SPL: {avg_spl:.3f}")
+
         if self.results_summary["succeeded"]:
             print("\nSuccessful Episodes:")
             for item in self.results_summary["succeeded"]:
-                print(f"  - {item}")
+                if item in self.episode_results:
+                    result = self.episode_results[item]
+                    print(f"  - {item} (SR: {result['sr']:.3f}, SPL: {result['spl']:.3f}, Category: {result['object_category']})")
+                else:
+                    print(f"  - {item}")
 
         if self.results_summary["failed"]:
             print("\nFailed Episodes:")
@@ -194,6 +266,7 @@ class BatchEvaluator:
                 print(f"  - {item}")
         
         print("\nBatch run complete.")
+        print(f"📁 Detailed results saved to: {self.base_output_dir / 'batch_output.json'}")
 
 
 def main():
