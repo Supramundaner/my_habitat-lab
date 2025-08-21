@@ -88,16 +88,20 @@ def select_node_with_llm(original_room_image: np.ndarray,
                          nodes_in_room: List[Dict], 
                          config: Dict[str, Any], 
                          output_dir: str) -> Dict[str, Any]:
-    """Use LLM to select optimal navigation node using two images."""
+    """Use LLM to select optimal navigation node using two images with retry logic."""
     
     if genai is None:
         raise RuntimeError("google-generativeai package not installed")
     
-    # ... (前面的LLM配置和prompt加载部分保持不变) ...
+    # Get available node IDs for validation
+    available_node_ids = [node['node_id'] for node in nodes_in_room]
+    
+    # LLM configuration
     llm_config = config['llm_config']
     api_key = llm_config['api_key']
-    model = llm_config.get('model', 'gemini-1.5-flash') # 建议使用支持多图的模型
+    model = llm_config.get('model', 'gemini-1.5-flash')
     max_tokens = llm_config.get('max_tokens', 1000)
+    max_retries = llm_config.get('max_retries', 3)
     
     prompt_path = config['prompts']['choose_node_prompt']
     prompt_template = load_prompt_template(prompt_path)
@@ -108,107 +112,151 @@ def select_node_with_llm(original_room_image: np.ndarray,
     print(f"🤖 Using LLM for node selection:")
     print(f"  - Model: {model}")
     print(f"  - Goal object: {goal_object}")
-    print(f"  - Available nodes: {len(nodes_in_room)}")
+    print(f"  - Available nodes: {available_node_ids}")
+    print(f"  - Max retries: {max_retries}")
     print(f"  - Prompt from: {prompt_path}")
     
-    node_list = ", ".join([str(node['node_id']) for node in nodes_in_room])
-    enhanced_prompt = f"{prompt_template}\n\nAvailable nodes in this room: {node_list}"
+    # 重试逻辑
+    selected_node_id = None
+    selected_node_data = None
+    retry_count = 0
+    all_responses = []
     
-    try:
-        if genai is None:
-            raise RuntimeError("google packages not installed")
-        
-        # ... (API client设置部分保持不变) ...
-        api_key = llm_config['api_key']
-        base_url = llm_config.get('base_url', 'https://api.openai-proxy.org/google')
-        os.environ['API_KEY'] = api_key
-        http_options = types.HttpOptions(base_url=base_url)
-        client = genai.Client(api_key=api_key, http_options=http_options)
-        
-        print("🚀 Sending node selection request to LLM with two images...")
-        
-        # --- 修改点 1: 处理两张图片 ---
-        # 保存并读取第一张图 (原图)
-        temp_original_image_path = os.path.join(output_dir, "temp_original_room_image.png")
-        cv2.imwrite(temp_original_image_path, original_room_image)
-        with open(temp_original_image_path, 'rb') as f:
-            original_image_bytes = f.read()
-        
-        # 保存并读取第二张图 (带nodes的图)
-        temp_nodes_image_path = os.path.join(output_dir, "temp_room_with_nodes.png")
-        cv2.imwrite(temp_nodes_image_path, room_image_with_nodes)
-        with open(temp_nodes_image_path, 'rb') as f:
-            nodes_image_bytes = f.read()
-
-        # --- 修改点 2: 创建两个图像Part ---
-        original_image_part = types.Part.from_bytes(
-            data=original_image_bytes,
-            mime_type='image/png'
-        )
-        
-        nodes_image_part = types.Part.from_bytes(
-            data=nodes_image_bytes,
-            mime_type='image/png'
-        )
-        
-        # --- 修改点 3: 准备包含两张图片的prompt parts ---
-        prompt_parts = [
-            enhanced_prompt,
-            original_image_part,  # 第一张图
-            nodes_image_part      # 第二张图
-        ]
-        
-        # Generate content
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt_parts
-        )
-        
-        # --- 修改点 4: 清理两个临时文件 ---
-        os.remove(temp_original_image_path)
-        os.remove(temp_nodes_image_path)
-        
-        # ... (后面的响应解析部分保持不变) ...
-        if not response or not response.text:
-            raise RuntimeError("Empty response from LLM")
-        
-        raw_response = response.text.strip()
-        print(f"📝 Raw LLM response: '{raw_response}'")
-        
-        selected_node_id = None
+    while retry_count < max_retries and selected_node_id is None:
         try:
-            import re
-            numbers = re.findall(r'\d+', raw_response)
-            if numbers:
-                candidate_id = int(numbers[0])
-                available_ids = [node['node_id'] for node in nodes_in_room]
-                if candidate_id in available_ids:
-                    selected_node_id = candidate_id
-                    print(f"✓ Selected node ID: {selected_node_id}")
+            # Set up API client
+            base_url = llm_config.get('base_url', 'https://api.openai-proxy.org/google')
+            os.environ['API_KEY'] = api_key
+            http_options = types.HttpOptions(base_url=base_url)
+            client = genai.Client(api_key=api_key, http_options=http_options)
+            
+            print(f"🚀 Sending node selection request to LLM... (Attempt {retry_count + 1}/{max_retries})")
+            
+            # 构建增强prompt
+            node_list = ", ".join([str(node_id) for node_id in available_node_ids])
+            enhanced_prompt = f"{prompt_template}\n\nAvailable nodes in this room: {node_list}"
+            enhanced_prompt += f"\nPlease select ONLY from these available node IDs: {available_node_ids}"
+            
+            if retry_count > 0:
+                enhanced_prompt += f"\n\nPREVIOUS ATTEMPTS FAILED: Your previous responses were not valid node IDs."
+                enhanced_prompt += f"\nPlease respond with ONLY a valid node ID from the available options: {available_node_ids}"
+            
+            # 保存并读取图片
+            temp_original_image_path = os.path.join(output_dir, "temp_original_room_image.png")
+            cv2.imwrite(temp_original_image_path, original_room_image)
+            with open(temp_original_image_path, 'rb') as f:
+                original_image_bytes = f.read()
+            
+            temp_nodes_image_path = os.path.join(output_dir, "temp_room_with_nodes.png")
+            cv2.imwrite(temp_nodes_image_path, room_image_with_nodes)
+            with open(temp_nodes_image_path, 'rb') as f:
+                nodes_image_bytes = f.read()
+
+            # 创建图像Part
+            original_image_part = types.Part.from_bytes(
+                data=original_image_bytes,
+                mime_type='image/png'
+            )
+            
+            nodes_image_part = types.Part.from_bytes(
+                data=nodes_image_bytes,
+                mime_type='image/png'
+            )
+            
+            # 准备prompt parts
+            prompt_parts = [
+                enhanced_prompt,
+                original_image_part,
+                nodes_image_part
+            ]
+            
+            # Generate content
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt_parts
+            )
+            
+            # 清理临时文件
+            os.remove(temp_original_image_path)
+            os.remove(temp_nodes_image_path)
+            
+            if not response or not response.text:
+                raise RuntimeError("Empty response from LLM")
+            
+            raw_response = response.text.strip()
+            print(f"📝 Raw LLM response (Attempt {retry_count + 1}): '{raw_response}'")
+            
+            # 记录响应
+            all_responses.append({
+                "attempt": retry_count + 1,
+                "raw_response": raw_response,
+                "timestamp": str(__import__('datetime').datetime.now())
+            })
+            
+            # 解析并验证节点ID
+            try:
+                import re
+                numbers = re.findall(r'\d+', raw_response)
+                if numbers:
+                    candidate_id = int(numbers[0])
+                    if candidate_id in available_node_ids:
+                        selected_node_id = candidate_id
+                        # 找到对应的节点数据
+                        for node in nodes_in_room:
+                            if node['node_id'] == selected_node_id:
+                                selected_node_data = node
+                                break
+                        print(f"✓ Valid node ID selected: {selected_node_id}")
+                        break
+                    else:
+                        print(f"⚠️ LLM selected node {candidate_id} not in available nodes {available_node_ids}")
+                        print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                        retry_count += 1
+                        continue
                 else:
-                    print(f"⚠️ LLM selected node {candidate_id} not in available nodes {available_ids}")
-            else:
-                print("⚠️ No number found in LLM response")
+                    print("⚠️ No number found in LLM response")
+                    print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                    retry_count += 1
+                    continue
+                    
+            except Exception as e:
+                print(f"⚠️ Error parsing node ID: {e}")
+                print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                retry_count += 1
+                continue
+                
         except Exception as e:
-            print(f"⚠️ Error parsing node ID: {e}")
-        
-        selected_node_data = None
-        if selected_node_id is not None:
-            for node in nodes_in_room:
-                if node['node_id'] == selected_node_id:
-                    selected_node_data = node
-                    break
-        
-        return {
-            "raw_response": raw_response,
-            "selected_node_id": selected_node_id,
-            "selected_node_data": selected_node_data,
-            "model_used": model,
-            "available_nodes": nodes_in_room
-        }
-        
-    except Exception as e:
-        raise RuntimeError(f"LLM node selection failed: {str(e)}")
+            print(f"⚠️ LLM request failed (Attempt {retry_count + 1}): {e}")
+            all_responses.append({
+                "attempt": retry_count + 1,
+                "error": str(e),
+                "timestamp": str(__import__('datetime').datetime.now())
+            })
+            retry_count += 1
+            if retry_count < max_retries:
+                print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+    
+    # 如果所有重试都失败了
+    if selected_node_id is None:
+        print(f"⚠️ All LLM attempts failed. Using fallback: first available node {available_node_ids[0]}")
+        selected_node_id = available_node_ids[0]
+        for node in nodes_in_room:
+            if node['node_id'] == selected_node_id:
+                selected_node_data = node
+                break
+        final_response = f"Fallback selection: Node {selected_node_id} (LLM attempts failed)"
+    else:
+        final_response = all_responses[-1]["raw_response"]
+    
+    return {
+        "raw_response": final_response,
+        "selected_node_id": selected_node_id,
+        "selected_node_data": selected_node_data,
+        "model_used": model,
+        "available_nodes": nodes_in_room,
+        "attempts_made": retry_count,
+        "all_responses": all_responses
+    }
 
 def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[str, int], 
                           selected_room: int, config: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
