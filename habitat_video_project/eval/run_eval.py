@@ -471,6 +471,12 @@ class EpisodeEvaluator:
             start_position = np.array(episode_data['start_position'])
             episode_cum_distance = video_report['execution_stats'].get('total_distance', np.linalg.norm(final_position - start_position))
             
+            # 调试信息：检查距离计算
+            euclidean_distance = np.linalg.norm(final_position - start_position)
+            print(f"🔍 Distance Debug Info:")
+            print(f"  Euclidean distance (start->end): {euclidean_distance:.3f}m")
+            print(f"  Cumulative distance traveled: {episode_cum_distance:.3f}m")
+            
             view_points = [np.array(vp['agent_state']['position']) for goal in episode_data['goals'] for vp in goal.get('view_points', [])]
             if not view_points:
                 print("⚠ No viewpoints found in goals, using goal positions instead")

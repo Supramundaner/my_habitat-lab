@@ -87,6 +87,10 @@ class ActionProcessor:
         # GPU设置
         self.use_gpu = config.get('gpu', {}).get('enabled', False)
         
+        # 距离跟踪
+        self.total_distance_traveled = 0.0  # 累计行走距离
+        self.previous_position = None  # 上一个位置，用于计算距离
+        
         # 导航距离阈值配置
         self.waypoint_distance = config.get('navigation', {}).get('waypoint_distance', 1.5)
         self.destination_distance = config.get('navigation', {}).get('destination_distance', 0.8)
@@ -320,6 +324,11 @@ class ActionProcessor:
         Returns:
             执行结果报告
         """
+        # 重置距离跟踪
+        self.total_distance_traveled = 0.0
+        current_state = self.simulator.get_robot_state()
+        self.previous_position = current_state['position'].copy()
+        
         completed_actions = []
         collision_action = None
         
@@ -1331,10 +1340,23 @@ class ActionProcessor:
         return {
             'total_frames': self.composer.get_frame_count(),
             'total_duration': self.composer.get_frame_count() / self.fps,
+            'total_distance': self.total_distance_traveled,
             'linear_speed': self.linear_speed,
             'angular_speed': self.angular_speed,
             'fps': self.fps
         }
+    
+    def _update_distance_tracking(self, current_position: np.ndarray):
+        """
+        更新累计行走距离
+        
+        Args:
+            current_position: 当前位置
+        """
+        if self.previous_position is not None:
+            distance = np.linalg.norm(current_position - self.previous_position)
+            self.total_distance_traveled += distance
+        self.previous_position = current_position.copy()
     
     def _animate_movement(self, start_pos: np.ndarray, end_pos: np.ndarray):
         """
@@ -1349,10 +1371,12 @@ class ActionProcessor:
         duration = distance / self.linear_speed
         num_frames = max(1, round(duration * self.fps))  # 使用 round 而不是 int 来避免截断误差
         
-        
         # 获取当前旋转（保持不变）
         current_state = self.simulator.get_robot_state()
         current_rot = current_state['rotation']
+        
+        # 更新距离跟踪 - 在开始移动前记录起始位置
+        self._update_distance_tracking(start_pos)
         
         # 逐帧插值 - 修复：使用 range(1, num_frames + 1) 避免重复起始帧
         for frame in range(1, num_frames + 1):
@@ -1363,6 +1387,9 @@ class ActionProcessor:
             
             # 更新机器人姿态
             self.simulator.set_robot_pose(interpolated_pos, current_rot)
+            
+            # 更新距离跟踪
+            self._update_distance_tracking(interpolated_pos)
             
             # 添加视频帧
             self.composer.add_frame()
