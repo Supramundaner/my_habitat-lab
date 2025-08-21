@@ -10,10 +10,17 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
 from sklearn.cluster import DBSCAN
 
-def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m: float, seed_dist_m: float) -> Tuple[np.ndarray, np.ndarray]:
+def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m: float, seed_dist_m: float = None) -> Tuple[np.ndarray, np.ndarray]:
     """
     Segments rooms using physics-based parameters.
     Modified version of the original function to return both segmented image and markers.
+    
+    Args:
+        mask_image_path: Path to the input mask image
+        spacing: Meters per pixel resolution
+        closing_width_m: Physical width for morphological closing in meters
+        seed_dist_m: Minimum distance from wall for room seeds in meters. 
+                    If None, uses Otsu's automatic thresholding.
     
     Returns:
         Tuple of (segmented_image, markers)
@@ -22,11 +29,16 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     kernel_size_px = int(closing_width_m / spacing)
     if kernel_size_px % 2 == 0: 
         kernel_size_px += 1
-    seed_dist_px = seed_dist_m / spacing
     
     print(f"🔧 Parameter conversion:")
     print(f"  - Morphological kernel: {closing_width_m}m -> {kernel_size_px} pixels")
-    print(f"  - Seed distance threshold: {seed_dist_m}m -> {seed_dist_px:.2f} pixels")
+    
+    if seed_dist_m is not None:
+        # 使用固定的种子距离阈值
+        seed_dist_px = seed_dist_m / spacing
+        print(f"  - Seed distance threshold: {seed_dist_m}m -> {seed_dist_px:.2f} pixels (固定)")
+    else:
+        print("  - 将使用 Otsu 自动阈值化动态确定种子距离阈值")
     
     # Load and process the mask
     img = cv2.imread(mask_image_path, cv2.IMREAD_GRAYSCALE)
@@ -43,8 +55,34 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     # Compute distance transform
     dist_transform = cv2.distanceTransform(closing, cv2.DIST_L2, 5)
     
-    # Create seed regions (sure foreground)
-    _, sure_fg = cv2.threshold(dist_transform, seed_dist_px, 255, cv2.THRESH_BINARY)
+    # Create seed regions (sure foreground) with dynamic or fixed thresholding
+    if seed_dist_m is not None:
+        # 使用固定阈值
+        seed_dist_px = seed_dist_m / spacing
+        _, sure_fg = cv2.threshold(dist_transform, seed_dist_px, 255, cv2.THRESH_BINARY)
+        print(f"  ✓ 使用固定阈值: {seed_dist_px:.2f} pixels ({seed_dist_m} m)")
+    else:
+        # 使用 Otsu 自动阈值化 (参考 distance_transform 函数)
+        print(f"  📊 距离变换范围: {np.min(dist_transform):.2f} 到 {np.max(dist_transform):.2f} pixels")
+        
+        # 归一化距离变换用于 Otsu 阈值化
+        dist_normalized = dist_transform.copy()
+        cv2.normalize(dist_normalized, dist_normalized, 0, 255, cv2.NORM_MINMAX)
+        dist_normalized = np.uint8(dist_normalized)
+        
+        # 应用高斯模糊后进行 Otsu 阈值化 (参考原函数)
+        blur = cv2.GaussianBlur(dist_normalized, (11, 11), 0)  # 使用对称核
+        
+        # Otsu 阈值化
+        otsu_threshold, sure_fg = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 将阈值转换回原始距离变换的尺度
+        actual_threshold_px = (otsu_threshold / 255.0) * np.max(dist_transform)
+        actual_threshold_m = actual_threshold_px * spacing
+        
+        print(f"  ✓ Otsu 自动阈值: {otsu_threshold} (归一化)")
+        print(f"  ✓ 实际距离阈值: {actual_threshold_px:.2f} pixels ({actual_threshold_m:.3f} m)")
+    
     sure_fg = np.uint8(sure_fg)
     
     # Define sure background and unknown regions
@@ -128,12 +166,13 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
     # Get room segmentation parameters
     room_config = config['room_segmentation']
     morph_closing_width_meters = room_config.get('morph_closing_width_meters', 0.01)
-    seed_min_distance_from_wall_meters = room_config.get('seed_min_distance_from_wall_meters', 0.9)
+    # 不再从配置读取 seed_min_distance_from_wall_meters，使用动态阈值
+    # seed_min_distance_from_wall_meters = room_config.get('seed_min_distance_from_wall_meters', 0.9)
     min_room_area_pixels = room_config.get('min_room_area_pixels', 1000)
     
     print(f"🔧 Room segmentation parameters:")
     print(f"  - Morphological closing: {morph_closing_width_meters}m")
-    print(f"  - Seed distance from walls: {seed_min_distance_from_wall_meters}m")
+    print(f"  - Seed distance from walls: 动态阈值 (Otsu 自动)")
     print(f"  - Minimum room area: {min_room_area_pixels} pixels")
     
     # Perform room segmentation
@@ -141,7 +180,7 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
         wall_mask_path,
         spacing_in_meters_per_pixel,
         morph_closing_width_meters,
-        seed_min_distance_from_wall_meters
+        None  # 使用动态阈值，不传递固定值
     )
     
     # Filter and annotate valid rooms
@@ -269,7 +308,7 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
             "segmentation_parameters": {
                 "spacing_in_meters_per_pixel": spacing_in_meters_per_pixel,
                 "morph_closing_width_meters": morph_closing_width_meters,
-                "seed_min_distance_from_wall_meters": seed_min_distance_from_wall_meters,
+                "seed_distance_threshold": "dynamic_otsu",  # 表示使用动态阈值
                 "min_room_area_pixels": min_room_area_pixels
             }
         }

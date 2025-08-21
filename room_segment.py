@@ -3,16 +3,21 @@ import numpy as np
 import os
 
 SPACING_IN_METERS_PER_PIXEL = 0.0108  # (m/pixel) 
-MASK_IMAGE_PATH = ""
-OUTPUT_IMAGE_PATH = ""
+MASK_IMAGE_PATH = "/home/yaoaa/habitat-lab/habitat_video_project/eval/output/y9hTuugGdiq/7151/preprocess/wall_mask.png"
+OUTPUT_IMAGE_PATH = "/home/yaoaa/habitat-lab/room_segment.png"
+
 # 定义一个物理距离（米），小于这个宽度的缝隙或孔洞将被闭运算填充。
 # 例如，0.1米（10厘米）可以有效过滤掉门缝或小噪声。
-MORPH_CLOSING_WIDTH_METERS = 0.1
+MORPH_CLOSING_WIDTH_METERS = 0.01
 
+# 房间种子距离墙壁的最小距离设置：
+# - 设置为 None: 使用 Otsu 自动阈值化动态确定最佳距离（推荐）
+# - 设置为具体数值（如 0.9）: 使用固定阈值
 # 定义一个物理距离（米）。任何像素点，如果它离最近墙壁的距离大于这个值，
-# 就被认为是房间的“核心”或“种子”。
-# 例如，0.8米意味着一个点必须在至少1.6米宽的走廊的中心，才能成为种子。
-SEED_MIN_DISTANCE_FROM_WALL_METERS = 0.9
+# 就被认为是房间的"核心"或"种子"。
+# 设置为 None 表示使用 Otsu 自动阈值化动态确定最佳距离
+# 设置为具体数值（如 0.9）表示使用固定阈值
+SEED_MIN_DISTANCE_FROM_WALL_METERS = None  # 使用 None 启用动态阈值
 
 # 4. 显示与调试 (Display and Debugging)
 SHOW_VISUALIZATION_WINDOW = True
@@ -24,9 +29,19 @@ DEBUG_OUTPUT_DIR = "debug_steps_physical"
 # 核心代码逻辑 (Core Code Logic) - 通常无需修改以下部分
 # ==============================================================================
 
-def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m: float, seed_dist_m: float) -> np.ndarray:
+def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m: float, seed_dist_m: float = None) -> np.ndarray:
     """
     Segments rooms using physics-based parameters.
+    
+    Args:
+        mask_image_path: Path to the input mask image
+        spacing: Meters per pixel resolution
+        closing_width_m: Physical width for morphological closing in meters
+        seed_dist_m: Minimum distance from wall for room seeds in meters. 
+                    If None, uses Otsu's automatic thresholding.
+    
+    Returns:
+        Segmented room image as numpy array
     """
     if DEBUG_MODE and not os.path.exists(DEBUG_OUTPUT_DIR):
         os.makedirs(DEBUG_OUTPUT_DIR)
@@ -36,12 +51,15 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     kernel_size_px = int(closing_width_m / spacing)
     if kernel_size_px % 2 == 0: kernel_size_px += 1
     
-    # 计算距离变换的像素阈值
-    seed_dist_px = seed_dist_m / spacing
-
     print("--- 物理参数到像素参数的转换 ---")
     print(f"形态学核宽度: {closing_width_m} m  ->  {kernel_size_px} pixels")
-    print(f"种子距离阈值: {seed_dist_m} m  ->  {seed_dist_px:.2f} pixels")
+    
+    if seed_dist_m is not None:
+        # 使用固定的种子距离阈值
+        seed_dist_px = seed_dist_m / spacing
+        print(f"种子距离阈值: {seed_dist_m} m  ->  {seed_dist_px:.2f} pixels (固定)")
+    else:
+        print("将使用 Otsu 自动阈值化动态确定种子距离阈值")
     print("------------------------------------")
 
     # 1. Load the image and create a binary mask
@@ -62,15 +80,46 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     # 4. Compute Euclidean Distance Field (EDF)
     # 距离变换的结果直接就是像素距离，这正是我们需要的！
     dist_transform = cv2.distanceTransform(closing, cv2.DIST_L2, 5)
+    
     if DEBUG_MODE:
-        # 为了可视化，我们将距离图归一化，但后续计算使用原始像素距离
-        dist_vis = dist_transform.copy()
-        cv2.normalize(dist_vis, dist_vis, 0, 255, cv2.NORM_MINMAX)
-        cv2.imwrite(os.path.join(DEBUG_OUTPUT_DIR, "3_distance_transform.png"), dist_vis.astype(np.uint8))
+        # 保存原始距离变换（用于调试）
+        dist_vis_raw = dist_transform.copy()
+        cv2.normalize(dist_vis_raw, dist_vis_raw, 0, 255, cv2.NORM_MINMAX)
+        cv2.imwrite(os.path.join(DEBUG_OUTPUT_DIR, "3_distance_transform_raw.png"), dist_vis_raw.astype(np.uint8))
 
-    # 5. Derive seed regions (sure foreground) using the calculated pixel distance
-    # 注意：我们现在直接对以像素为单位的距离变换图进行阈值化，不再需要归一化
-    _, sure_fg = cv2.threshold(dist_transform, seed_dist_px, 255, cv2.THRESH_BINARY)
+    # 5. Derive seed regions (sure foreground)
+    if seed_dist_m is not None:
+        # 使用固定阈值
+        seed_dist_px = seed_dist_m / spacing
+        _, sure_fg = cv2.threshold(dist_transform, seed_dist_px, 255, cv2.THRESH_BINARY)
+        print(f"使用固定阈值: {seed_dist_px:.2f} pixels ({seed_dist_m} m)")
+    else:
+        # 使用 Otsu 自动阈值化 (参考 distance_transform 函数)
+        print(f"距离变换范围: {np.min(dist_transform):.2f} 到 {np.max(dist_transform):.2f} pixels")
+        
+        # 归一化距离变换用于 Otsu 阈值化
+        dist_normalized = dist_transform.copy()
+        cv2.normalize(dist_normalized, dist_normalized, 0, 255, cv2.NORM_MINMAX)
+        dist_normalized = np.uint8(dist_normalized)
+        
+        # 应用高斯模糊后进行 Otsu 阈值化 (参考原函数)
+        blur = cv2.GaussianBlur(dist_normalized, (11, 11), 0)  # 使用对称核
+        if DEBUG_MODE:
+            cv2.imwrite(os.path.join(DEBUG_OUTPUT_DIR, "3b_distance_blur.png"), blur)
+        
+        # Otsu 阈值化
+        otsu_threshold, sure_fg = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 将阈值转换回原始距离变换的尺度
+        actual_threshold_px = (otsu_threshold / 255.0) * np.max(dist_transform)
+        actual_threshold_m = actual_threshold_px * spacing
+        
+        print(f"Otsu 自动阈值: {otsu_threshold} (归一化)")
+        print(f"实际距离阈值: {actual_threshold_px:.2f} pixels ({actual_threshold_m:.3f} m)")
+        
+        if DEBUG_MODE:
+            cv2.imwrite(os.path.join(DEBUG_OUTPUT_DIR, "3c_distance_otsu.png"), sure_fg)
+    
     sure_fg = np.uint8(sure_fg)
     if DEBUG_MODE: cv2.imwrite(os.path.join(DEBUG_OUTPUT_DIR, "4_sure_foreground_seeds.png"), sure_fg)
     
