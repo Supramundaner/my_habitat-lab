@@ -179,7 +179,7 @@ pip install opencv-python pillow numpy magnum-python
 ### 基本用法
 
 ```bash
-cd habitat_video_project 
+cd /home/yaoaa/habitat-lab/habitat_video_project
 python main.py --no-histogram
 ```
 
