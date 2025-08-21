@@ -127,7 +127,7 @@ class WorkflowOrchestrator:
             return False
     
     def run_step_3(self) -> bool:
-        """Step 3: LLM room selection."""
+        """Step 3: LLM room selection with retry logic."""
         print("\\n" + "="*60)
         print("STEP 3: LLM room selection")
         print("="*60)
@@ -140,8 +140,21 @@ class WorkflowOrchestrator:
                 topdown_path, room_annotation_path, 
                 self.config, self.output_dir
             )
-            self._update_step_status("step_3_room_selection", True, result)
-            return True
+            
+            # 检查是否成功选择了有效房间
+            selected_room = result["llm_response"]["selected_room"]
+            attempts_made = result["llm_response"].get("attempts_made", 1)
+            
+            if selected_room is not None:
+                print(f"✓ Successfully selected room {selected_room} after {attempts_made} attempts")
+                self._update_step_status("step_3_room_selection", True, result)
+                return True
+            else:
+                error_msg = "Failed to select a valid room even with retries"
+                print(f"✗ {error_msg}")
+                self._update_step_status("step_3_room_selection", False, {"error": error_msg})
+                return False
+                
         except Exception as e:
             error_msg = f"Step 3 failed: {str(e)}"
             print(f"✗ {error_msg}")
@@ -172,7 +185,7 @@ class WorkflowOrchestrator:
             return False
     
     def run_step_5(self) -> bool:
-        """Step 5: Navigation node selection."""
+        """Step 5: Navigation node selection with retry logic."""
         print("\\n" + "="*60)
         print("STEP 5: Navigation node selection")
         print("="*60)
@@ -193,8 +206,21 @@ class WorkflowOrchestrator:
                 graph_path, topdown_path, room_bbox, selected_room,
                 self.config, self.output_dir
             )
-            self._update_step_status("step_5_node_selection", True, result)
-            return True
+            
+            # 检查是否成功选择了有效节点
+            selected_node_id = result["llm_response"]["selected_node_id"]
+            attempts_made = result["llm_response"].get("attempts_made", 1)
+            
+            if selected_node_id is not None:
+                print(f"✓ Successfully selected node {selected_node_id} after {attempts_made} attempts")
+                self._update_step_status("step_5_node_selection", True, result)
+                return True
+            else:
+                error_msg = "Failed to select a valid node even with retries"
+                print(f"✗ {error_msg}")
+                self._update_step_status("step_5_node_selection", False, {"error": error_msg})
+                return False
+                
         except Exception as e:
             error_msg = f"Step 5 failed: {str(e)}"
             print(f"✗ {error_msg}")
