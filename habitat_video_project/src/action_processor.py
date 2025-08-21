@@ -36,7 +36,8 @@ class NavigationConfig:
         self.a_star_interval = 5  # 每5次行动重新规划A*
         
         # A*距离变换参数
-        self.a_star_weight_w = config.get('navigation', {}).get('a_star_weight_w', 10)  # 距离惩罚权重
+        # self.a_star_weight_w = config.get('navigation', {}).get('a_star_weight_w', 10)  # 距离惩罚权重
+        # self.a_star_weight_w = 200
         self.a_star_epsilon = config.get('navigation', {}).get('a_star_epsilon', 0.01)  # 防止除零的小正数
         self.unknown_region_distance = config.get('navigation', {}).get('unknown_region_distance', 5.0)  # 未知区域距离值
         
@@ -438,8 +439,7 @@ class ActionProcessor:
             执行结果字典
         """
         # 检查是否到达最终目标
-        dist_to_final_target = np.sqrt((current_pos_2d[0] - adjusted_target_pos[0])**2 + 
-                                      (current_pos_2d[1] - adjusted_target_pos[1])**2)
+        dist_to_final_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
         
         if dist_to_final_target < self.nav_config.final_stop_threshold:
             return {'success': True}
@@ -478,11 +478,11 @@ class ActionProcessor:
         vfh_target_result = self._select_vfh_target(
             current_pos_2d, adjusted_target_pos, current_path, dist_to_final_target
         )
-        
+        line_distance = np.linalg.norm(current_pos_2d - adjusted_target_pos)
         # 计算并显示路径距离信息
         if current_path is not None:
             path_distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, adjusted_target_pos)
-            print(f"距离信息 - 直线距离: {dist_to_final_target:.2f}m, 路径距离: {path_distance_to_target:.2f}m")
+            print(f"距离信息 - 直线距离: {line_distance:.2f}m, 路径距离: {path_distance_to_target:.2f}m")
         
         if not vfh_target_result['success']:
             return {'failed': True, 'reason': vfh_target_result['reason']}
@@ -587,7 +587,10 @@ class ActionProcessor:
                     return {'failed': True, 'reason': 'no_walkable_area_near_target'}
         
         # 检查是否足够接近目标
-        distance_to_target = np.linalg.norm(current_pos_2d - target_pos_2d)
+        current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+        current_path = current_path_result['path']
+        distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
+        
         if distance_to_target < self.nav_config.final_stop_threshold:
             print(f"[SUCCESS] 成功导航到目标")
             return {'success': True}
@@ -951,7 +954,11 @@ class ActionProcessor:
         mean_dist = np.mean(distance_map)
         
         # 2. 设置参数
-        weight_w = self.nav_config.a_star_weight_w  # 权重系数，控制远离障碍物的程度
+
+        # weight_w = self.nav_config.a_star_weight_w  # 权重系数，控制远离障碍物的程度
+        constant = 0.009
+        resolution = self.map_builder.map_resolution
+        weight_w = constant / (resolution**2)
         epsilon = self.nav_config.a_star_epsilon  # 防止除零的小正数
         
         # 优先级队列: (f_score, g_score, position)
