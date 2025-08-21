@@ -118,11 +118,7 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
             enhanced_prompt = prompt_template
             if available_rooms:
                 enhanced_prompt += f"\n\nAvailable rooms in this scene: {sorted(available_rooms)}"
-                enhanced_prompt += f"\nPlease select ONLY from these available room numbers: {sorted(available_rooms)}"
             
-            if retry_count > 0:
-                enhanced_prompt += f"\n\nPREVIOUS ATTEMPTS FAILED: Your previous responses were not valid room numbers."
-                enhanced_prompt += f"\nPlease respond with ONLY a valid room number from the available options."
             
             # Create image parts using types.Part
             topdown_part = types.Part.from_bytes(
