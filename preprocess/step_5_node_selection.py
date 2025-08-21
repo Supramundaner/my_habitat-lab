@@ -131,15 +131,8 @@ def select_node_with_llm(original_room_image: np.ndarray,
             client = genai.Client(api_key=api_key, http_options=http_options)
             
             print(f"🚀 Sending node selection request to LLM... (Attempt {retry_count + 1}/{max_retries})")
-            
-            # 构建增强prompt
-            node_list = ", ".join([str(node_id) for node_id in available_node_ids])
-            enhanced_prompt = f"{prompt_template}\n\nAvailable nodes in this room: {node_list}"
-            enhanced_prompt += f"\nPlease select ONLY from these available node IDs: {available_node_ids}"
-            
-            if retry_count > 0:
-                enhanced_prompt += f"\n\nPREVIOUS ATTEMPTS FAILED: Your previous responses were not valid node IDs."
-                enhanced_prompt += f"\nPlease respond with ONLY a valid node ID from the available options: {available_node_ids}"
+
+            enhanced_prompt = f"{prompt_template}"
             
             # 保存并读取图片
             temp_original_image_path = os.path.join(output_dir, "temp_original_room_image.png")
