@@ -309,11 +309,22 @@ class ActionProcessor:
             forward_direction = unified_angle_to_direction_vector(unified_angle)
 
             
-            # 计算向前目标位置
-            end_pos = current_pos + forward_direction * self.nav_config.forward_distance
+            # 计算目标位置的x,z坐标
+            # forward_direction是[x, y, z]格式，所以使用[0]和[2]分别对应x和z
+            target_x = current_pos[0] + forward_direction[0] * self.nav_config.forward_distance
+            target_z = current_pos[2] + forward_direction[2] * self.nav_config.forward_distance
             
-            # 执行移动到目标位置
-            self._animate_movement(current_pos, end_pos)
+            # 获取目标位置对应的可导航y坐标
+            target_y = self.simulator.get_navigable_y(target_x, target_z)
+            
+            if target_y is not None:
+                # 构建完整的3D目标位置（包含正确的y坐标）
+                end_pos = np.array([target_x, target_y, target_z])
+                
+                # 执行移动到目标位置
+                self._animate_movement(current_pos, end_pos)
+            else:
+                print(f"[WARNING] 目标位置 ({target_x:.2f}, {target_z:.2f}) 不可导航，跳过前进动作")
     
     def execute_sequence(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
         """
