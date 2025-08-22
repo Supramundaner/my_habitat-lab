@@ -100,6 +100,24 @@ class ActionProcessor:
         self.time_steps_num = config.get('agent', {}).get('time_steps_num', 10)
         self.min_displacement = config.get('agent', {}).get('min_displacement', 1.0)
         
+        # 死循环检测参数
+        loop_config = config.get('loop_detection', {})
+        self.loop_detection_threshold = loop_config.get('distance_threshold', 0.5)  # 距离阈值（米）
+        self.loop_detection_min_iterations = loop_config.get('min_iterations', 15)  # 最小持续迭代次数
+        self.loop_detection_window_size = loop_config.get('window_size', 60)  # 位置历史窗口大小
+        
+        # 死循环检测状态
+        self.position_history = []  # 位置历史记录
+        self.history_max_length = self.loop_detection_window_size
+        self.loop_start_iteration = None  # 开始检测到可能循环的迭代次数
+        self.is_in_potential_loop = False  # 是否处于潜在循环状态
+        
+        # 旋转搜索参数
+        rotation_search_config = config.get('rotation_search', {})
+        self.rotation_search_enabled = rotation_search_config.get('enabled', True)  # 是否启用旋转搜索
+        self.rotation_search_steps = rotation_search_config.get('steps', 12)  # 旋转步数（12步 = 360度）
+        self.rotation_search_angle = rotation_search_config.get('angle_per_step', 30.0)  # 每步旋转角度
+        
         print(f"动作处理器初始化完成")
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
@@ -108,6 +126,12 @@ class ActionProcessor:
         print(f"最终目标距离: {self.destination_distance} m")
         print(f"Time step检测窗口: {self.time_steps_num} steps")
         print(f"最小位移阈值: {self.min_displacement} m")
+        print(f"死循环检测阈值: {self.loop_detection_threshold} m")
+        print(f"死循环检测最小迭代次数: {self.loop_detection_min_iterations}")
+        print(f"死循环检测窗口大小: {self.loop_detection_window_size}")
+        print(f"旋转搜索: {'启用' if self.rotation_search_enabled else '禁用'}")
+        print(f"旋转搜索步数: {self.rotation_search_steps} 步")
+        print(f"每步旋转角度: {self.rotation_search_angle} 度")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
     
     def _get_robot_state(self) -> Dict[str, Any]:
@@ -340,6 +364,9 @@ class ActionProcessor:
         self.total_distance_traveled = 0.0
         current_state = self.simulator.get_robot_state()
         self.previous_position = current_state['position'].copy()
+        
+        # 重置死循环检测状态（开始新的执行序列）
+        self._reset_loop_detection()
         
         completed_actions = []
         collision_action = None
@@ -603,8 +630,25 @@ class ActionProcessor:
         distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
         
         if distance_to_target < self.nav_config.final_stop_threshold:
-            print(f"[SUCCESS] 成功导航到目标")
-            return {'success': True}
+            print(f"[OBJECT DETECTION] 已到达目标位置，距离: {distance_to_target:.3f}m")
+            
+            # 如果没有检测到目标，启动360度旋转搜索
+            if detected_target_pos is None:
+                print(f"[OBJECT DETECTION] 到达目标位置但未检测到目标，启动360度旋转搜索")
+                
+                # 执行旋转搜索
+                rotation_result = self._execute_rotation_search(target_name, vfh_star, original_target_pos)
+                
+                if rotation_result['success']:
+                    print(f"[OBJECT DETECTION] ✅ 旋转搜索成功！")
+                    return {'success': True}
+                else:
+                    print(f"[OBJECT DETECTION] ⚠️ 旋转搜索失败: {rotation_result.get('message', '未知错误')}")
+                    # 旋转搜索失败，但仍然认为任务完成（已到达目标位置）
+                    return {'success': True}
+            else:
+                print(f"[OBJECT DETECTION] ✅ 成功导航到检测目标")
+                return {'success': True}
         
         # 使用VFH*导航到目标
         vfh_star.update_target(target_pos_2d)
@@ -715,6 +759,9 @@ class ActionProcessor:
         """
         print(f"开始主导航控制器，目标: {target_name}")
         
+        # 重置死循环检测状态（开始新的导航任务）
+        self._reset_loop_detection()
+        
         # 初始化导航状态
         navigation_phase = NavigationPhase.HYBRID_NAVIGATION
         current_path = None
@@ -733,6 +780,15 @@ class ActionProcessor:
             current_pos = robot_state['position']
             current_rot = robot_state['rotation']
             current_pos_2d = robot_state['position_2d']
+            
+            # 死循环检测
+            loop_detected = self._check_loop_detection(current_pos_2d, iteration)
+            if loop_detected:
+                return {
+                    'success': False,
+                    'reason': 'loop_detected',
+                    'message': f'检测到死循环：在{self.loop_detection_threshold}m范围内持续{self.loop_detection_min_iterations}次迭代以上'
+                }
             
             # 检查阶段切换
             if (navigation_phase == NavigationPhase.HYBRID_NAVIGATION and 
@@ -1326,6 +1382,246 @@ class ActionProcessor:
                         accessible_count += 1
         
         return accessible_count
+    
+    def _check_loop_detection(self, current_pos_2d: np.ndarray, current_iteration: int) -> bool:
+        """
+        使用轨迹-距离值法检测死循环
+        
+        思想: 连续记录一段时间的位置，若机器人始终没离开一个"小圈子"，就认为在绕圈。
+        步骤:
+        1. 开一个固定长度的循环队列保存最近 N 个位姿
+        2. 计算当前位置与窗口内最早那个点的欧氏距离 d
+        3. 若 d < Dthres 且持续 Tmin 迭代次数以上，就触发"绕圈"标志
+        
+        Args:
+            current_pos_2d: 当前2D位置 [x, z]
+            current_iteration: 当前迭代次数
+        
+        Returns:
+            True表示检测到死循环
+        """
+        # 添加当前位置到历史记录
+        self.position_history.append({
+            'position': current_pos_2d.copy(),
+            'iteration': current_iteration
+        })
+        
+        # 维护固定长度的窗口（循环队列）
+        if len(self.position_history) > self.history_max_length:
+            self.position_history.pop(0)
+        
+        # 需要足够的历史数据才能检测（至少一半窗口大小）
+        if len(self.position_history) < max(5, self.history_max_length // 2):
+            return False
+        
+        # 计算当前位置与窗口内最早位置的欧氏距离
+        earliest_pos = self.position_history[0]['position']
+        distance = np.linalg.norm(current_pos_2d - earliest_pos)
+        
+        # 检测是否在阈值范围内
+        if distance < self.loop_detection_threshold:
+            if not self.is_in_potential_loop:
+                # 刚开始检测到潜在循环
+                self.is_in_potential_loop = True
+                self.loop_start_iteration = current_iteration
+                print(f"[LOOP DETECTION] 开始检测潜在循环，当前距离最早位置: {distance:.3f}m")
+            else:
+                # 持续在循环中，检查迭代次数
+                loop_iterations = current_iteration - self.loop_start_iteration
+                print(f"[LOOP DETECTION] 潜在循环持续中，迭代次数: {loop_iterations}，距离: {distance:.3f}m")
+                
+                if loop_iterations >= self.loop_detection_min_iterations:
+                    print(f"[LOOP DETECTION] ⚠️ 确认死循环！持续迭代次数: {loop_iterations}，距离: {distance:.3f}m")
+                    return True
+        else:
+            # 离开了循环区域，重置状态
+            if self.is_in_potential_loop:
+                print(f"[LOOP DETECTION] 离开潜在循环区域，距离: {distance:.3f}m")
+            self.is_in_potential_loop = False
+            self.loop_start_iteration = None
+        
+        return False
+    
+    def _reset_loop_detection(self):
+        """
+        重置死循环检测状态
+        """
+        self.position_history.clear()
+        self.is_in_potential_loop = False
+        self.loop_start_iteration = None
+        print("[LOOP DETECTION] 死循环检测状态已重置")
+    
+    def _execute_rotation_search(self, target_name: str, vfh_star: VFHStar, 
+                                original_target_pos: np.ndarray) -> Dict[str, Any]:
+        """
+        执行360度旋转搜索，在每个角度尝试检测目标
+        
+        当机器人到达目标位置但未检测到目标时，通过顺时针旋转一周来搜索目标。
+        每次旋转30度，总共12次旋转完成360度搜索。
+        
+        Args:
+            target_name: 目标名称
+            vfh_star: VFH*算法实例
+            original_target_pos: 原始目标位置（用于失败时的备选）
+            
+        Returns:
+            搜索结果字典
+        """
+        if not self.rotation_search_enabled:
+            print("[ROTATION SEARCH] 旋转搜索功能已禁用")
+            return {'success': False, 'reason': 'rotation_search_disabled'}
+        
+        if not self.object_detector.is_enabled():
+            print("[ROTATION SEARCH] 对象检测模块未启用，跳过旋转搜索")
+            return {'success': False, 'reason': 'object_detection_disabled'}
+        
+        print(f"[ROTATION SEARCH] 开始360度旋转搜索目标: {target_name}")
+        print(f"[ROTATION SEARCH] 将进行{self.rotation_search_steps}次旋转，每次{self.rotation_search_angle}度")
+        
+        # 获取相机参数
+        camera_params = self._get_camera_params()
+        
+        # 记录搜索开始时的位置
+        start_robot_state = self._get_robot_state()
+        search_center_pos = start_robot_state['position']
+        
+        for step in range(self.rotation_search_steps):
+            print(f"[ROTATION SEARCH] 步骤 {step + 1}/{self.rotation_search_steps}: 旋转{self.rotation_search_angle}度")
+            
+            # 执行旋转
+            self._handle_turn_right({'angle': self.rotation_search_angle})  # 顺时针旋转
+            
+            # 获取当前观测
+            observation = self.simulator.get_observation()
+            rgb_image = observation.get('rgb')
+            depth_image = observation.get('depth')
+            
+            if rgb_image is None or depth_image is None:
+                print(f"[ROTATION SEARCH] 步骤 {step + 1}: 无法获取观测数据，跳过")
+                continue
+            
+            # 尝试检测目标
+            detected_target_pos_camera = self.object_detector.detect_and_get_target_coords(
+                rgb_image, depth_image, target_name, camera_params
+            )
+            
+            if detected_target_pos_camera is not None:
+                print(f"[ROTATION SEARCH] ✅ 步骤 {step + 1}: 检测到目标！相机坐标: {detected_target_pos_camera}")
+                
+                # 将相机坐标转换为世界坐标
+                detected_target_world = self._camera_to_world_coords(detected_target_pos_camera)
+                print(f"[ROTATION SEARCH] 世界坐标: {detected_target_world}")
+                
+                # 转换为2D导航坐标
+                detected_target_2d = np.array([detected_target_world[0], detected_target_world[2]])
+                
+                # 检查检测到的目标是否在障碍物内，如果是则调整位置
+                if self.map_builder.grid_map is not None:
+                    target_map_coords = self.map_builder._world_to_map_coords(np.array([[detected_target_2d[0], 0, detected_target_2d[1]]]))
+                    target_pixel = (int(target_map_coords[0, 0]), int(target_map_coords[0, 1]))
+                    
+                    target_value = self.map_builder.grid_map[target_pixel[1], target_pixel[0]]
+                    if target_value == 0:  # 障碍物
+                        print(f"[ROTATION SEARCH] 检测到的目标在障碍物内，寻找最近的可行走点")
+                        nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map)
+                        
+                        if nearest_walkable_pixel is not None:
+                            detected_target_2d = self._pixel_to_world_coord(nearest_walkable_pixel)
+                            print(f"[ROTATION SEARCH] 目标位置已调整为: {detected_target_2d}")
+                        else:
+                            print(f"[ROTATION SEARCH] 无法找到可行走区域，使用原始目标位置")
+                            detected_target_2d = original_target_pos
+                
+                # 导航到检测到的目标位置
+                print(f"[ROTATION SEARCH] 开始导航到检测到的目标位置: {detected_target_2d}")
+                
+                # 更新VFH*目标
+                vfh_star.update_target(detected_target_2d)
+                
+                # 执行导航到检测到的目标
+                navigation_result = self._navigate_to_detected_target(
+                    detected_target_2d, vfh_star, max_iterations=50
+                )
+                
+                if navigation_result['success']:
+                    print(f"[ROTATION SEARCH] ✅ 成功导航到检测到的目标位置！")
+                    return {
+                        'success': True,
+                        'detected_target_pos': detected_target_world,
+                        'final_target_2d': detected_target_2d,
+                        'search_step': step + 1
+                    }
+                else:
+                    print(f"[ROTATION SEARCH] ⚠️ 导航到检测目标失败: {navigation_result.get('message', '未知错误')}")
+                    # 继续搜索下一个角度
+            else:
+                print(f"[ROTATION SEARCH] 步骤 {step + 1}: 未检测到目标")
+        
+        print(f"[ROTATION SEARCH] ❌ 完成360度搜索，未找到目标")
+        return {
+            'success': False,
+            'reason': 'target_not_found_in_rotation_search',
+            'message': f'完成{self.rotation_search_steps}次旋转搜索，未检测到目标'
+        }
+    
+    def _navigate_to_detected_target(self, target_pos_2d: np.ndarray, vfh_star: VFHStar, 
+                                   max_iterations: int = 50) -> Dict[str, Any]:
+        """
+        导航到检测到的目标位置
+        
+        Args:
+            target_pos_2d: 目标位置 [x, z]
+            vfh_star: VFH*算法实例
+            max_iterations: 最大迭代次数
+            
+        Returns:
+            导航结果
+        """
+        print(f"[NAVIGATE TO DETECTED] 开始导航到检测目标: {target_pos_2d}")
+        
+        iteration = 0
+        prev_direction = None
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            # 获取当前状态
+            robot_state = self._get_robot_state()
+            current_pos_2d = robot_state['position_2d']
+            current_rot = robot_state['rotation']
+            
+            # 检查是否已到达目标 - 使用路径距离而非直线距离
+            current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+            if current_path_result is not None:
+                current_path = current_path_result['path']
+                path_distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
+            else:
+                # 如果无法规划路径，使用直线距离作为备选
+                path_distance_to_target = np.linalg.norm(current_pos_2d - target_pos_2d)
+            
+            if path_distance_to_target < self.nav_config.final_stop_threshold:
+                print(f"[NAVIGATE TO DETECTED] ✅ 成功到达检测目标，路径距离: {path_distance_to_target:.3f}m")
+                return {'success': True}
+            
+            # 使用VFH*导航
+            result = self._execute_vfh_navigation(
+                current_pos_2d, current_rot, vfh_star, target_pos_2d, prev_direction
+            )
+            
+            if result.get('failed', False):
+                return {
+                    'success': False,
+                    'reason': result.get('reason', 'vfh_navigation_failed'),
+                    'message': '导航到检测目标时VFH导航失败'
+                }
+            
+            prev_direction = result.get('prev_direction', prev_direction)
+        
+        return {
+            'success': False,
+            'reason': 'max_iterations_exceeded',
+            'message': f'导航到检测目标超过最大迭代次数{max_iterations}'
+        }
     
     def _handle_turn_left(self, params: Dict[str, Any]) -> bool:
         """
