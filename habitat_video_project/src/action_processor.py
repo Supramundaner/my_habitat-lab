@@ -734,10 +734,8 @@ class ActionProcessor:
         # 执行低层动作
         self._execute_vfh_action(action_name, action_value, current_pos, current_rot)
         
-        # 添加视频帧
-        current_state = self.simulator.get_robot_state()
-        current_observation = self.simulator.get_observation()
-        self.composer.add_frame(robot_state=current_state, observation=current_observation)
+        # 注意：_execute_vfh_action内部的动画函数已经添加了帧，这里不再重复添加
+        # 避免连续相同帧的问题
         
         return {
             'success': False,
