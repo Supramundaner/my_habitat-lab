@@ -24,15 +24,51 @@ def load_prompt_template(prompt_path: str) -> str:
 
 def get_available_rooms(output_dir: str) -> List[int]:
     """Get available room numbers from room segmentation results."""
+    # Try to find room information from different possible sources during workflow
+    room_ids = []
+    
     try:
+        # First try: Check if there's a step2 intermediate result file
+        # (This would be saved by workflow orchestrator if it exists)
+        step2_result_path = os.path.join(output_dir, "step2_results.json")
+        if os.path.exists(step2_result_path):
+            with open(step2_result_path, 'r', encoding='utf-8') as f:
+                step2_data = json.load(f)
+            room_bboxes = step2_data.get("results", {}).get("room_bounding_boxes", {})
+            room_ids = [int(room_id) for room_id in room_bboxes.keys()]
+            if room_ids:
+                print(f"✓ Found available rooms from step2_results.json: {sorted(room_ids)}")
+                return room_ids
+    except Exception as e:
+        print(f"⚠️ Could not load from step2_results.json: {e}")
+    
+    try:
+        # Second try: Check final output.json (for completed workflows)
         output_json_path = os.path.join(output_dir, "output.json")
         if os.path.exists(output_json_path):
             with open(output_json_path, 'r', encoding='utf-8') as f:
                 output_data = json.load(f)
             room_bboxes = output_data.get("final_results", {}).get("room_bounding_boxes", {})
-            return [int(room_id) for room_id in room_bboxes.keys()]
+            room_ids = [int(room_id) for room_id in room_bboxes.keys()]
+            if room_ids:
+                print(f"✓ Found available rooms from output.json: {sorted(room_ids)}")
+                return room_ids
     except Exception as e:
-        print(f"⚠️ Warning: Could not load available rooms from output.json: {e}")
+        print(f"⚠️ Could not load from output.json: {e}")
+    
+    try:
+        # Third try: Try to parse room annotation image to get room numbers
+        # This is a fallback method by analyzing the room annotation image
+        room_annotation_path = os.path.join(output_dir, "room_annotation.png")
+        if os.path.exists(room_annotation_path):
+            print("⚠️ Attempting to extract room numbers from room_annotation.png...")
+            # This is a basic OCR-like approach - in practice, you might want to use OCR
+            # For now, we'll make a reasonable assumption based on typical room counts
+            # You could implement actual OCR here if needed
+            print("⚠️ Image-based room detection not implemented, using fallback")
+    except Exception as e:
+        print(f"⚠️ Could not analyze room annotation image: {e}")
+    
     return []
 
 def select_room_with_llm(topdown_path: str, room_annotation_path: str, 
