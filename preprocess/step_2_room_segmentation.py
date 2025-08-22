@@ -71,7 +71,7 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
         dist_normalized = np.uint8(dist_normalized)
         
         # 应用高斯模糊后进行 Otsu 阈值化 (参考原函数)
-        blur = cv2.GaussianBlur(dist_normalized, (11, 11), 0)  # 使用对称核
+        blur = cv2.GaussianBlur(dist_normalized, (21, 21), 0)  # 使用对称核
         
         # Otsu 阈值化
         otsu_threshold, sure_fg = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -167,7 +167,7 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
     room_config = config['room_segmentation']
     morph_closing_width_meters = room_config.get('morph_closing_width_meters', 0.01)
     # 不再从配置读取 seed_min_distance_from_wall_meters，使用动态阈值
-    # seed_min_distance_from_wall_meters = room_config.get('seed_min_distance_from_wall_meters', 0.9)
+    seed_min_distance_from_wall_meters = room_config.get('seed_min_distance_from_wall_meters', None)
     min_room_area_pixels = room_config.get('min_room_area_pixels', 1000)
     
     print(f"🔧 Room segmentation parameters:")
@@ -180,7 +180,7 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
         wall_mask_path,
         spacing_in_meters_per_pixel,
         morph_closing_width_meters,
-        None  # 使用动态阈值，不传递固定值
+        seed_min_distance_from_wall_meters  
     )
     
     # Filter and annotate valid rooms
