@@ -118,6 +118,16 @@ class WorkflowOrchestrator:
                 topdown_path, wall_mask_path, metadata_path, 
                 self.config, self.output_dir
             )
+            
+            # Save step 2 intermediate results for step 3 to access
+            step2_result_path = os.path.join(self.output_dir, "step2_results.json")
+            try:
+                with open(step2_result_path, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, indent=2, ensure_ascii=False)
+                print(f"✓ Step 2 intermediate results saved to: {step2_result_path}")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not save step 2 intermediate results: {e}")
+            
             self._update_step_status("step_2_room_segmentation", True, result)
             return True
         except Exception as e:
