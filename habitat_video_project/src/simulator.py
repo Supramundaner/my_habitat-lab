@@ -748,12 +748,18 @@ class HabitatSimulator:
                     print("错误: 无法加载导航网格")
                     return None
             
-            test_point = mn.Vector3(x, 0.0, z)
+            # 获取当前agent的y坐标作为参考
+            current_agent_state = self.agent.get_state()
+            current_y = current_agent_state.position[1]
+            
+            # 使用当前agent的y坐标进行测试
+            test_point = mn.Vector3(x, current_y, z)
             snapped_point = self.sim.pathfinder.snap_point(test_point)
             
             if self.sim.pathfinder.is_navigable(snapped_point):
                 return float(snapped_point.y)
             else:
+                # 如果不可导航，直接返回None
                 return None
                 
         except Exception as e:
