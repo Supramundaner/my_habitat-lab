@@ -160,7 +160,7 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
     backend_cfg.load_semantic_mesh = False
 
     sensor_cfg = habitat_sim.CameraSensorSpec()
-    sensor_cfg.resolution = [4096, 4096] # 方形传感器，简化计算
+    sensor_cfg.resolution = [2048, 2048] # 方形传感器，简化计算
     sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
     sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
     # 【注意】这里的 near 和 far 只是初始值，稍后会为每个楼层动态修改
@@ -472,7 +472,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
         # Disable semantic mesh loading to avoid semantic file requirement
         backend_cfg.load_semantic_mesh = False
         sensor_cfg = habitat_sim.CameraSensorSpec()
-        sensor_cfg.resolution = [4096, 4096]
+        sensor_cfg.resolution = [2048, 2048]
         sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
         sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
         sensor_cfg.ortho_scale = optimal_ortho_scale
@@ -510,7 +510,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
     print("\n--- Step 3: Processing Final Image and Metadata ---")
     if final_image is None:
         print("Warning: Failed to render the target floor.")
-        res = [4096, 4096]
+        res = [2048, 2048]
         final_image = np.zeros((res[0], res[1], 4), dtype=np.uint8)
 
     meta_data = calculate_metadata(unprojected_coords) if unprojected_coords else {}
