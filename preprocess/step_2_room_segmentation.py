@@ -98,20 +98,22 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     img_color_for_watershed = cv2.cvtColor(closing, cv2.COLOR_GRAY2BGR)
     markers = cv2.watershed(img_color_for_watershed, markers)
     
-    # Create colored segmentation result
+    # Create segmentation result (color filling disabled)
     num_rooms = np.max(markers)
-    colors = [np.random.randint(50, 256, 3).tolist() for _ in range(num_rooms + 1)]
+    # colors = [np.random.randint(50, 256, 3).tolist() for _ in range(num_rooms + 1)]
     segmented_image = np.zeros((binary_mask.shape[0], binary_mask.shape[1], 3), dtype=np.uint8)
     
-    for i in range(1, num_rooms + 1):
-        if i < len(colors):
-            segmented_image[markers == i] = colors[i]
+    # Color filling disabled - keep segmented_image as black background
+    # for i in range(1, num_rooms + 1):
+    #     if i < len(colors):
+    #         segmented_image[markers == i] = colors[i]
     
-    # Mark boundaries in red
+    # Mark boundaries in red (keeping this for visualization)
     segmented_image[markers == -1] = [0, 0, 255]
     
-    # Restore original walls (black)
-    segmented_image[binary_mask == 0] = [0, 0, 0]
+    # Show walkable areas in white instead of original walls
+    segmented_image[binary_mask == 255] = [255, 255, 255]  # White for walkable areas
+    # Walls remain black (0, 0, 0)
     
     return segmented_image, markers
 
@@ -248,17 +250,18 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
     
     print(f"✓ Found {len(valid_rooms_info)} valid rooms")
     
-    # Create room annotation
-    for i, room_info in enumerate(valid_rooms_info):
-        color = colors[i % len(colors)]
-        room_number = room_info['room_number']
-        
-        # Color the room area
-        overlay[room_info['mask'] == 255] = color
+    # Create room annotation (color filling disabled)
+    # for i, room_info in enumerate(valid_rooms_info):
+    #     color = colors[i % len(colors)]
+    #     room_number = room_info['room_number']
+    #     
+    #     # Color the room area
+    #     overlay[room_info['mask'] == 255] = color
     
-    # Blend overlay with original image
-    alpha = 0.4
-    final_image = cv2.addWeighted(overlay, alpha, annotated_image, 1.0 - alpha, 0)
+    # Blend overlay with original image (disabled - using original image)
+    # alpha = 0.4
+    # final_image = cv2.addWeighted(overlay, alpha, annotated_image, 1.0 - alpha, 0)
+    final_image = annotated_image.copy()  # Use original image without color overlay
     
     # Add room numbers
     for room_info in valid_rooms_info:
