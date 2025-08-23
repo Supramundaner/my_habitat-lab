@@ -172,7 +172,6 @@ def calculate_boundary_length(room1_id: int, room2_id: int, markers: np.ndarray)
     
     # Count boundary pixels that have both room1 and room2 as neighbors
     shared_boundary_count = np.sum(has_room1 & has_room2)
-    print(f"    - Shared boundary between room {room1_id} and room {room2_id}: {shared_boundary_count} pixels")
     return int(shared_boundary_count)
 
 def calculate_room_centroid(room_id: int, markers: np.ndarray) -> Tuple[float, float]:
@@ -259,11 +258,11 @@ def calculate_merge_score(small_room_id: int, candidate_room_id: int, markers: n
     boundary_score = boundary_length / max_adjacent_boundary if max_adjacent_boundary > 0 else 0
     
     # Weighted combination (33% each: area, distance, boundary)
-    merge_score = 0.0 * area_score + 0.0 * distance_score + 1.0 * boundary_score
+    merge_score = 0.0 * area_score + 0.3 * distance_score + 0.7 * boundary_score
     
     return merge_score
 
-def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndarray:
+def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int, spacing: float) -> np.ndarray:
     """
     Iteratively merge small rooms into adjacent larger rooms.
     After each merge, recalculate boundaries to ensure correct adjacency detection.
@@ -271,6 +270,7 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
     Args:
         markers: Initial watershed markers
         min_room_area_pixels: Minimum area threshold for rooms
+        spacing: Meters per pixel resolution for boundary length filtering
         
     Returns:
         Updated markers with merged rooms
@@ -307,7 +307,8 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
                 continue
                 
             # Find adjacent rooms using improved method that handles boundaries correctly
-            adjacent_rooms = find_adjacent_rooms(small_room_id, merged_markers)
+            # Pass spacing for boundary length filtering (0.3m minimum)
+            adjacent_rooms = find_adjacent_rooms(small_room_id, merged_markers, spacing, 0.3)
             
             if not adjacent_rooms:
                 print(f"  ⚠️ Small room {small_room_id} ({small_area} pixels) has no adjacent rooms, keeping as is")
@@ -361,17 +362,20 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
     print(f"✓ Completed room merging: {len(merge_log)} merges performed")
     return merged_markers
 
-def find_adjacent_rooms(room_id: int, markers: np.ndarray) -> List[int]:
+def find_adjacent_rooms(room_id: int, markers: np.ndarray, spacing: float = None, min_boundary_length_m: float = 0.3) -> List[int]:
     """
     Find all rooms that are adjacent to the given room, handling boundaries correctly.
+    Only considers rooms adjacent if their shared boundary length >= min_boundary_length_m.
     Optimized vectorized version.
     
     Args:
         room_id: The ID of the room to find neighbors for
         markers: Watershed markers array
+        spacing: Meters per pixel resolution (optional, for boundary filtering)
+        min_boundary_length_m: Minimum boundary length in meters to consider rooms adjacent
         
     Returns:
-        List of adjacent room IDs
+        List of adjacent room IDs with sufficient boundary length
     """
     # Create mask for the current room
     room_mask = (markers == room_id).astype(np.uint8)
@@ -387,10 +391,26 @@ def find_adjacent_rooms(room_id: int, markers: np.ndarray) -> List[int]:
     adjacent_room_ids = np.unique(markers[adjacent_region_mask])
     
     # Filter out boundaries (-1), background (0, 1), and self
-    adjacent_rooms = [int(adj_id) for adj_id in adjacent_room_ids 
-                     if adj_id > 1 and adj_id != room_id]
+    candidate_rooms = [int(adj_id) for adj_id in adjacent_room_ids 
+                      if adj_id > 1 and adj_id != room_id]
     
-    return adjacent_rooms
+    # If no spacing provided, return all candidates (backward compatibility)
+    if spacing is None:
+        return candidate_rooms
+    
+    # Filter by boundary length threshold
+    valid_adjacent_rooms = []
+    
+    for candidate_id in candidate_rooms:
+        boundary_length_pixels = calculate_boundary_length(room_id, candidate_id, markers)
+        boundary_length_m = boundary_length_pixels * spacing
+        
+        if boundary_length_m >= min_boundary_length_m:
+            valid_adjacent_rooms.append(candidate_id)
+        else:
+            print(f"    - Filtering out room {candidate_id}: boundary length {boundary_length_m:.3f}m < {min_boundary_length_m}m threshold")
+    
+    return valid_adjacent_rooms
 
 def perform_room_merge_with_boundary_update(markers: np.ndarray, source_room_id: int, target_room_id: int) -> np.ndarray:
     """
@@ -534,7 +554,7 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
     
     print(f"\n🔄 Step 2: Merging small rooms")
     # Merge small rooms with automatic boundary updates
-    final_markers = merge_small_rooms(initial_markers, min_room_area_pixels)
+    final_markers = merge_small_rooms(initial_markers, min_room_area_pixels, spacing_in_meters_per_pixel)
     
     # Count final rooms
     final_room_ids = np.unique(final_markers)
