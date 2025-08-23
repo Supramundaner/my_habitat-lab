@@ -115,35 +115,65 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     
     return segmented_image, markers
 
-def find_adjacent_rooms(room_id: int, markers: np.ndarray) -> List[int]:
+
+def calculate_boundary_length(room1_id: int, room2_id: int, markers: np.ndarray) -> int:
     """
-    Find all rooms that are adjacent to the given room.
+    Calculate the length of shared boundary between two rooms using watershed boundaries.
+    Optimized vectorized version without loops.
     
     Args:
-        room_id: The ID of the room to find neighbors for
+        room1_id: ID of the first room
+        room2_id: ID of the second room  
         markers: Watershed markers array
         
     Returns:
-        List of adjacent room IDs
+        Length of shared boundary in pixels
     """
-    # Create mask for the current room
-    room_mask = (markers == room_id).astype(np.uint8)
+    # Get boundary pixels (marked as -1 in watershed)
+    boundary_mask = (markers == -1)
+    if not np.any(boundary_mask):
+        return 0
     
-    # Dilate the room mask to find adjacent pixels
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    dilated = cv2.dilate(room_mask, kernel, iterations=1)
+    # Create padded version of markers for neighbor checking
+    padded_markers = np.pad(markers, ((1, 1), (1, 1)), mode='constant', constant_values=0)
     
-    # Find adjacent regions
-    adjacent_mask = dilated - room_mask
-    adjacent_room_ids = np.unique(markers[adjacent_mask == 1])
+    # For each boundary pixel, check if it's between room1 and room2
+    # We'll use 8-connectivity to check neighbors
+    neighbor_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
     
-    # Filter out boundaries (-1) and background (0, 1)
-    adjacent_rooms = []
-    for adj_id in adjacent_room_ids:
-        if adj_id > 1 and adj_id != room_id:  # Valid room IDs start from 2
-            adjacent_rooms.append(int(adj_id))
+    shared_boundary_count = 0
+    boundary_coords = np.where(boundary_mask)
     
-    return adjacent_rooms
+    if len(boundary_coords[0]) == 0:
+        return 0
+    
+    # Vectorized neighbor checking
+    for dy, dx in neighbor_offsets:
+        # Get neighbor positions (accounting for padding offset)
+        neighbor_y = boundary_coords[0] + 1 + dy  # +1 for padding offset
+        neighbor_x = boundary_coords[1] + 1 + dx
+        
+        # Get neighbor values
+        neighbor_values = padded_markers[neighbor_y, neighbor_x]
+        
+        # Check if neighbors are room1_id
+        room1_neighbors = (neighbor_values == room1_id)
+        # Check if neighbors are room2_id  
+        room2_neighbors = (neighbor_values == room2_id)
+        
+        # For boundary pixels that have both room1 and room2 as neighbors
+        # We need to check all 8 neighbors for each boundary pixel
+        if dy == -1 and dx == -1:  # First iteration, initialize arrays
+            has_room1 = room1_neighbors.copy()
+            has_room2 = room2_neighbors.copy()
+        else:
+            has_room1 |= room1_neighbors  # Accumulate room1 neighbors
+            has_room2 |= room2_neighbors  # Accumulate room2 neighbors
+    
+    # Count boundary pixels that have both room1 and room2 as neighbors
+    shared_boundary_count = np.sum(has_room1 & has_room2)
+    print(f"    - Shared boundary between room {room1_id} and room {room2_id}: {shared_boundary_count} pixels")
+    return int(shared_boundary_count)
 
 def calculate_room_centroid(room_id: int, markers: np.ndarray) -> Tuple[float, float]:
     """
@@ -167,15 +197,19 @@ def calculate_room_centroid(room_id: int, markers: np.ndarray) -> Tuple[float, f
     
     return (centroid_x, centroid_y)
 
-def calculate_merge_score(small_room_id: int, candidate_room_id: int, markers: np.ndarray) -> float:
+def calculate_merge_score(small_room_id: int, candidate_room_id: int, markers: np.ndarray, 
+                         adjacent_candidates: List[int], min_room_area_pixels: int) -> float:
     """
-    Calculate merge score based on area (50%) and centroid distance (50%).
+    Calculate merge score based on area (33%), centroid distance (33%), and boundary length (33%).
+    Normalization only considers adjacent mergeable rooms.
     Higher score means better merge candidate.
     
     Args:
         small_room_id: ID of the small room to be merged
         candidate_room_id: ID of the candidate room for merging
         markers: Watershed markers array
+        adjacent_candidates: List of all adjacent rooms that can be merged with
+        min_room_area_pixels: Minimum area threshold for rooms
         
     Returns:
         Merge score (higher is better)
@@ -188,21 +222,44 @@ def calculate_merge_score(small_room_id: int, candidate_room_id: int, markers: n
     small_centroid = calculate_room_centroid(small_room_id, markers)
     candidate_centroid = calculate_room_centroid(candidate_room_id, markers)
     
-    # Calculate distance
+    # Calculate distance between centroids
     distance = np.sqrt((small_centroid[0] - candidate_centroid[0])**2 + 
                       (small_centroid[1] - candidate_centroid[1])**2)
     
-    # Normalize scores (higher is better)
-    # Area score: larger areas get higher scores
-    max_area = np.max([np.sum(markers == rid) for rid in np.unique(markers) if rid > 1])
-    area_score = candidate_area / max_area if max_area > 0 else 0
+    # Calculate boundary length
+    boundary_length = calculate_boundary_length(small_room_id, candidate_room_id, markers)
     
-    # Distance score: closer rooms get higher scores (inverse of distance)
-    max_distance = np.sqrt(markers.shape[0]**2 + markers.shape[1]**2)
-    distance_score = 1.0 - (distance / max_distance) if max_distance > 0 else 0
+    # Normalize scores using only adjacent mergeable rooms
+    mergeable_candidates = [rid for rid in adjacent_candidates 
+                           if np.sum(markers == rid) >= min_room_area_pixels]
     
-    # Weighted combination (50% area, 50% distance)
-    merge_score = 0.0 * area_score + 1.0 * distance_score
+    if len(mergeable_candidates) == 0:
+        return 0  # No valid candidates
+    
+    # Area score: larger areas get higher scores (normalized by max adjacent area)
+    adjacent_areas = [np.sum(markers == rid) for rid in mergeable_candidates]
+    max_adjacent_area = max(adjacent_areas)
+    area_score = candidate_area / max_adjacent_area if max_adjacent_area > 0 else 0
+    
+    # Distance score: closer rooms get higher scores (normalized by max adjacent distance)
+    adjacent_distances = []
+    for rid in mergeable_candidates:
+        adj_centroid = calculate_room_centroid(rid, markers)
+        adj_distance = np.sqrt((small_centroid[0] - adj_centroid[0])**2 + 
+                              (small_centroid[1] - adj_centroid[1])**2)
+        adjacent_distances.append(adj_distance)
+    
+    max_adjacent_distance = max(adjacent_distances) if adjacent_distances else 1
+    distance_score = 1.0 - (distance / max_adjacent_distance) if max_adjacent_distance > 0 else 0
+    
+    # Boundary score: longer boundaries get higher scores (normalized by max adjacent boundary)
+    adjacent_boundaries = [calculate_boundary_length(small_room_id, rid, markers) 
+                          for rid in mergeable_candidates]
+    max_adjacent_boundary = max(adjacent_boundaries) if adjacent_boundaries else 1
+    boundary_score = boundary_length / max_adjacent_boundary if max_adjacent_boundary > 0 else 0
+    
+    # Weighted combination (33% each: area, distance, boundary)
+    merge_score = 0.0 * area_score + 0.0 * distance_score + 1.0 * boundary_score
     
     return merge_score
 
@@ -250,7 +307,7 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
                 continue
                 
             # Find adjacent rooms using improved method that handles boundaries correctly
-            adjacent_rooms = find_adjacent_rooms_robust(small_room_id, merged_markers)
+            adjacent_rooms = find_adjacent_rooms(small_room_id, merged_markers)
             
             if not adjacent_rooms:
                 print(f"  ⚠️ Small room {small_room_id} ({small_area} pixels) has no adjacent rooms, keeping as is")
@@ -260,13 +317,18 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
             best_candidate = None
             best_score = -1
             
-            for adj_room_id in adjacent_rooms:
+            # Filter adjacent rooms to find those that can be merged with (meet size requirement)
+            mergeable_adjacent = [adj_id for adj_id in adjacent_rooms 
+                                if np.sum(merged_markers == adj_id) >= min_room_area_pixels]
+            
+            for adj_room_id in mergeable_adjacent:
                 adj_area = np.sum(merged_markers == adj_room_id)
-                if adj_area >= min_room_area_pixels:  # Only merge with valid-sized rooms
-                    score = calculate_merge_score(small_room_id, adj_room_id, merged_markers)
-                    if score > best_score:
-                        best_score = score
-                        best_candidate = adj_room_id
+                # Pass adjacent candidates and min area for proper normalization
+                score = calculate_merge_score(small_room_id, adj_room_id, merged_markers, 
+                                            adjacent_rooms, min_room_area_pixels)
+                if score > best_score:
+                    best_score = score
+                    best_candidate = adj_room_id
             
             if best_candidate is not None:
                 # Perform the merge
@@ -299,10 +361,10 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
     print(f"✓ Completed room merging: {len(merge_log)} merges performed")
     return merged_markers
 
-def find_adjacent_rooms_robust(room_id: int, markers: np.ndarray) -> List[int]:
+def find_adjacent_rooms(room_id: int, markers: np.ndarray) -> List[int]:
     """
     Find all rooms that are adjacent to the given room, handling boundaries correctly.
-    This method looks through boundaries to find actual neighboring rooms.
+    Optimized vectorized version.
     
     Args:
         room_id: The ID of the room to find neighbors for
@@ -314,33 +376,26 @@ def find_adjacent_rooms_robust(room_id: int, markers: np.ndarray) -> List[int]:
     # Create mask for the current room
     room_mask = (markers == room_id).astype(np.uint8)
     
-    # Find contours of the room
-    contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return []
-    
-    # Get the main contour
-    main_contour = max(contours, key=cv2.contourArea)
-    
-    # Dilate the room mask to reach through boundaries
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))  # Larger kernel to cross boundaries
-    dilated = cv2.dilate(room_mask, kernel, iterations=2)  # More iterations
+    # Use morphological dilation to find adjacent regions
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))  
+    dilated = cv2.dilate(room_mask, kernel, iterations=2)
     
     # Find what rooms the dilated area touches
-    adjacent_region = dilated - room_mask
-    adjacent_room_ids = np.unique(markers[adjacent_region == 1])
+    adjacent_region_mask = (dilated - room_mask).astype(bool)
+    
+    # Get unique room IDs in the adjacent region
+    adjacent_room_ids = np.unique(markers[adjacent_region_mask])
     
     # Filter out boundaries (-1), background (0, 1), and self
-    adjacent_rooms = []
-    for adj_id in adjacent_room_ids:
-        if adj_id > 1 and adj_id != room_id:  # Valid room IDs start from 2
-            adjacent_rooms.append(int(adj_id))
+    adjacent_rooms = [int(adj_id) for adj_id in adjacent_room_ids 
+                     if adj_id > 1 and adj_id != room_id]
     
     return adjacent_rooms
 
 def perform_room_merge_with_boundary_update(markers: np.ndarray, source_room_id: int, target_room_id: int) -> np.ndarray:
     """
     Merge source room into target room and update boundaries appropriately.
+    Optimized vectorized version.
     
     Args:
         markers: Current markers array
@@ -355,27 +410,45 @@ def perform_room_merge_with_boundary_update(markers: np.ndarray, source_room_id:
     # Step 1: Merge the rooms (change all source_room_id pixels to target_room_id)
     updated_markers[markers == source_room_id] = target_room_id
     
-    # Step 2: Update boundaries between the merged rooms
-    # Find all boundary pixels that were between the merged rooms
-    boundary_pixels = np.where(markers == -1)
+    # Step 2: Update boundaries between the merged rooms using vectorized operations
+    boundary_mask = (markers == -1)
     
-    for y, x in zip(boundary_pixels[0], boundary_pixels[1]):
-        # Check neighbors of this boundary pixel
-        neighbors = []
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                if dy == 0 and dx == 0:
-                    continue
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1]:
-                    neighbor_val = updated_markers[ny, nx]
-                    if neighbor_val > 1:  # Valid room
-                        neighbors.append(neighbor_val)
+    if not np.any(boundary_mask):
+        return updated_markers
+    
+    # Create padded markers for efficient neighbor checking
+    padded_markers = np.pad(updated_markers, ((1, 1), (1, 1)), mode='constant', constant_values=0)
+    
+    # Get boundary pixel coordinates
+    boundary_coords = np.where(boundary_mask)
+    
+    if len(boundary_coords[0]) == 0:
+        return updated_markers
+    
+    # For each boundary pixel, check if all neighbors are the same room
+    neighbor_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    
+    # Collect all neighbor values for each boundary pixel
+    all_neighbors = []
+    for dy, dx in neighbor_offsets:
+        # Account for padding offset (+1)
+        neighbor_y = boundary_coords[0] + 1 + dy
+        neighbor_x = boundary_coords[1] + 1 + dx
+        neighbor_vals = padded_markers[neighbor_y, neighbor_x]
+        # Only consider valid rooms (> 1)
+        neighbor_vals = np.where(neighbor_vals > 1, neighbor_vals, 0)
+        all_neighbors.append(neighbor_vals)
+    
+    # Stack neighbors for each boundary pixel (shape: [8, num_boundary_pixels])
+    all_neighbors = np.stack(all_neighbors, axis=0)
+    
+    # For each boundary pixel, find unique non-zero neighbors
+    for i, (y, x) in enumerate(zip(boundary_coords[0], boundary_coords[1])):
+        neighbors = all_neighbors[:, i]
+        unique_neighbors = np.unique(neighbors[neighbors > 0])
         
-        # If all neighboring rooms are the same (i.e., this boundary is now internal), 
-        # convert this boundary pixel to that room
-        unique_neighbors = list(set(neighbors))
-        if len(unique_neighbors) == 1 and len(neighbors) >= 2:  # At least 2 neighbors, all same room
+        # If all neighboring rooms are the same, convert boundary to that room
+        if len(unique_neighbors) == 1 and np.sum(neighbors > 0) >= 2:
             updated_markers[y, x] = unique_neighbors[0]
     
     return updated_markers
@@ -509,6 +582,7 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
 def clean_merged_boundaries(markers: np.ndarray) -> np.ndarray:
     """
     Clean up boundaries after room merging by removing internal boundaries.
+    Optimized vectorized version.
     
     Args:
         markers: Watershed markers after merging
@@ -517,28 +591,43 @@ def clean_merged_boundaries(markers: np.ndarray) -> np.ndarray:
         Cleaned markers with updated boundaries
     """
     cleaned_markers = markers.copy()
+    boundary_mask = (markers == -1)
     
-    # Find all boundary pixels (-1)
-    boundary_pixels = np.where(markers == -1)
+    if not np.any(boundary_mask):
+        return cleaned_markers
     
-    for i, (y, x) in enumerate(zip(boundary_pixels[0], boundary_pixels[1])):
-        # Get neighboring room IDs (excluding boundaries and background)
-        neighbors = []
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                if dy == 0 and dx == 0:
-                    continue
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1]:
-                    val = markers[ny, nx]
-                    if val > 1:  # Valid room ID
-                        neighbors.append(val)
+    # Create padded markers for efficient neighbor checking  
+    padded_markers = np.pad(markers, ((1, 1), (1, 1)), mode='constant', constant_values=0)
+    
+    # Get boundary coordinates
+    boundary_coords = np.where(boundary_mask)
+    
+    # For each boundary pixel, collect all valid room neighbors
+    neighbor_offsets = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    
+    # Vectorized neighbor collection
+    all_neighbors = []
+    for dy, dx in neighbor_offsets:
+        neighbor_y = boundary_coords[0] + 1 + dy  # +1 for padding
+        neighbor_x = boundary_coords[1] + 1 + dx
+        neighbor_vals = padded_markers[neighbor_y, neighbor_x]
+        # Only keep valid room IDs (> 1)
+        neighbor_vals = np.where(neighbor_vals > 1, neighbor_vals, 0)
+        all_neighbors.append(neighbor_vals)
+    
+    # Stack neighbors (shape: [8, num_boundary_pixels])
+    all_neighbors = np.stack(all_neighbors, axis=0)
+    
+    # Process each boundary pixel
+    for i, (y, x) in enumerate(zip(boundary_coords[0], boundary_coords[1])):
+        neighbors = all_neighbors[:, i]
+        valid_neighbors = neighbors[neighbors > 0]
         
-        # If all neighbors belong to the same room, this boundary is no longer needed
-        unique_neighbors = list(set(neighbors))
-        if len(unique_neighbors) == 1 and len(neighbors) > 0:
-            # Convert this boundary pixel to the room it's surrounded by
-            cleaned_markers[y, x] = unique_neighbors[0]
+        if len(valid_neighbors) > 0:
+            unique_neighbors = np.unique(valid_neighbors)
+            # If all neighbors belong to the same room, convert boundary to that room
+            if len(unique_neighbors) == 1:
+                cleaned_markers[y, x] = unique_neighbors[0]
     
     return cleaned_markers
     
