@@ -10,7 +10,7 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
 
 try:
-    from volcenginesdkarkruntime import Ark
+    from byteplussdkarkruntime import Ark
     import base64
 except ImportError:
     print("Warning: volcenginesdkarkruntime not found. Please install them with: pip install volcenginesdkarkruntime")
@@ -21,14 +21,14 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-def call_llm_with_images(client, original_image_path, nodes_image_path, prompt_text):
+def call_llm_with_images(client, original_image_path, nodes_image_path, prompt_text,model):
     """调用LLM API进行推理，使用两张图片"""
     # 编码图片
     original_image_base64 = encode_image(original_image_path)
     nodes_image_base64 = encode_image(nodes_image_path)
     
     response = client.chat.completions.create(
-        model="doubao-seed-1-6-250615",
+        model=model,
         messages=[
             {
                 "role": "user",
@@ -166,6 +166,7 @@ def select_node_with_llm(original_room_image: np.ndarray,
     # LLM configuration
     llm_config = config['llm_config']
     api_key = llm_config['api_key'] # 固定API key
+    base_url=llm_config.get('base_url', None) # --- IGNORE ---
     model = llm_config.get('model', 'doubao-seed-1-6-250615')
     max_tokens = llm_config.get('max_tokens', 1000)
     max_retries = llm_config.get('max_retries', 3)
@@ -192,7 +193,7 @@ def select_node_with_llm(original_room_image: np.ndarray,
     while retry_count < max_retries and selected_node_id is None:
         try:
             # Set up API client
-            client = Ark(api_key=api_key)
+            client = Ark(base_url=base_url, api_key=api_key)
             
             print(f"🚀 Sending node selection request to LLM... (Attempt {retry_count + 1}/{max_retries})")
 
@@ -206,7 +207,7 @@ def select_node_with_llm(original_room_image: np.ndarray,
             cv2.imwrite(temp_nodes_image_path, room_image_with_nodes)
 
             # 调用LLM API
-            response = call_llm_with_images(client, temp_original_image_path, temp_nodes_image_path, enhanced_prompt)
+            response = call_llm_with_images(client, temp_original_image_path, temp_nodes_image_path, enhanced_prompt,model)
             
             # 清理临时文件
             os.remove(temp_original_image_path)

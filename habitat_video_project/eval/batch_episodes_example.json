@@ -1,19 +1,6 @@
 {
     "evaluation_tasks": [
         {
-            "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/ovon/hm3d/val_seen/content/LT9Jq6dN3Ea.json",
-            "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00862-LT9Jq6dN3Ea/LT9Jq6dN3Ea.basis.glb",
-            "episode_ids": [
-                            "2362",
-                            "6075",
-                            "7080",
-                            "8290",
-                            "9005",
-                            "10129",
-                            "11173"
-                        ]
-        },
-        {
             "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/ovon/hm3d/val_seen/content/Dd4bFSTQ8gi.json",
             "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00824-Dd4bFSTQ8gi/Dd4bFSTQ8gi.basis.glb",
             "episode_ids": [
@@ -36,8 +23,11 @@
         "robot_urdf": "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
     },
     "preprocess": {
+        "resolution": 2048,
         "scene_config": {
             "target_floor": null,
+            "target_coordinate": null,
+            "goal_object": null,
             "rotation": null,
             "custom_ortho_scale": null,
             "target_coverage": 0.9,
@@ -46,22 +36,25 @@
         "room_segmentation": {
             "morph_closing_width_meters": 0.01,
             "seed_min_distance_from_wall_meters": null,
-            "min_room_area_pixels": 1000
+            "min_room_area_pixels": 15000
         },
         "graph_generation": {
             "pds_radius": 0.5,
-            "max_attempts": 10000,
+            "max_attempts": 3,
             "node_radius_pixels": 8
         },
         "llm_config": {
-            "api_key": "sk-JU7E0I0SjOQiqIJhv24vIkLyaRuUVFTlenLBiM47u9nv04YQ",
-            "base_url": "https://api.openai-proxy.org/google",
-            "model": "gemini-2.5-pro",
-            "max_tokens": 1000
+            "api_key": "f439a220-87c7-4845-8f66-71b6bf849de6",
+            "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "model": "seed-1-6-250615",
+            "max_tokens": 35000
         },
         "prompts": {
             "choose_room_prompt": "preprocess/prompts/choose_a_room.txt",
             "choose_node_prompt": "preprocess/prompts/choose_a_node.txt"
+        },
+        "output": {
+            "output_dir": "preprocess/output"
         }
     },
     "video_generation": {

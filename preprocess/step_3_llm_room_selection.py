@@ -7,7 +7,7 @@ import json
 from typing import Dict, Any, List
 
 try:
-    from volcenginesdkarkruntime import Ark
+    from byteplussdkarkruntime import Ark
     import base64
 except ImportError:
     print("Warning: volcenginesdkarkruntime not found. Please install them with: pip install volcenginesdkarkruntime")
@@ -18,13 +18,13 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-def call_llm_with_image(client, room_annotation_path, prompt_text):
+def call_llm_with_image(client, room_annotation_path, prompt_text,model):
     """调用LLM API进行推理"""
     # 编码room annotation图片
     room_annotation_base64 = encode_image(room_annotation_path)
     
     response = client.chat.completions.create(
-        model="doubao-seed-1-6-250615",
+        model=model,
         messages=[
             {
                 "role": "user",
@@ -165,7 +165,8 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     # Get LLM configuration
     llm_config = config['llm_config']
     api_key =  llm_config['api_key'] 
-    model = llm_config.get('model', 'doubao-seed-1-6-250615')
+    base_url= llm_config['base_url']
+    model = llm_config.get('model', 'seed-1-6-250615')
     max_tokens = llm_config.get('max_tokens', 1000)
     max_retries = llm_config.get('max_retries', 3)
     
@@ -195,7 +196,7 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
                 raise RuntimeError("volcenginesdkarkruntime package not installed")
             
             # Set up client
-            client = Ark(api_key=api_key)
+            client = Ark(base_url=base_url,api_key=api_key)
             
             print(f" Sending request to LLM... (Attempt {retry_count + 1}/{max_retries})")
             
@@ -205,7 +206,7 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
                 enhanced_prompt += f"\n\nAvailable rooms in this scene: {sorted(available_rooms)}"
             
             # 调用LLM API
-            response = call_llm_with_image(client, room_annotation_path, enhanced_prompt)
+            response = call_llm_with_image(client, room_annotation_path, enhanced_prompt, model)
             
             if not response or not response.choices[0].message.content:
                 raise RuntimeError("Empty response from LLM")

@@ -152,7 +152,7 @@ def calculate_ortho_scale(scene_size, target_coverage=0.9, safety_margin=1.1):
     return max(0.01, calculated_scale)
 
 
-def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
+def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0, resolution=[2048, 2048]):
     """创建正交投影的Habitat-Sim配置"""
     backend_cfg = habitat_sim.SimulatorConfiguration()
     backend_cfg.scene_id = scene_path
@@ -160,7 +160,7 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
     backend_cfg.load_semantic_mesh = False
 
     sensor_cfg = habitat_sim.CameraSensorSpec()
-    sensor_cfg.resolution = [2048, 2048] # 方形传感器，简化计算
+    sensor_cfg.resolution = resolution # 使用传入的分辨率参数
     sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
     sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
     # 【注意】这里的 near 和 far 只是初始值，稍后会为每个楼层动态修改
@@ -177,9 +177,9 @@ def make_ortho_habitat_configuration(scene_path, ortho_scale=1.0):
     return habitat_sim.Configuration(backend_cfg, [agent_cfg])
 
 
-def robust_load_ortho_sim(scene_path, ortho_scale=1.0):
+def robust_load_ortho_sim(scene_path, ortho_scale=1.0, resolution=[2048, 2048]):
     """稳健地加载正交投影模拟器"""
-    sim_cfg = make_ortho_habitat_configuration(scene_path, ortho_scale)
+    sim_cfg = make_ortho_habitat_configuration(scene_path, ortho_scale, resolution)
     hsim = habitat_sim.Simulator(sim_cfg)
     if not hsim.pathfinder.is_loaded:
         navmesh_settings = habitat_sim.NavMeshSettings()
@@ -365,7 +365,7 @@ def calculate_metadata(corner_coords: dict):
 # 主渲染流程 (已修改)
 # ==============================================================================
 
-def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_coverage=0.9, draw_coordinates=False):
+def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_coverage=0.9, draw_coordinates=False, resolution=[2048, 2048]):
     """
     【修改版】为指定的单个楼层创建俯视图。
     可以通过楼层索引（整数）或场景中的一个3D坐标点来指定目标楼层。
@@ -378,6 +378,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
         custom_ortho_scale (float, optional): 手动指定正交投影比例。默认为 None (自动计算)。
         target_coverage (float, optional): 自动计算 ortho_scale 时，场景在图像中的覆盖率。
         draw_coordinates (bool, optional): 是否在最终图像上绘制坐标系。
+        resolution (list, optional): 渲染分辨率。默认为 [2048, 2048]。
     
     Returns:
         tuple: (final_image, unprojected_coords, meta_data)
@@ -386,7 +387,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
                - meta_data: 图像的元数据 (dict)。
     """
     print("--- Step 1: Initial Scene Analysis (One-Time) ---")
-    temp_sim = robust_load_ortho_sim(glb_path, ortho_scale=1.0) 
+    temp_sim = robust_load_ortho_sim(glb_path, ortho_scale=1.0, resolution=resolution) 
     scene_info = calculate_scene_bounds_from_visuals(temp_sim)
     if custom_ortho_scale is not None:
         print(f"Using custom orthographic scale: {custom_ortho_scale:.4f}")
@@ -472,7 +473,7 @@ def render_topdown_view(glb_path, target_floor, custom_ortho_scale=None, target_
         # Disable semantic mesh loading to avoid semantic file requirement
         backend_cfg.load_semantic_mesh = False
         sensor_cfg = habitat_sim.CameraSensorSpec()
-        sensor_cfg.resolution = [2048, 2048]
+        sensor_cfg.resolution = resolution
         sensor_cfg.sensor_type = habitat_sim.SensorType.COLOR
         sensor_cfg.sensor_subtype = habitat_sim.SensorSubType.ORTHOGRAPHIC
         sensor_cfg.ortho_scale = optimal_ortho_scale
