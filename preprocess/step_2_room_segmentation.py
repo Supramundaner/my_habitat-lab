@@ -71,7 +71,7 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
         dist_normalized = np.uint8(dist_normalized)
         
         # 应用高斯模糊后进行 Otsu 阈值化 (参考原函数)
-        blur = cv2.GaussianBlur(dist_normalized, (21, 21), 0)  # 使用对称核
+        blur = cv2.GaussianBlur(dist_normalized, (85, 85), 0)  # 使用对称核
         
         # Otsu 阈值化
         otsu_threshold, sure_fg = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -753,15 +753,15 @@ def create_room_annotation(original_image: np.ndarray, markers: np.ndarray,
         contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             # Draw thick white boundaries
+            #pass
             cv2.drawContours(final_image, contours, -1, (255, 255, 255), thickness=2)
     
     # Draw boundaries from cleaned watershed markers
-    boundary_mask = (markers == -1).astype(np.uint8) * 255
-    
+    #boundary_mask = (markers == -1).astype(np.uint8) * 255
     # Dilate the boundaries to make them thicker
-    kernel_boundary = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    thick_boundary = cv2.dilate(boundary_mask, kernel_boundary, iterations=2)
-    final_image[thick_boundary == 255] = [255, 255, 255]  # White boundaries
+    #kernel_boundary = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    #thick_boundary = cv2.dilate(boundary_mask, kernel_boundary, iterations=2)
+    #final_image[thick_boundary == 255] = [255, 255, 255]  # White boundaries
     
     # Add room numbers - smaller and less obtrusive
     for room_info in valid_rooms_info:
