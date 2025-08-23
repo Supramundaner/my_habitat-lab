@@ -753,7 +753,7 @@ def create_room_annotation(original_image: np.ndarray, markers: np.ndarray,
         contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
             # Draw thick white boundaries
-            cv2.drawContours(final_image, contours, -1, (255, 255, 255), thickness=3)
+            cv2.drawContours(final_image, contours, -1, (255, 255, 255), thickness=2)
     
     # Draw boundaries from cleaned watershed markers
     boundary_mask = (markers == -1).astype(np.uint8) * 255
