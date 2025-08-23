@@ -84,7 +84,7 @@ Edit `input_config.json` to configure the workflow:
 
 ```bash
 cd /home/yaoaa/habitat-lab
-python /home/yaoaa/habitat-lab/preprocess/main_workflow.py /home/yaoaa/habitat-lab/habitat_video_project/eval/output/y9hTuugGdiq/preprocess_config.json
+python preprocess/main_workflow.py preprocess/input_config.json
 ```
 
 ### Running Individual Steps

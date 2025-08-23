@@ -115,6 +115,182 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     
     return segmented_image, markers
 
+def find_adjacent_rooms(room_id: int, markers: np.ndarray) -> List[int]:
+    """
+    Find all rooms that are adjacent to the given room.
+    
+    Args:
+        room_id: The ID of the room to find neighbors for
+        markers: Watershed markers array
+        
+    Returns:
+        List of adjacent room IDs
+    """
+    # Create mask for the current room
+    room_mask = (markers == room_id).astype(np.uint8)
+    
+    # Dilate the room mask to find adjacent pixels
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    dilated = cv2.dilate(room_mask, kernel, iterations=1)
+    
+    # Find adjacent regions
+    adjacent_mask = dilated - room_mask
+    adjacent_room_ids = np.unique(markers[adjacent_mask == 1])
+    
+    # Filter out boundaries (-1) and background (0, 1)
+    adjacent_rooms = []
+    for adj_id in adjacent_room_ids:
+        if adj_id > 1 and adj_id != room_id:  # Valid room IDs start from 2
+            adjacent_rooms.append(int(adj_id))
+    
+    return adjacent_rooms
+
+def calculate_room_centroid(room_id: int, markers: np.ndarray) -> Tuple[float, float]:
+    """
+    Calculate the centroid of a room.
+    
+    Args:
+        room_id: The ID of the room
+        markers: Watershed markers array
+        
+    Returns:
+        Tuple of (centroid_x, centroid_y)
+    """
+    room_mask = (markers == room_id)
+    y_coords, x_coords = np.where(room_mask)
+    
+    if len(x_coords) == 0:
+        return (0, 0)
+    
+    centroid_x = np.mean(x_coords)
+    centroid_y = np.mean(y_coords)
+    
+    return (centroid_x, centroid_y)
+
+def calculate_merge_score(small_room_id: int, candidate_room_id: int, markers: np.ndarray) -> float:
+    """
+    Calculate merge score based on area (50%) and centroid distance (50%).
+    Higher score means better merge candidate.
+    
+    Args:
+        small_room_id: ID of the small room to be merged
+        candidate_room_id: ID of the candidate room for merging
+        markers: Watershed markers array
+        
+    Returns:
+        Merge score (higher is better)
+    """
+    # Calculate areas
+    small_area = np.sum(markers == small_room_id)
+    candidate_area = np.sum(markers == candidate_room_id)
+    
+    # Calculate centroids
+    small_centroid = calculate_room_centroid(small_room_id, markers)
+    candidate_centroid = calculate_room_centroid(candidate_room_id, markers)
+    
+    # Calculate distance
+    distance = np.sqrt((small_centroid[0] - candidate_centroid[0])**2 + 
+                      (small_centroid[1] - candidate_centroid[1])**2)
+    
+    # Normalize scores (higher is better)
+    # Area score: larger areas get higher scores
+    max_area = np.max([np.sum(markers == rid) for rid in np.unique(markers) if rid > 1])
+    area_score = candidate_area / max_area if max_area > 0 else 0
+    
+    # Distance score: closer rooms get higher scores (inverse of distance)
+    max_distance = np.sqrt(markers.shape[0]**2 + markers.shape[1]**2)
+    distance_score = 1.0 - (distance / max_distance) if max_distance > 0 else 0
+    
+    # Weighted combination (50% area, 50% distance)
+    merge_score = 0.0 * area_score + 1.0 * distance_score
+    
+    return merge_score
+
+def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndarray:
+    """
+    Iteratively merge small rooms into adjacent larger rooms.
+    
+    Args:
+        markers: Initial watershed markers
+        min_room_area_pixels: Minimum area threshold for rooms
+        
+    Returns:
+        Updated markers with merged rooms
+    """
+    merged_markers = markers.copy()
+    merge_log = []
+    
+    while True:
+        # Get all current room IDs and their areas
+        room_ids = np.unique(merged_markers)
+        room_ids = room_ids[room_ids > 1]  # Filter out boundaries and background
+        
+        if len(room_ids) == 0:
+            break
+            
+        # Find small rooms
+        small_rooms = []
+        for room_id in room_ids:
+            area = np.sum(merged_markers == room_id)
+            if area < min_room_area_pixels:
+                small_rooms.append((room_id, area))
+        
+        if len(small_rooms) == 0:
+            break  # No more small rooms to merge
+        
+        # Sort small rooms by area (smallest first)
+        small_rooms.sort(key=lambda x: x[1])
+        
+        merged_in_this_iteration = False
+        
+        for small_room_id, small_area in small_rooms:
+            # Check if this room still exists (might have been merged already)
+            if np.sum(merged_markers == small_room_id) == 0:
+                continue
+                
+            # Find adjacent rooms
+            adjacent_rooms = find_adjacent_rooms(small_room_id, merged_markers)
+            
+            if not adjacent_rooms:
+                print(f"  ⚠️ Small room {small_room_id} ({small_area} pixels) has no adjacent rooms, keeping as is")
+                continue
+            
+            # Calculate merge scores for all adjacent rooms
+            best_candidate = None
+            best_score = -1
+            
+            for adj_room_id in adjacent_rooms:
+                adj_area = np.sum(merged_markers == adj_room_id)
+                if adj_area >= min_room_area_pixels:  # Only merge with valid-sized rooms
+                    score = calculate_merge_score(small_room_id, adj_room_id, merged_markers)
+                    if score > best_score:
+                        best_score = score
+                        best_candidate = adj_room_id
+            
+            if best_candidate is not None:
+                # Perform the merge
+                candidate_area = np.sum(merged_markers == best_candidate)
+                merged_markers[merged_markers == small_room_id] = best_candidate
+                
+                merge_log.append({
+                    'small_room': small_room_id,
+                    'small_area': small_area,
+                    'target_room': best_candidate,
+                    'target_area': candidate_area,
+                    'merge_score': best_score
+                })
+                
+                print(f"  ✓ Merged room {small_room_id} ({small_area} pixels) into room {best_candidate} ({candidate_area} pixels), score: {best_score:.3f}")
+                merged_in_this_iteration = True
+            else:
+                print(f"  ⚠️ Small room {small_room_id} ({small_area} pixels) has no suitable merge candidates")
+        
+        if not merged_in_this_iteration:
+            break  # No merges performed in this iteration
+    
+    print(f"✓ Completed room merging: {len(merge_log)} merges performed")
+    return merged_markers
+
 def find_robust_center(mask: np.ndarray, contour: np.ndarray) -> Tuple[int, int]:
     """Find a robust center point for a room."""
     x, y, w, h = cv2.boundingRect(contour)
@@ -134,7 +310,13 @@ def find_robust_center(mask: np.ndarray, contour: np.ndarray) -> Tuple[int, int]
 def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_path: str, 
                             config: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
     """
-    Perform room segmentation and create annotated image with bounding boxes.
+    Perform room segmentation with small room merging and create annotated image.
+    
+    Flow:
+    1. Apply EDF + Watershed algorithm to get initial room segmentation
+    2. Merge small rooms iteratively into adjacent rooms
+    3. Generate room_segmentation.png with merged results
+    4. Generate room_annotation.png with boundaries and numbering
     
     Args:
         topdown_path: Path to topdown view image
@@ -166,55 +348,236 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
     # Get room segmentation parameters
     room_config = config['room_segmentation']
     morph_closing_width_meters = room_config.get('morph_closing_width_meters', 0.01)
-    # 不再从配置读取 seed_min_distance_from_wall_meters，使用动态阈值
     seed_min_distance_from_wall_meters = room_config.get('seed_min_distance_from_wall_meters', None)
     min_room_area_pixels = room_config.get('min_room_area_pixels', 1000)
     
     print(f"🔧 Room segmentation parameters:")
     print(f"  - Morphological closing: {morph_closing_width_meters}m")
-    print(f"  - Seed distance from walls: 动态阈值 (Otsu 自动)")
+    print(f"  - Seed distance from walls: {'Dynamic (Otsu)' if seed_min_distance_from_wall_meters is None else f'{seed_min_distance_from_wall_meters}m'}")
     print(f"  - Minimum room area: {min_room_area_pixels} pixels")
     
-    # Perform room segmentation
-    segmented_image, markers = segment_rooms_physical(
+    print(f"\n🔄 Step 1: Initial room segmentation (EDF + Watershed)")
+    # Perform initial room segmentation
+    segmented_image, initial_markers = segment_rooms_physical(
         wall_mask_path,
         spacing_in_meters_per_pixel,
         morph_closing_width_meters,
         seed_min_distance_from_wall_meters  
     )
     
-    # Filter and annotate valid rooms
-    annotated_image = original_image.copy()
-    overlay = original_image.copy()
+    # Count initial rooms
+    initial_room_ids = np.unique(initial_markers)
+    initial_room_ids = initial_room_ids[initial_room_ids > 1]
+    print(f"  ✓ Initial segmentation: {len(initial_room_ids)} rooms detected")
     
-    # High contrast colors for room annotation
-    colors = [
-        (60, 20, 220), (255, 128, 0), (40, 180, 0), (0, 210, 255),
-        (230, 0, 180), (255, 128, 128), (0, 128, 255), (128, 0, 128),
-        (255, 255, 0), (255, 0, 255), (0, 255, 255), (128, 255, 0)
-    ]
+    print(f"\n🔄 Step 2: Merging small rooms")
+    # Merge small rooms
+    final_markers = merge_small_rooms(initial_markers, min_room_area_pixels)
     
+    # Clean up boundaries after merging
+    print(f"  🧹 Cleaning merged boundaries...")
+    final_markers = clean_merged_boundaries(final_markers)
+    
+    # Count final rooms
+    final_room_ids = np.unique(final_markers)
+    final_room_ids = final_room_ids[final_room_ids > 1]
+    print(f"  ✓ After merging and cleanup: {len(final_room_ids)} rooms remaining")
+    
+    print(f"\n🔄 Step 3: Generating room_segmentation.png")
+    # Create final segmentation image with merged results
+    final_segmented_image = create_segmentation_visualization(final_markers, original_image)
+    
+    # Save segmentation result
+    segmentation_path = os.path.join(output_dir, "room_segmentation.png")
+    cv2.imwrite(segmentation_path, final_segmented_image)
+    print(f"  ✓ Room segmentation saved to: {segmentation_path}")
+    
+    print(f"\n🔄 Step 4: Generating room_annotation.png with boundaries and numbering")
+    # Create room annotation with boundaries and numbers
+    annotated_image, room_bounding_boxes = create_room_annotation(
+        original_image, final_markers, min_room_area_pixels
+    )
+    
+    # Save room annotation image
+    annotation_path = os.path.join(output_dir, "room_annotation.png")
+    cv2.imwrite(annotation_path, annotated_image)
+    print(f"  ✓ Room annotation saved to: {annotation_path}")
+    
+    return {
+        "generated_files": {
+            "room_annotation": annotation_path,
+            "room_segmentation": segmentation_path
+        },
+        "results": {
+            "num_initial_rooms": len(initial_room_ids),
+            "num_final_rooms": len(final_room_ids),
+            "room_bounding_boxes": room_bounding_boxes,
+            "segmentation_parameters": {
+                "spacing_in_meters_per_pixel": spacing_in_meters_per_pixel,
+                "morph_closing_width_meters": morph_closing_width_meters,
+                "seed_distance_threshold": "dynamic_otsu" if seed_min_distance_from_wall_meters is None else f"{seed_min_distance_from_wall_meters}m",
+                "min_room_area_pixels": min_room_area_pixels
+            }
+        }
+    }
+
+def clean_merged_boundaries(markers: np.ndarray) -> np.ndarray:
+    """
+    Clean up boundaries after room merging by removing internal boundaries.
+    
+    Args:
+        markers: Watershed markers after merging
+        
+    Returns:
+        Cleaned markers with updated boundaries
+    """
+    cleaned_markers = markers.copy()
+    
+    # Find all boundary pixels (-1)
+    boundary_pixels = np.where(markers == -1)
+    
+    for i, (y, x) in enumerate(zip(boundary_pixels[0], boundary_pixels[1])):
+        # Get neighboring room IDs (excluding boundaries and background)
+        neighbors = []
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1]:
+                    val = markers[ny, nx]
+                    if val > 1:  # Valid room ID
+                        neighbors.append(val)
+        
+        # If all neighbors belong to the same room, this boundary is no longer needed
+        unique_neighbors = list(set(neighbors))
+        if len(unique_neighbors) == 1 and len(neighbors) > 0:
+            # Convert this boundary pixel to the room it's surrounded by
+            cleaned_markers[y, x] = unique_neighbors[0]
+    
+    return cleaned_markers
+    
+def create_segmentation_visualization(markers: np.ndarray, original_image: np.ndarray) -> np.ndarray:
+    """
+    Create colored segmentation visualization from markers.
+    
+    Args:
+        markers: Watershed markers after merging
+        original_image: Original topdown image for reference
+        
+    Returns:
+        Colored segmentation image
+    """
+    # Get unique room IDs
+    room_ids = np.unique(markers)
+    room_ids = room_ids[room_ids > 1]  # Filter out boundaries and background
+    
+    # Generate random colors for each room
+    colors = {}
+    for room_id in room_ids:
+        colors[room_id] = np.random.randint(50, 256, 3).tolist()
+    
+    # Create segmented image
+    segmented_image = np.zeros((markers.shape[0], markers.shape[1], 3), dtype=np.uint8)
+    
+    for room_id in room_ids:
+        segmented_image[markers == room_id] = colors[room_id]
+    
+    # Mark remaining boundaries in red (only valid boundaries should remain after cleaning)
+    segmented_image[markers == -1] = [0, 0, 255]
+    
+    # Restore original walls (black)
+    wall_mask = (markers == 0) | (markers == 1)
+    segmented_image[wall_mask] = [0, 0, 0]
+    
+    return segmented_image
+    """
+    Create colored segmentation visualization from markers.
+    
+    Args:
+        markers: Watershed markers after merging
+        original_image: Original topdown image for reference
+        
+    Returns:
+        Colored segmentation image
+    """
+    # Get unique room IDs
+    room_ids = np.unique(markers)
+    room_ids = room_ids[room_ids > 1]  # Filter out boundaries and background
+    
+    # Generate random colors for each room
+    colors = {}
+    for room_id in room_ids:
+        colors[room_id] = np.random.randint(50, 256, 3).tolist()
+    
+    # Create segmented image
+    segmented_image = np.zeros((markers.shape[0], markers.shape[1], 3), dtype=np.uint8)
+    
+    for room_id in room_ids:
+        segmented_image[markers == room_id] = colors[room_id]
+    
+    # Only mark boundaries between DIFFERENT rooms as red
+    # Remove internal boundaries within merged rooms
+    boundary_mask = np.zeros(markers.shape, dtype=np.uint8)
+    
+    # Check each boundary pixel to see if it's between different rooms
+    boundary_pixels = (markers == -1)
+    for y, x in np.argwhere(boundary_pixels):
+        # Check 8-connected neighbors
+        neighbors = []
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1]:
+                    neighbor_val = markers[ny, nx]
+                    if neighbor_val > 1:  # Valid room
+                        neighbors.append(neighbor_val)
+        
+        # If this boundary pixel separates different rooms, mark it as boundary
+        if len(set(neighbors)) > 1:  # More than one unique room adjacent
+            boundary_mask[y, x] = 255
+    
+    # Mark only the valid boundaries in red
+    segmented_image[boundary_mask == 255] = [0, 0, 255]
+    
+    # Restore original walls (black)
+    wall_mask = (markers == 0) | (markers == 1)
+    segmented_image[wall_mask] = [0, 0, 0]
+    
+    return segmented_image
+
+def create_room_annotation(original_image: np.ndarray, markers: np.ndarray, 
+                         min_room_area_pixels: int) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """
+    Create room annotation with boundaries and numbering.
+    
+    Args:
+        original_image: Original topdown image
+        markers: Final watershed markers
+        min_room_area_pixels: Minimum room area threshold
+        
+    Returns:
+        Tuple of (annotated_image, room_bounding_boxes)
+    """
+    # Start with original image
+    final_image = original_image.copy()
+    
+    # Get valid room information
     valid_rooms_info = []
     room_bounding_boxes = {}
     
-    # Get unique room IDs (skip special markers)
     room_ids = np.unique(markers)
+    room_ids = room_ids[room_ids > 1]  # Filter out boundaries and background
     room_counter = 0
     
-    print(f"🔍 Processing {len(room_ids)} potential rooms...")
-    
     for room_id in room_ids:
-        # Skip non-room markers
-        if room_id == -1 or room_id == 0 or room_id == 1:
-            continue
-        
         # Create mask for this room
-        room_mask = np.zeros(markers.shape, dtype=np.uint8)
-        room_mask[markers == room_id] = 255
-        
+        room_mask = (markers == room_id).astype(np.uint8) * 255
         area = cv2.countNonZero(room_mask)
         
-        if area > min_room_area_pixels:
+        if area >= min_room_area_pixels:
             contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 main_contour = max(contours, key=cv2.contourArea)
@@ -243,76 +606,55 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
                 })
                 
                 room_bounding_boxes[str(room_number)] = bounding_box
-                
-                print(f"  ✓ Room {room_number}: {area:,} pixels, bbox=({x},{y},{x+w},{y+h})")
     
-    print(f"✓ Found {len(valid_rooms_info)} valid rooms")
-    
-    # Create room annotation
-    for i, room_info in enumerate(valid_rooms_info):
-        color = colors[i % len(colors)]
-        room_number = room_info['room_number']
+    # Draw thick boundaries between rooms - use cleaned markers
+    for room_info in valid_rooms_info:
+        room_mask = room_info['mask']
         
-        # Color the room area
-        overlay[room_info['mask'] == 255] = color
+        # Find contours for room boundaries
+        contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            # Draw thick white boundaries
+            cv2.drawContours(final_image, contours, -1, (255, 255, 255), thickness=3)
     
-    # Blend overlay with original image
-    alpha = 0.4
-    final_image = cv2.addWeighted(overlay, alpha, annotated_image, 1.0 - alpha, 0)
+    # Draw boundaries from cleaned watershed markers
+    boundary_mask = (markers == -1).astype(np.uint8) * 255
     
-    # Add room numbers
+    # Dilate the boundaries to make them thicker
+    kernel_boundary = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    thick_boundary = cv2.dilate(boundary_mask, kernel_boundary, iterations=2)
+    final_image[thick_boundary == 255] = [255, 255, 255]  # White boundaries
+    
+    # Add room numbers - smaller and less obtrusive
     for room_info in valid_rooms_info:
         room_number = room_info['room_number']
         center_point = find_robust_center(room_info['mask'], room_info['contour'])
         cX, cY = center_point
         
-        # Draw text background
+        # Draw compact text styling
         text = str(room_number)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1.0
-        font_thickness = 2
+        font_scale = 0.8  # Smaller font
+        font_thickness = 2  # Thinner text
         (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, font_thickness)
         
-        # Background rectangle
-        padding = 5
+        # Compact background rectangle
+        padding = 4  # Reduced padding
         bg_x1 = cX - text_width // 2 - padding
         bg_y1 = cY - text_height // 2 - padding - baseline
         bg_x2 = cX + text_width // 2 + padding
         bg_y2 = cY + text_height // 2 + padding
         
-        cv2.rectangle(final_image, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
+        # Draw compact black background with thin white border
+        cv2.rectangle(final_image, (bg_x1-1, bg_y1-1), (bg_x2+1, bg_y2+1), (255, 255, 255), -1)  # Thin white border
+        cv2.rectangle(final_image, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)  # Black background
         
-        # Text
+        # White text
         text_x = cX - text_width // 2
         text_y = cY + text_height // 2
         cv2.putText(final_image, text, (text_x, text_y), font, font_scale, (255, 255, 255), font_thickness)
     
-    # Save room annotation image
-    room_annotation_path = os.path.join(output_dir, "room_annotation.png")
-    cv2.imwrite(room_annotation_path, final_image)
-    print(f"✓ Room annotation saved to: {room_annotation_path}")
-    
-    # Save segmentation result
-    segmentation_path = os.path.join(output_dir, "room_segmentation.png")
-    cv2.imwrite(segmentation_path, segmented_image)
-    print(f"✓ Room segmentation saved to: {segmentation_path}")
-    
-    return {
-        "generated_files": {
-            "room_annotation": room_annotation_path,
-            "room_segmentation": segmentation_path
-        },
-        "results": {
-            "num_rooms": len(valid_rooms_info),
-            "room_bounding_boxes": room_bounding_boxes,
-            "segmentation_parameters": {
-                "spacing_in_meters_per_pixel": spacing_in_meters_per_pixel,
-                "morph_closing_width_meters": morph_closing_width_meters,
-                "seed_distance_threshold": "dynamic_otsu",  # 表示使用动态阈值
-                "min_room_area_pixels": min_room_area_pixels
-            }
-        }
-    }
+    return final_image, room_bounding_boxes
 
 if __name__ == "__main__":
     import sys
