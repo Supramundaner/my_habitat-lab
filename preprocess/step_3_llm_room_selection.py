@@ -1,5 +1,5 @@
 """
-Step 3: LLM room selection using Google Gemini API with proxy.
+Step 3: LLM room selection using Doubao API.
 """
 
 import os
@@ -7,12 +7,72 @@ import json
 from typing import Dict, Any, List
 
 try:
-    from google import genai
-    from google.genai import types
-    import PIL.Image
+    from volcenginesdkarkruntime import Ark
+    import base64
 except ImportError:
-    print("Warning: google packages not found. Please install them with: pip install google-generativeai")
-    genai = None
+    print("Warning: volcenginesdkarkruntime not found. Please install them with: pip install volcenginesdkarkruntime")
+    Ark = None
+
+def encode_image(image_path):
+    """编码图片为base64"""
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def call_llm_with_image(client, room_annotation_path, prompt_text):
+    """调用LLM API进行推理"""
+    # 编码room annotation图片
+    room_annotation_base64 = encode_image(room_annotation_path)
+    
+    response = client.chat.completions.create(
+        model="doubao-seed-1-6-250615",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url", 
+                        "image_url": {
+                            "url": f"data:image/png;base64,{room_annotation_base64}"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt_text,
+                    },
+                ],
+            },
+        ],
+    )
+    return response
+
+def parse_llm_response(response):
+    """解析LLM响应，分离reasoning_content和content"""
+    full_response = response.choices[0].message.content
+    
+    # 尝试提取最终答案（假设是最后一个数字或在特定格式中）
+    lines = full_response.split('\n')
+    content = ""
+    reasoning_content = full_response
+    
+    # 查找最后一行中的数字作为最终答案
+    for line in reversed(lines):
+        line = line.strip()
+        if line.isdigit():
+            content = line
+            break
+        # 也尝试匹配常见的答案格式
+        if "答案" in line or "Answer" in line or "Room" in line or "房间" in line:
+            # 提取数字
+            import re
+            numbers = re.findall(r'\d+', line)
+            if numbers:
+                content = numbers[-1]
+                break
+    
+    return {
+        "reasoning_content": reasoning_content,
+        "content": content
+    }
 
 def load_prompt_template(prompt_path: str) -> str:
     """Load prompt template from file."""
@@ -104,11 +164,10 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     
     # Get LLM configuration
     llm_config = config['llm_config']
-    api_key = llm_config['api_key']
-    base_url = llm_config.get('base_url', 'https://api.openai-proxy.org/google/v1beta/models')
-    model = llm_config.get('model', 'gemini-2.0-flash')
+    api_key =  llm_config['api_key'] 
+    model = llm_config.get('model', 'doubao-seed-1-6-250615')
     max_tokens = llm_config.get('max_tokens', 1000)
-    max_retries = llm_config.get('max_retries', 3)  # 添加重试次数配置
+    max_retries = llm_config.get('max_retries', 3)
     
     # Load prompt template
     prompt_path = config['prompts']['choose_room_prompt']
@@ -119,7 +178,6 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     prompt_template = prompt_template.format(goal_object=goal_object)
     
     print(f"🤖 LLM Configuration:")
-    print(f"  - Base URL: {base_url}")
     print(f"  - Model: {model}")
     print(f"  - Max tokens: {max_tokens}")
     print(f"  - Max retries: {max_retries}")
@@ -133,79 +191,50 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     
     while retry_count < max_retries and selected_room is None:
         try:
-            if genai is None:
-                raise RuntimeError("google packages not installed")
+            if Ark is None:
+                raise RuntimeError("volcenginesdkarkruntime package not installed")
             
-            # Set up client with proxy using environment variable and HttpOptions
-            os.environ['API_KEY'] = api_key
-            http_options = types.HttpOptions(base_url=base_url)
-            client = genai.Client(api_key=api_key, http_options=http_options)
+            # Set up client
+            client = Ark(api_key=api_key)
             
-            # Load images as binary data
-            print(f"🔄 Loading images... (Attempt {retry_count + 1}/{max_retries})")
-            with open(topdown_path, 'rb') as f:
-                topdown_bytes = f.read()
-            with open(room_annotation_path, 'rb') as f:
-                room_annotation_bytes = f.read()
-            
-            print(f"🚀 Sending request to LLM... (Attempt {retry_count + 1}/{max_retries})")
+            print(f" Sending request to LLM... (Attempt {retry_count + 1}/{max_retries})")
             
             # 构建prompt，包含可用房间信息
             enhanced_prompt = prompt_template
             if available_rooms:
                 enhanced_prompt += f"\n\nAvailable rooms in this scene: {sorted(available_rooms)}"
             
+            # 调用LLM API
+            response = call_llm_with_image(client, room_annotation_path, enhanced_prompt)
             
-            # Create image parts using types.Part
-            topdown_part = types.Part.from_bytes(
-                data=topdown_bytes,
-                mime_type='image/png'
-            )
-            room_annotation_part = types.Part.from_bytes(
-                data=room_annotation_bytes,
-                mime_type='image/png'
-            )
-            
-            # Prepare prompt parts
-            prompt_parts = [
-                enhanced_prompt,
-                "\n\nImage 1 - Topdown view:",
-                topdown_part,
-                "\n\nImage 2 - Room annotation with numbers:",
-                room_annotation_part
-            ]
-            
-            # Generate content
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt_parts
-            )
-            
-            if not response or not response.text:
+            if not response or not response.choices[0].message.content:
                 raise RuntimeError("Empty response from LLM")
             
-            raw_response = response.text.strip()
+            # 解析响应
+            parsed_result = parse_llm_response(response)
+            raw_response = parsed_result["reasoning_content"]
+            content = parsed_result["content"]
+            
             print(f"📝 Raw LLM response (Attempt {retry_count + 1}): '{raw_response}'")
+            print(f"📝 Extracted content: '{content}'")
             
             # 记录响应
             all_responses.append({
                 "attempt": retry_count + 1,
                 "raw_response": raw_response,
+                "extracted_content": content,
                 "timestamp": str(__import__('datetime').datetime.now())
             })
             
             # Parse the room number from response
             try:
-                # Try to extract a number from the response
-                import re
-                numbers = re.findall(r'\d+', raw_response)
-                if numbers:
-                    candidate_room = int(numbers[0])
+                if content and content.isdigit():
+                    candidate_room = int(content)
                     
                     # 验证房间是否在可用范围内
                     if available_rooms and candidate_room not in available_rooms:
                         print(f"⚠️ LLM selected room {candidate_room} not in available rooms {available_rooms}")
-                        print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                        print(f"� Retrying... ({retry_count + 1}/{max_retries})")
                         retry_count += 1
                         continue
                     else:
@@ -213,10 +242,27 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
                         print(f"✓ Valid room number selected: {selected_room}")
                         break
                 else:
-                    print("⚠️ No number found in LLM response")
-                    print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
-                    retry_count += 1
-                    continue
+                    # Fallback: try to extract from full response
+                    import re
+                    numbers = re.findall(r'\d+', raw_response)
+                    if numbers:
+                        candidate_room = int(numbers[0])
+                        
+                        # 验证房间是否在可用范围内
+                        if available_rooms and candidate_room not in available_rooms:
+                            print(f"⚠️ LLM selected room {candidate_room} not in available rooms {available_rooms}")
+                            print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                            retry_count += 1
+                            continue
+                        else:
+                            selected_room = candidate_room
+                            print(f"✓ Valid room number selected: {selected_room}")
+                            break
+                    else:
+                        print("⚠️ No number found in LLM response")
+                        print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                        retry_count += 1
+                        continue
                     
             except Exception as e:
                 print(f"⚠️ Error parsing room number: {e}")
@@ -249,7 +295,6 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     # Save LLM interaction log
     llm_log = {
         "timestamp": str(__import__('datetime').datetime.now()),
-        "base_url": base_url,
         "model": model,
         "max_retries": max_retries,
         "attempts_made": retry_count,

@@ -10,12 +10,79 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
 
 try:
-    from google import genai
-    from google.genai import types
-    import PIL.Image
+    from volcenginesdkarkruntime import Ark
+    import base64
 except ImportError:
-    print("Warning: google packages not found. Please install them with: pip install google-generativeai")
-    genai = None
+    print("Warning: volcenginesdkarkruntime not found. Please install them with: pip install volcenginesdkarkruntime")
+    Ark = None
+
+def encode_image(image_path):
+    """编码图片为base64"""
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def call_llm_with_images(client, original_image_path, nodes_image_path, prompt_text):
+    """调用LLM API进行推理，使用两张图片"""
+    # 编码图片
+    original_image_base64 = encode_image(original_image_path)
+    nodes_image_base64 = encode_image(nodes_image_path)
+    
+    response = client.chat.completions.create(
+        model="doubao-seed-1-6-250615",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt_text,
+                    },
+                    {
+                        "type": "image_url", 
+                        "image_url": {
+                            "url": f"data:image/png;base64,{original_image_base64}"
+                        },
+                    },
+                    {
+                        "type": "image_url", 
+                        "image_url": {
+                            "url": f"data:image/png;base64,{nodes_image_base64}"
+                        },
+                    },
+                ],
+            },
+        ],
+    )
+    return response
+
+def parse_llm_response(response):
+    """解析LLM响应，分离reasoning_content和content"""
+    full_response = response.choices[0].message.content
+    
+    # 尝试提取最终答案（假设是最后一个数字或在特定格式中）
+    lines = full_response.split('\n')
+    content = ""
+    reasoning_content = full_response
+    
+    # 查找最后一行中的数字作为最终答案
+    for line in reversed(lines):
+        line = line.strip()
+        if line.isdigit():
+            content = line
+            break
+        # 也尝试匹配常见的答案格式
+        if "答案" in line or "Answer" in line or "node" in line or "point" in line:
+            # 提取数字
+            import re
+            numbers = re.findall(r'\d+', line)
+            if numbers:
+                content = numbers[-1]
+                break
+    
+    return {
+        "reasoning_content": reasoning_content,
+        "content": content
+    }
 
 def crop_image_to_bbox(image: np.ndarray, bbox: Dict[str, int]) -> np.ndarray:
     """Crop image to bounding box."""
@@ -90,16 +157,16 @@ def select_node_with_llm(original_room_image: np.ndarray,
                          output_dir: str) -> Dict[str, Any]:
     """Use LLM to select optimal navigation node using two images with retry logic."""
     
-    if genai is None:
-        raise RuntimeError("google-generativeai package not installed")
+    if Ark is None:
+        raise RuntimeError("volcenginesdkarkruntime package not installed")
     
     # Get available node IDs for validation
     available_node_ids = [node['node_id'] for node in nodes_in_room]
     
     # LLM configuration
     llm_config = config['llm_config']
-    api_key = llm_config['api_key']
-    model = llm_config.get('model', 'gemini-1.5-flash')
+    api_key = llm_config['api_key'] # 固定API key
+    model = llm_config.get('model', 'doubao-seed-1-6-250615')
     max_tokens = llm_config.get('max_tokens', 1000)
     max_retries = llm_config.get('max_retries', 3)
     
@@ -125,73 +192,49 @@ def select_node_with_llm(original_room_image: np.ndarray,
     while retry_count < max_retries and selected_node_id is None:
         try:
             # Set up API client
-            base_url = llm_config.get('base_url', 'https://api.openai-proxy.org/google')
-            os.environ['API_KEY'] = api_key
-            http_options = types.HttpOptions(base_url=base_url)
-            client = genai.Client(api_key=api_key, http_options=http_options)
+            client = Ark(api_key=api_key)
             
             print(f"🚀 Sending node selection request to LLM... (Attempt {retry_count + 1}/{max_retries})")
 
             enhanced_prompt = f"{prompt_template}"
             
-            # 保存并读取图片
+            # 保存临时图片文件
             temp_original_image_path = os.path.join(output_dir, "temp_original_room_image.png")
             cv2.imwrite(temp_original_image_path, original_room_image)
-            with open(temp_original_image_path, 'rb') as f:
-                original_image_bytes = f.read()
             
             temp_nodes_image_path = os.path.join(output_dir, "temp_room_with_nodes.png")
             cv2.imwrite(temp_nodes_image_path, room_image_with_nodes)
-            with open(temp_nodes_image_path, 'rb') as f:
-                nodes_image_bytes = f.read()
 
-            # 创建图像Part
-            original_image_part = types.Part.from_bytes(
-                data=original_image_bytes,
-                mime_type='image/png'
-            )
-            
-            nodes_image_part = types.Part.from_bytes(
-                data=nodes_image_bytes,
-                mime_type='image/png'
-            )
-            
-            # 准备prompt parts
-            prompt_parts = [
-                enhanced_prompt,
-                original_image_part,
-                nodes_image_part
-            ]
-            
-            # Generate content
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt_parts
-            )
+            # 调用LLM API
+            response = call_llm_with_images(client, temp_original_image_path, temp_nodes_image_path, enhanced_prompt)
             
             # 清理临时文件
             os.remove(temp_original_image_path)
             os.remove(temp_nodes_image_path)
             
-            if not response or not response.text:
+            if not response or not response.choices[0].message.content:
                 raise RuntimeError("Empty response from LLM")
             
-            raw_response = response.text.strip()
+            # 解析响应
+            parsed_result = parse_llm_response(response)
+            raw_response = parsed_result["reasoning_content"]
+            content = parsed_result["content"]
+            
             print(f"📝 Raw LLM response (Attempt {retry_count + 1}): '{raw_response}'")
+            print(f"📝 Extracted content: '{content}'")
             
             # 记录响应
             all_responses.append({
                 "attempt": retry_count + 1,
                 "raw_response": raw_response,
+                "extracted_content": content,
                 "timestamp": str(__import__('datetime').datetime.now())
             })
             
             # 解析并验证节点ID
             try:
-                import re
-                numbers = re.findall(r'\d+', raw_response)
-                if numbers:
-                    candidate_id = int(numbers[0])
+                if content and content.isdigit():
+                    candidate_id = int(content)
                     if candidate_id in available_node_ids:
                         selected_node_id = candidate_id
                         # 找到对应的节点数据
@@ -207,10 +250,30 @@ def select_node_with_llm(original_room_image: np.ndarray,
                         retry_count += 1
                         continue
                 else:
-                    print("⚠️ No number found in LLM response")
-                    print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
-                    retry_count += 1
-                    continue
+                    # Fallback: try to extract from full response
+                    import re
+                    numbers = re.findall(r'\d+', raw_response)
+                    if numbers:
+                        candidate_id = int(numbers[0])
+                        if candidate_id in available_node_ids:
+                            selected_node_id = candidate_id
+                            # 找到对应的节点数据
+                            for node in nodes_in_room:
+                                if node['node_id'] == selected_node_id:
+                                    selected_node_data = node
+                                    break
+                            print(f"✓ Valid node ID selected: {selected_node_id}")
+                            break
+                        else:
+                            print(f"⚠️ LLM selected node {candidate_id} not in available nodes {available_node_ids}")
+                            print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                            retry_count += 1
+                            continue
+                    else:
+                        print("⚠️ No number found in LLM response")
+                        print(f"🔄 Retrying... ({retry_count + 1}/{max_retries})")
+                        retry_count += 1
+                        continue
                     
             except Exception as e:
                 print(f"⚠️ Error parsing node ID: {e}")
