@@ -98,22 +98,20 @@ def segment_rooms_physical(mask_image_path: str, spacing: float, closing_width_m
     img_color_for_watershed = cv2.cvtColor(closing, cv2.COLOR_GRAY2BGR)
     markers = cv2.watershed(img_color_for_watershed, markers)
     
-    # Create segmentation result (color filling disabled)
+    # Create colored segmentation result
     num_rooms = np.max(markers)
-    # colors = [np.random.randint(50, 256, 3).tolist() for _ in range(num_rooms + 1)]
+    colors = [np.random.randint(50, 256, 3).tolist() for _ in range(num_rooms + 1)]
     segmented_image = np.zeros((binary_mask.shape[0], binary_mask.shape[1], 3), dtype=np.uint8)
     
-    # Color filling disabled - keep segmented_image as black background
-    # for i in range(1, num_rooms + 1):
-    #     if i < len(colors):
-    #         segmented_image[markers == i] = colors[i]
+    for i in range(1, num_rooms + 1):
+        if i < len(colors):
+            segmented_image[markers == i] = colors[i]
     
-    # Mark boundaries in red (keeping this for visualization)
+    # Mark boundaries in red
     segmented_image[markers == -1] = [0, 0, 255]
     
-    # Show walkable areas in white instead of original walls
-    segmented_image[binary_mask == 255] = [255, 255, 255]  # White for walkable areas
-    # Walls remain black (0, 0, 0)
+    # Restore original walls (black)
+    segmented_image[binary_mask == 0] = [0, 0, 0]
     
     return segmented_image, markers
 
@@ -211,6 +209,7 @@ def calculate_merge_score(small_room_id: int, candidate_room_id: int, markers: n
 def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndarray:
     """
     Iteratively merge small rooms into adjacent larger rooms.
+    After each merge, recalculate boundaries to ensure correct adjacency detection.
     
     Args:
         markers: Initial watershed markers
@@ -250,8 +249,8 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
             if np.sum(merged_markers == small_room_id) == 0:
                 continue
                 
-            # Find adjacent rooms
-            adjacent_rooms = find_adjacent_rooms(small_room_id, merged_markers)
+            # Find adjacent rooms using improved method that handles boundaries correctly
+            adjacent_rooms = find_adjacent_rooms_robust(small_room_id, merged_markers)
             
             if not adjacent_rooms:
                 print(f"  ⚠️ Small room {small_room_id} ({small_area} pixels) has no adjacent rooms, keeping as is")
@@ -272,7 +271,11 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
             if best_candidate is not None:
                 # Perform the merge
                 candidate_area = np.sum(merged_markers == best_candidate)
-                merged_markers[merged_markers == small_room_id] = best_candidate
+                
+                # CRITICAL FIX: Update boundaries after merging
+                merged_markers = perform_room_merge_with_boundary_update(
+                    merged_markers, small_room_id, best_candidate
+                )
                 
                 merge_log.append({
                     'small_room': small_room_id,
@@ -284,6 +287,9 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
                 
                 print(f"  ✓ Merged room {small_room_id} ({small_area} pixels) into room {best_candidate} ({candidate_area} pixels), score: {best_score:.3f}")
                 merged_in_this_iteration = True
+                
+                # Break after each merge to recalculate everything fresh
+                break
             else:
                 print(f"  ⚠️ Small room {small_room_id} ({small_area} pixels) has no suitable merge candidates")
         
@@ -292,6 +298,87 @@ def merge_small_rooms(markers: np.ndarray, min_room_area_pixels: int) -> np.ndar
     
     print(f"✓ Completed room merging: {len(merge_log)} merges performed")
     return merged_markers
+
+def find_adjacent_rooms_robust(room_id: int, markers: np.ndarray) -> List[int]:
+    """
+    Find all rooms that are adjacent to the given room, handling boundaries correctly.
+    This method looks through boundaries to find actual neighboring rooms.
+    
+    Args:
+        room_id: The ID of the room to find neighbors for
+        markers: Watershed markers array
+        
+    Returns:
+        List of adjacent room IDs
+    """
+    # Create mask for the current room
+    room_mask = (markers == room_id).astype(np.uint8)
+    
+    # Find contours of the room
+    contours, _ = cv2.findContours(room_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return []
+    
+    # Get the main contour
+    main_contour = max(contours, key=cv2.contourArea)
+    
+    # Dilate the room mask to reach through boundaries
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))  # Larger kernel to cross boundaries
+    dilated = cv2.dilate(room_mask, kernel, iterations=2)  # More iterations
+    
+    # Find what rooms the dilated area touches
+    adjacent_region = dilated - room_mask
+    adjacent_room_ids = np.unique(markers[adjacent_region == 1])
+    
+    # Filter out boundaries (-1), background (0, 1), and self
+    adjacent_rooms = []
+    for adj_id in adjacent_room_ids:
+        if adj_id > 1 and adj_id != room_id:  # Valid room IDs start from 2
+            adjacent_rooms.append(int(adj_id))
+    
+    return adjacent_rooms
+
+def perform_room_merge_with_boundary_update(markers: np.ndarray, source_room_id: int, target_room_id: int) -> np.ndarray:
+    """
+    Merge source room into target room and update boundaries appropriately.
+    
+    Args:
+        markers: Current markers array
+        source_room_id: Room to be merged (will disappear)
+        target_room_id: Target room to merge into
+        
+    Returns:
+        Updated markers with merged rooms and corrected boundaries
+    """
+    updated_markers = markers.copy()
+    
+    # Step 1: Merge the rooms (change all source_room_id pixels to target_room_id)
+    updated_markers[markers == source_room_id] = target_room_id
+    
+    # Step 2: Update boundaries between the merged rooms
+    # Find all boundary pixels that were between the merged rooms
+    boundary_pixels = np.where(markers == -1)
+    
+    for y, x in zip(boundary_pixels[0], boundary_pixels[1]):
+        # Check neighbors of this boundary pixel
+        neighbors = []
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dy == 0 and dx == 0:
+                    continue
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1]:
+                    neighbor_val = updated_markers[ny, nx]
+                    if neighbor_val > 1:  # Valid room
+                        neighbors.append(neighbor_val)
+        
+        # If all neighboring rooms are the same (i.e., this boundary is now internal), 
+        # convert this boundary pixel to that room
+        unique_neighbors = list(set(neighbors))
+        if len(unique_neighbors) == 1 and len(neighbors) >= 2:  # At least 2 neighbors, all same room
+            updated_markers[y, x] = unique_neighbors[0]
+    
+    return updated_markers
 
 def find_robust_center(mask: np.ndarray, contour: np.ndarray) -> Tuple[int, int]:
     """Find a robust center point for a room."""
@@ -373,17 +460,13 @@ def perform_room_segmentation(topdown_path: str, wall_mask_path: str, metadata_p
     print(f"  ✓ Initial segmentation: {len(initial_room_ids)} rooms detected")
     
     print(f"\n🔄 Step 2: Merging small rooms")
-    # Merge small rooms
+    # Merge small rooms with automatic boundary updates
     final_markers = merge_small_rooms(initial_markers, min_room_area_pixels)
-    
-    # Clean up boundaries after merging
-    print(f"  🧹 Cleaning merged boundaries...")
-    final_markers = clean_merged_boundaries(final_markers)
     
     # Count final rooms
     final_room_ids = np.unique(final_markers)
     final_room_ids = final_room_ids[final_room_ids > 1]
-    print(f"  ✓ After merging and cleanup: {len(final_room_ids)} rooms remaining")
+    print(f"  ✓ After merging: {len(final_room_ids)} rooms remaining")
     
     print(f"\n🔄 Step 3: Generating room_segmentation.png")
     # Create final segmentation image with merged results
@@ -487,62 +570,6 @@ def create_segmentation_visualization(markers: np.ndarray, original_image: np.nd
     
     # Mark remaining boundaries in red (only valid boundaries should remain after cleaning)
     segmented_image[markers == -1] = [0, 0, 255]
-    
-    # Restore original walls (black)
-    wall_mask = (markers == 0) | (markers == 1)
-    segmented_image[wall_mask] = [0, 0, 0]
-    
-    return segmented_image
-    """
-    Create colored segmentation visualization from markers.
-    
-    Args:
-        markers: Watershed markers after merging
-        original_image: Original topdown image for reference
-        
-    Returns:
-        Colored segmentation image
-    """
-    # Get unique room IDs
-    room_ids = np.unique(markers)
-    room_ids = room_ids[room_ids > 1]  # Filter out boundaries and background
-    
-    # Generate random colors for each room
-    colors = {}
-    for room_id in room_ids:
-        colors[room_id] = np.random.randint(50, 256, 3).tolist()
-    
-    # Create segmented image
-    segmented_image = np.zeros((markers.shape[0], markers.shape[1], 3), dtype=np.uint8)
-    
-    for room_id in room_ids:
-        segmented_image[markers == room_id] = colors[room_id]
-    
-    # Only mark boundaries between DIFFERENT rooms as red
-    # Remove internal boundaries within merged rooms
-    boundary_mask = np.zeros(markers.shape, dtype=np.uint8)
-    
-    # Check each boundary pixel to see if it's between different rooms
-    boundary_pixels = (markers == -1)
-    for y, x in np.argwhere(boundary_pixels):
-        # Check 8-connected neighbors
-        neighbors = []
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                if dy == 0 and dx == 0:
-                    continue
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1]:
-                    neighbor_val = markers[ny, nx]
-                    if neighbor_val > 1:  # Valid room
-                        neighbors.append(neighbor_val)
-        
-        # If this boundary pixel separates different rooms, mark it as boundary
-        if len(set(neighbors)) > 1:  # More than one unique room adjacent
-            boundary_mask[y, x] = 255
-    
-    # Mark only the valid boundaries in red
-    segmented_image[boundary_mask == 255] = [0, 0, 255]
     
     # Restore original walls (black)
     wall_mask = (markers == 0) | (markers == 1)
