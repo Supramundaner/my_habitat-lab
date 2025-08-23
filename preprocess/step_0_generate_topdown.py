@@ -44,6 +44,16 @@ def generate_topdown_view(config: Dict[str, Any], output_dir: str) -> Dict[str, 
     scene_config = config['scene_config']
     scene_path = scene_config['scene_path']
     
+    # Read resolution from config
+    resolution = config.get('resolution', 2048)
+    if isinstance(resolution, int):
+        resolution = [resolution, resolution]  # Make it square
+    elif isinstance(resolution, list) and len(resolution) == 1:
+        resolution = [resolution[0], resolution[0]]  # Make it square
+    
+    print(f"📁 Scene path: {scene_path}")
+    print(f"📏 Resolution: {resolution}")
+    
     # Determine target floor
     if scene_config['target_coordinate'] is not None:
         target_floor = scene_config['target_coordinate']
@@ -63,7 +73,8 @@ def generate_topdown_view(config: Dict[str, Any], output_dir: str) -> Dict[str, 
         target_floor=target_floor,
         custom_ortho_scale=scene_config.get('custom_ortho_scale'),
         target_coverage=scene_config.get('target_coverage', 0.9),
-        draw_coordinates=scene_config.get('draw_coordinates', False)
+        draw_coordinates=scene_config.get('draw_coordinates', False),
+        resolution=resolution
     )
     
     if result_image is None:
