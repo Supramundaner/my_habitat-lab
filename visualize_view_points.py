@@ -169,7 +169,7 @@ def main():
 	parser = argparse.ArgumentParser(description="Visualize viewpoints on a floor topdown view for a specific object.")
 	parser.add_argument("--episodes", default="/home/yaoaa/habitat-lab/data/datasets/ovon/hm3d/val_seen/content/LT9Jq6dN3Ea.json", help="Path to the episodes JSON file for the scene")
 	parser.add_argument("--scene", default="/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00862-LT9Jq6dN3Ea/LT9Jq6dN3Ea.basis.glb", help="Path to the scene .glb file")
-	parser.add_argument("--object_id", default="rack_966", help="Target object_id to visualize")
+	parser.add_argument("--object_id", default="laundry machine_743", help="Target object_id to visualize")
 	parser.add_argument("--output", default=None, help="Output image path. Default: viewpoints_visualization/<scene_id>_<object_id>.png")
 	parser.add_argument("--custom_ortho_scale", type=float, default=None, help="Optional custom ortho scale override")
 	parser.add_argument("--target_coverage", type=float, default=0.9, help="Coverage ratio used to compute ortho scale when not set")
