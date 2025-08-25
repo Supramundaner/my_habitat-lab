@@ -85,6 +85,7 @@ Edit `input_config.json` to configure the workflow:
 ```bash
 cd /home/yaoaa/habitat-lab
 python preprocess/main_workflow.py preprocess/input_config.json
+python preprocess/batch_sample_generation.py data/datasets/ovon/hm3d/val_seen/content/LT9Jq6dN3Ea.json preprocess/input_config.json preprocess/sample_output/ 10
 ```
 
 ### Running Individual Steps
