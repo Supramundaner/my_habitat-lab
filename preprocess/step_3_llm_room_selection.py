@@ -25,6 +25,7 @@ def call_llm_with_image(client, room_annotation_path, prompt_text,model):
     
     response = client.chat.completions.create(
         model=model,
+        temperature=0,
         messages=[
             {
                 "role": "user",
@@ -314,9 +315,93 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
         json.dump(llm_log, f, indent=2, ensure_ascii=False)
     print(f"✓ LLM interaction log saved to: {log_path}")
     
+    # 保存LLM的完整content和reasoning content到预处理位置
+    preprocess_dir = os.path.join(output_dir, "preprocess")
+    os.makedirs(preprocess_dir, exist_ok=True)
+    
+    # 保存最终成功的LLM响应的完整内容
+    if all_responses and selected_room is not None:
+        # 找到最终成功的响应（最后一个有效响应）
+        successful_response = None
+        for response in reversed(all_responses):
+            if "error" not in response and response.get("extracted_content"):
+                successful_response = response
+                break
+        
+        if successful_response:
+            llm_content_data = {
+                "timestamp": successful_response["timestamp"],
+                "model": model,
+                "selected_room": selected_room,
+                "full_reasoning_content": successful_response["raw_response"],
+                "extracted_content": successful_response["extracted_content"],
+                "attempt_number": successful_response["attempt"],
+                "available_rooms": available_rooms,
+                "goal_object": config['scene_config']['goal_object'],
+                "prompt_used": enhanced_prompt if 'enhanced_prompt' in locals() else prompt_template
+            }
+        else:
+            # 如果没有成功的响应，使用fallback信息
+            llm_content_data = {
+                "timestamp": str(__import__('datetime').datetime.now()),
+                "model": model,
+                "selected_room": selected_room,
+                "full_reasoning_content": final_response,
+                "extracted_content": str(selected_room),
+                "attempt_number": "fallback",
+                "available_rooms": available_rooms,
+                "goal_object": config['scene_config']['goal_object'],
+                "prompt_used": enhanced_prompt if 'enhanced_prompt' in locals() else prompt_template,
+                "note": "Used fallback room selection due to LLM failures"
+            }
+    else:
+        # 如果没有任何响应，创建默认记录
+        llm_content_data = {
+            "timestamp": str(__import__('datetime').datetime.now()),
+            "model": model,
+            "selected_room": selected_room,
+            "full_reasoning_content": "No valid LLM response received",
+            "extracted_content": str(selected_room) if selected_room else "None",
+            "attempt_number": 0,
+            "available_rooms": available_rooms,
+            "goal_object": config['scene_config']['goal_object'],
+            "prompt_used": prompt_template,
+            "note": "No valid LLM response - using fallback"
+        }
+    
+    # 保存到preprocess目录
+    llm_content_path = os.path.join(preprocess_dir, "llm_room_selection_content.json")
+    with open(llm_content_path, 'w', encoding='utf-8') as f:
+        json.dump(llm_content_data, f, indent=2, ensure_ascii=False)
+    print(f"✓ LLM content saved to preprocessing directory: {llm_content_path}")
+    
+    # 同时保存一个简化的reasoning文本文件，便于阅读
+    reasoning_text_path = os.path.join(preprocess_dir, "llm_reasoning.txt")
+    with open(reasoning_text_path, 'w', encoding='utf-8') as f:
+        f.write(f"LLM Room Selection Reasoning\n")
+        f.write(f"=" * 50 + "\n\n")
+        f.write(f"Timestamp: {llm_content_data['timestamp']}\n")
+        f.write(f"Model: {llm_content_data['model']}\n")
+        f.write(f"Goal Object: {llm_content_data['goal_object']}\n")
+        f.write(f"Available Rooms: {llm_content_data['available_rooms']}\n")
+        f.write(f"Selected Room: {llm_content_data['selected_room']}\n")
+        f.write(f"Attempt Number: {llm_content_data['attempt_number']}\n\n")
+        f.write(f"Prompt Used:\n")
+        f.write(f"{'-' * 20}\n")
+        f.write(f"{llm_content_data['prompt_used']}\n\n")
+        f.write(f"Full LLM Response:\n")
+        f.write(f"{'-' * 20}\n")
+        f.write(f"{llm_content_data['full_reasoning_content']}\n\n")
+        f.write(f"Extracted Answer: {llm_content_data['extracted_content']}\n")
+        if 'note' in llm_content_data:
+            f.write(f"\nNote: {llm_content_data['note']}\n")
+    print(f"✓ LLM reasoning text saved to: {reasoning_text_path}")
+    
     return {
         "generated_files": {
-            "llm_log": log_path
+            "llm_log": log_path,
+            "llm_content": llm_content_path,
+            "reasoning_text": reasoning_text_path
         },
         "llm_response": {
             "raw_response": final_response,
@@ -355,9 +440,49 @@ def select_room_manually(room_annotation_path: str, output_dir: str, room_number
     with open(log_path, 'w', encoding='utf-8') as f:
         json.dump(manual_log, f, indent=2, ensure_ascii=False)
     
+    # 保存手动选择的内容到预处理位置，保持与LLM选择的一致性
+    preprocess_dir = os.path.join(output_dir, "preprocess")
+    os.makedirs(preprocess_dir, exist_ok=True)
+    
+    manual_content_data = {
+        "timestamp": str(__import__('datetime').datetime.now()),
+        "model": "manual_selection",
+        "selected_room": room_number,
+        "full_reasoning_content": f"Manual room selection: Room {room_number} was manually specified",
+        "extracted_content": str(room_number),
+        "attempt_number": 1,
+        "available_rooms": "unknown (manual selection)",
+        "goal_object": "unknown (manual selection)",
+        "prompt_used": "N/A (manual selection)",
+        "note": "Room was manually selected, not through LLM reasoning"
+    }
+    
+    # 保存到preprocess目录
+    manual_content_path = os.path.join(preprocess_dir, "llm_room_selection_content.json")
+    with open(manual_content_path, 'w', encoding='utf-8') as f:
+        json.dump(manual_content_data, f, indent=2, ensure_ascii=False)
+    print(f"✓ Manual selection content saved to preprocessing directory: {manual_content_path}")
+    
+    # 同时保存一个简化的reasoning文本文件
+    reasoning_text_path = os.path.join(preprocess_dir, "llm_reasoning.txt")
+    with open(reasoning_text_path, 'w', encoding='utf-8') as f:
+        f.write(f"Room Selection Reasoning (Manual)\n")
+        f.write(f"=" * 50 + "\n\n")
+        f.write(f"Timestamp: {manual_content_data['timestamp']}\n")
+        f.write(f"Method: Manual Selection\n")
+        f.write(f"Selected Room: {manual_content_data['selected_room']}\n\n")
+        f.write(f"Reasoning:\n")
+        f.write(f"{'-' * 20}\n")
+        f.write(f"{manual_content_data['full_reasoning_content']}\n\n")
+        f.write(f"Final Answer: {manual_content_data['extracted_content']}\n")
+        f.write(f"\nNote: {manual_content_data['note']}\n")
+    print(f"✓ Manual selection reasoning text saved to: {reasoning_text_path}")
+    
     return {
         "generated_files": {
-            "selection_log": log_path
+            "selection_log": log_path,
+            "llm_content": manual_content_path,
+            "reasoning_text": reasoning_text_path
         },
         "llm_response": {
             "raw_response": f"Manual selection: Room {room_number}",

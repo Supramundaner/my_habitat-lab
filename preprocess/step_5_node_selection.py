@@ -29,6 +29,7 @@ def call_llm_with_images(client, original_image_path, nodes_image_path, prompt_t
     
     response = client.chat.completions.create(
         model=model,
+        temperature=0,
         messages=[
             {
                 "role": "user",

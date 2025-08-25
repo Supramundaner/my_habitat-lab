@@ -21,9 +21,10 @@ The evaluation system integrates the complete pipeline:
 ### Basic Usage
 
 ```bash
-cd /home/yaoaa/habitat-lab/habitat_video_project/eval
+cd /home/yaoaa/habitat-lab
 python run_eval.py eval_config_episode_427.json
-python batch_eval.py batch_episodes_example.json
+python /home/yaoaa/habitat-lab/habitat_video_project/eval/batch_eval.py /home/yaoaa/habitat-lab/habitat_video_project/eval/batch_eval_seen.json
+python /home/yaoaa/habitat-lab/habitat_video_project/eval/batch_eval.py /home/yaoaa/habitat-lab/habitat_video_project/eval/batch_episodes_example.json
 ```
 
 ### Verbose Output
