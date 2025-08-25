@@ -43,16 +43,17 @@ class NavigationConfig:
         
         # 目标点距离参数
         self.intermediate_distance = 1.5  # 中间目标点距离
-        self.final_target_threshold = 1.5  # 切换到最终目标的阈值
-        self.final_stop_threshold = 0.8  # 最终停止阈值
+        self.final_target_threshold = 1.2  # 切换到最终目标的阈值
+        self.final_stop_threshold = 0.6  # 最终停止阈值
         
-        self.max_search_radius = 500  # 最大搜索半径（像素）
+        self.min_search_radius = 0.2  # 最小搜索半径（米）
+        self.max_search_radius = 10  # 最大搜索半径（像素）
         
         # 前进参数
         self.forward_distance = 0.25  # 前进距离（米）
         
         # 最大迭代次数
-        self.max_iterations = 1000  # 防止无限循环
+        self.max_iterations = 500  # 防止无限循环
 
 
 class ActionProcessor:
@@ -491,7 +492,8 @@ class ActionProcessor:
             target_value = self.map_builder.grid_map[adjusted_target_pixel[1], adjusted_target_pixel[0]]
             if target_value == 0:  # 障碍物
                 print(f"[WARNING] adjusted_target_pos在障碍物内，寻找最近的可行走点")
-                nearest_walkable_pixel = self._find_nearest_walkable_point(adjusted_target_pixel, self.map_builder.grid_map)
+                resolution = self.map_builder.map_resolution
+                nearest_walkable_pixel = self._find_nearest_walkable_point(adjusted_target_pixel, self.map_builder.grid_map, resolution)
                 
                 if nearest_walkable_pixel is not None:
                     # 将像素坐标转换为世界坐标
@@ -611,7 +613,8 @@ class ActionProcessor:
             target_value = self.map_builder.grid_map[target_pixel[1], target_pixel[0]]
             if target_value == 0:  # 障碍物
                 print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
-                nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map)
+                resolution = self.map_builder.map_resolution
+                nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map, resolution)
                 
                 if nearest_walkable_pixel is not None:
                     # 将像素坐标转换为世界坐标
@@ -903,10 +906,10 @@ class ActionProcessor:
             # 检查目标点是否在障碍物内
             adjusted_goal = goal_pos
             was_adjusted = False
-            
+            resolution = self.map_builder.map_resolution*4
             if goal_value == 0:
                 print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
-                adjusted_goal_pixel_downsampled = self._find_nearest_walkable_point(goal_pixel_downsampled, downsampled_map)
+                adjusted_goal_pixel_downsampled = self._find_nearest_walkable_point(goal_pixel_downsampled, downsampled_map, resolution)
                 
                 if adjusted_goal_pixel_downsampled is None:
                     print(f"[ERROR] 无法找到目标点附近的可行走区域")
@@ -931,7 +934,31 @@ class ActionProcessor:
             
             if not path_pixels_downsampled:
                 print("[ERROR] A*算法未找到路径")
-                return None
+                # return None
+                adjusted_goal_pixel_downsampled = self._find_nearest_walkable_point(goal_pixel_downsampled, downsampled_map, resolution)
+                
+                if adjusted_goal_pixel_downsampled is None:
+                    print(f"[ERROR] 无法找到目标点附近的可行走区域")
+                    return None
+                
+                # 将下采样的像素坐标转换回原始像素坐标
+                adjusted_goal_pixel = (adjusted_goal_pixel_downsampled[0] * downsample_factor, 
+                                     adjusted_goal_pixel_downsampled[1] * downsample_factor)
+                
+                # 将调整后的像素坐标转换为世界坐标
+                adjusted_goal = self._pixel_to_world_coord(adjusted_goal_pixel)
+                was_adjusted = True
+                
+                # 更新goal_pixel_downsampled为调整后的下采样像素坐标
+                goal_pixel_downsampled = adjusted_goal_pixel_downsampled
+                goal_value = downsampled_map[goal_pixel_downsampled[1], goal_pixel_downsampled[0]]
+                
+                path_pixels_downsampled = self._a_star_pathfinding(start_pixel_downsampled, goal_pixel_downsampled, downsampled_map)
+                
+                if not path_pixels_downsampled:
+                    print("[ERROR] A*算法未找到路径")
+                    return None
+                
             
             # 将下采样的像素坐标转换回原始分辨率
             path_pixels = []
@@ -1008,6 +1035,7 @@ class ActionProcessor:
         
         # 检查起点和终点是否可行走（允许未知区域）
         if wall_mask[start[1], start[0]] == 0 or wall_mask[goal[1], goal[0]] == 0:
+            print(f"[ERROR] 起点或终点不可行走")
             return []
         
         # 1. 预处理：生成距离变换图
@@ -1034,7 +1062,7 @@ class ActionProcessor:
         
         visited = set()
         iterations = 0
-        max_iterations = 2000000 # 大幅增加最大迭代次数
+        max_iterations = 20000000 # 大幅增加最大迭代次数
 
         
         while open_set and iterations < max_iterations:
@@ -1043,7 +1071,7 @@ class ActionProcessor:
             if iterations % 20000 == 0:
                 # 如果开放集过大，可能路径不存在
                 if len(open_set) > 10000:
-                    break
+                    print(f"[WARNING] 开放集过大，可能路径不存在")
             
             current_f, current_g, current = heapq.heappop(open_set)
             
@@ -1307,7 +1335,7 @@ class ActionProcessor:
         
         return True
 
-    def _find_nearest_walkable_point(self, obstacle_pixel: tuple, map: np.ndarray) -> Optional[tuple]:
+    def _find_nearest_walkable_point(self, obstacle_pixel: tuple, map: np.ndarray, resolution) -> Optional[tuple]:
         """
         找到距离障碍物点最近的安全可行走点（确保周围0.1米内都是非障碍物）
         
@@ -1322,7 +1350,7 @@ class ActionProcessor:
         height, width = map.shape
         
         # 从最小半径开始搜索
-        for radius in range(0, self.nav_config.max_search_radius + 1):
+        for radius in range(int(self.nav_config.min_search_radius/resolution), int(self.nav_config.max_search_radius/resolution) + 1):
             candidates = []
             
             # 在指定半径内搜索所有点
@@ -1521,7 +1549,8 @@ class ActionProcessor:
                     target_value = self.map_builder.grid_map[target_pixel[1], target_pixel[0]]
                     if target_value == 0:  # 障碍物
                         print(f"[ROTATION SEARCH] 检测到的目标在障碍物内，寻找最近的可行走点")
-                        nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map)
+                        resolution = self.map_builder.map_resolution
+                        nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map, resolution)
                         
                         if nearest_walkable_pixel is not None:
                             detected_target_2d = self._pixel_to_world_coord(nearest_walkable_pixel)
