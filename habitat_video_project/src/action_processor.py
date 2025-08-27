@@ -615,7 +615,6 @@ class ActionProcessor:
                 print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
                 resolution = self.map_builder.map_resolution
                 nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map, resolution)
-                
                 if nearest_walkable_pixel is not None:
                     # 将像素坐标转换为世界坐标
                     nearest_walkable_world = self._pixel_to_world_coord(nearest_walkable_pixel)
@@ -1049,7 +1048,7 @@ class ActionProcessor:
         # 2. 设置参数
 
         # weight_w = self.nav_config.a_star_weight_w  # 权重系数，控制远离障碍物的程度
-        constant = 0.009
+        constant = 0.006
         resolution = self.map_builder.map_resolution
         weight_w = constant / (resolution**2)
         epsilon = self.nav_config.a_star_epsilon  # 防止除零的小正数

@@ -262,7 +262,7 @@ def main():
                       type=int, default=3,
                       help='Number of episodes to sample from val_unseen per scene')
     parser.add_argument('--seed',
-                      type=int, default=None,
+                      type=int, default=42,
                       help='Random seed for reproducible sampling')
     
     args = parser.parse_args()
