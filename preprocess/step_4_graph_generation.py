@@ -9,10 +9,106 @@ import json
 import numpy as np
 import random
 import math
+from scipy.ndimage import label, binary_dilation
+from sklearn.cluster import DBSCAN
 from typing import Dict, Any, List, Tuple, Optional
 
+class ConnectedComponentsAnalyzer:
+    """Analyze connected components in walkable areas."""
+    
+    def __init__(self, walkable_mask: np.ndarray, min_component_area: int = 100):
+        """
+        Initialize component analyzer.
+        
+        Args:
+            walkable_mask: Binary mask (255 for walkable, 0 for walls)
+            min_component_area: Minimum area (pixels) for a component to be considered
+        """
+        self.walkable_mask = walkable_mask
+        self.min_component_area = min_component_area
+        self.height, self.width = walkable_mask.shape
+        
+    def find_connected_components(self) -> List[Dict[str, Any]]:
+        """
+        Find all connected components in the walkable area.
+        
+        Returns:
+            List of component dictionaries with area, bbox, and mask
+        """
+        print(f"🔍 Analyzing connected components...")
+        
+        # Convert to binary mask (0 or 1)
+        binary_mask = (self.walkable_mask > 127).astype(np.uint8)
+        
+        # Find connected components
+        labeled_array, num_features = label(binary_mask)
+        
+        components = []
+        for component_id in range(1, num_features + 1):
+            # Get component mask
+            component_mask = (labeled_array == component_id)
+            area = np.sum(component_mask)
+            
+            # Skip small components
+            if area < self.min_component_area:
+                continue
+                
+            # Get bounding box
+            coords = np.where(component_mask)
+            min_y, max_y = coords[0].min(), coords[0].max()
+            min_x, max_x = coords[1].min(), coords[1].max()
+            
+            # Calculate centroid
+            centroid_y = coords[0].mean()
+            centroid_x = coords[1].mean()
+            
+            component_info = {
+                "id": len(components),
+                "original_id": component_id,
+                "area": area,
+                "bbox": (min_x, min_y, max_x, max_y),
+                "centroid": (centroid_x, centroid_y),
+                "mask": component_mask
+            }
+            components.append(component_info)
+        
+        print(f"✓ Found {len(components)} connected components")
+        for i, comp in enumerate(components):
+            print(f"  Component {i}: area={comp['area']} pixels, bbox={comp['bbox']}")
+        
+        return components
+
+
+class MultiRegionPoissonDiskSampling:
+    """Enhanced PDS that handles multiple disconnected regions."""
+    
+    def __init__(self, width: int, height: int, radius: float, max_attempts: int = 30):
+        """
+        Initialize multi-region PDS sampler.
+        
+        Args:
+            width: Image width
+            height: Image height  
+            radius: Minimum distance between points (in pixels)
+            max_attempts: Maximum attempts to place a new point around existing points
+        """
+        self.width = width
+        self.height = height
+        self.radius = radius
+        self.max_attempts = max_attempts
+        
+        # Grid for efficient neighbor lookup
+        self.cell_size = radius / math.sqrt(2)
+        self.grid_width = int(math.ceil(width / self.cell_size))
+        self.grid_height = int(math.ceil(height / self.cell_size))
+        self.grid = [[None for _ in range(self.grid_width)] for _ in range(self.grid_height)]
+        
+        self.all_points = []
+        self.global_point_counter = 0
+
+
 class PoissonDiskSampling:
-    """Poisson Disk Sampling implementation for generating evenly distributed points."""
+    """Single-region Poisson Disk Sampling implementation."""
     
     def __init__(self, width: int, height: int, radius: float, max_attempts: int = 30):
         """
@@ -74,6 +170,36 @@ class PoissonDiskSampling:
         
         return True
     
+    def _is_valid_point(self, x: float, y: float, walkable_mask: np.ndarray) -> bool:
+        """Check if a point is valid (within bounds and on walkable area)."""
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return False
+        
+        # Check if point is on walkable area (white pixels in mask)
+        if walkable_mask[int(y), int(x)] == 0:
+            return False
+        
+        # Check minimum distance to existing points
+        grid_x, grid_y = self._get_grid_coords(x, y)
+        
+        # Check neighboring grid cells
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                neighbor_x = grid_x + dx
+                neighbor_y = grid_y + dy
+                
+                if (0 <= neighbor_x < self.grid_width and 
+                    0 <= neighbor_y < self.grid_height and 
+                    self.grid[neighbor_y][neighbor_x] is not None):
+                    
+                    existing_point = self.grid[neighbor_y][neighbor_x]
+                    distance = math.sqrt((x - existing_point[0])**2 + (y - existing_point[1])**2)
+                    
+                    if distance < self.radius:
+                        return False
+        
+        return True
+    
     def _add_point(self, x: float, y: float) -> int:
         """Add a valid point to the sampling."""
         point_id = len(self.points)
@@ -88,47 +214,63 @@ class PoissonDiskSampling:
         
         return point_id
     
-    def sample(self, walkable_mask: np.ndarray, initial_point: Optional[Tuple[float, float]] = None) -> List[Tuple[float, float, int]]:
+    def sample_region(self, walkable_mask: np.ndarray, region_mask: np.ndarray, 
+                     initial_point: Optional[Tuple[float, float]] = None, 
+                     point_id_offset: int = 0) -> List[Tuple[float, float, int]]:
         """
-        Generate Poisson disk sampling points.
+        Generate PDS points within a specific region.
         
         Args:
-            walkable_mask: Binary mask (255 for walkable, 0 for walls)
-            initial_point: Optional initial point to start sampling
+            walkable_mask: Full walkable area mask
+            region_mask: Mask for this specific region
+            initial_point: Optional initial point
+            point_id_offset: Offset for point IDs to ensure global uniqueness
             
         Returns:
             List of (x, y, point_id) tuples
         """
-        print(f"🎯 Starting Poisson Disk Sampling:")
-        print(f"  - Image size: {self.width}x{self.height}")
-        print(f"  - Sampling radius: {self.radius:.1f} pixels")
-        print(f"  - Max attempts per point: {self.max_attempts}")
+        # Reset internal state
+        self.points = []
+        self.active_list = []
+        self.grid = [[None for _ in range(self.grid_width)] for _ in range(self.grid_height)]
         
-        # Initialize with random point or provided initial point
+        print(f"🎯 Sampling region (offset={point_id_offset}):")
+        region_area = np.sum(region_mask)
+        print(f"  - Region area: {region_area} pixels")
+        print(f"  - Sampling radius: {self.radius:.1f} pixels")
+        
+        # Find initial point in this region
         if initial_point:
             x, y = initial_point
-            if self._is_valid_point(x, y, walkable_mask):
-                self._add_point(x, y)
+            if self._is_valid_point_in_region(x, y, walkable_mask, region_mask):
+                self._add_point(x, y, point_id_offset)
             else:
-                print(f"⚠️ Initial point ({x}, {y}) is not valid, using random point")
                 initial_point = None
         
         if not initial_point:
-            # Find a random valid starting point
+            # Find random valid starting point within the region
+            region_coords = np.where(region_mask)
+            if len(region_coords[0]) == 0:
+                print("⚠️ No valid pixels in region mask")
+                return []
+            
             attempts = 0
             while attempts < 1000:
-                x = random.uniform(0, self.width - 1)
-                y = random.uniform(0, self.height - 1)
+                # Choose random point from region
+                idx = random.randint(0, len(region_coords[0]) - 1)
+                y = region_coords[0][idx]
+                x = region_coords[1][idx]
                 
-                if self._is_valid_point(x, y, walkable_mask):
-                    self._add_point(x, y)
+                if self._is_valid_point_in_region(x, y, walkable_mask, region_mask):
+                    self._add_point(x, y, point_id_offset)
                     break
                 attempts += 1
             
             if not self.points:
-                raise RuntimeError("Could not find valid starting point for PDS")
+                print("⚠️ Could not find valid starting point in region")
+                return []
         
-        # Generate points using PDS algorithm
+        # Generate points using PDS algorithm within this region
         while self.active_list:
             # Choose random point from active list
             active_index = random.randint(0, len(self.active_list) - 1)
@@ -145,8 +287,8 @@ class PoissonDiskSampling:
                 new_x = active_point[0] + distance * math.cos(angle)
                 new_y = active_point[1] + distance * math.sin(angle)
                 
-                if self._is_valid_point(new_x, new_y, walkable_mask):
-                    self._add_point(new_x, new_y)
+                if self._is_valid_point_in_region(new_x, new_y, walkable_mask, region_mask):
+                    self._add_point(new_x, new_y, point_id_offset)
                     found_valid_point = True
                     break
             
@@ -154,13 +296,121 @@ class PoissonDiskSampling:
             if not found_valid_point:
                 self.active_list.pop(active_index)
         
-        print(f"✓ Generated {len(self.points)} points using PDS")
+        print(f"✓ Generated {len(self.points)} points in region")
         return self.points
+    
+    def _is_valid_point_in_region(self, x: float, y: float, walkable_mask: np.ndarray, 
+                                 region_mask: np.ndarray) -> bool:
+        """Check if a point is valid within a specific region."""
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return False
+        
+        int_x, int_y = int(x), int(y)
+        
+        # Check if point is within the specific region
+        if not region_mask[int_y, int_x]:
+            return False
+        
+        # Check if point is on walkable area
+        if walkable_mask[int_y, int_x] == 0:
+            return False
+        
+        # Check minimum distance to existing points in this region
+        grid_x, grid_y = self._get_grid_coords(x, y)
+        
+        # Check neighboring grid cells
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                neighbor_x = grid_x + dx
+                neighbor_y = grid_y + dy
+                
+                if (0 <= neighbor_x < self.grid_width and 
+                    0 <= neighbor_y < self.grid_height and 
+                    self.grid[neighbor_y][neighbor_x] is not None):
+                    
+                    existing_point = self.grid[neighbor_y][neighbor_x]
+                    distance = math.sqrt((x - existing_point[0])**2 + (y - existing_point[1])**2)
+                    
+                    if distance < self.radius:
+                        return False
+        
+        return True
+    
+    def _add_point(self, x: float, y: float, point_id_offset: int) -> int:
+        """Add a valid point to the sampling with ID offset."""
+        point_id = len(self.points) + point_id_offset
+        point = (x, y, point_id)
+        
+        self.points.append(point)
+        self.active_list.append(point)
+        
+        # Add to grid
+        grid_x, grid_y = self._get_grid_coords(x, y)
+        self.grid[grid_y][grid_x] = point
+        
+        return point_id
+
+def sample_multiple_regions(walkable_mask: np.ndarray, radius: float, 
+                          min_component_area: int = 100, max_attempts: int = 30) -> List[Tuple[float, float, int]]:
+    """
+    Sample points across multiple disconnected regions.
+    
+    Args:
+        walkable_mask: Binary mask (255 for walkable, 0 for walls)
+        radius: PDS radius in pixels
+        min_component_area: Minimum area for a region to be sampled
+        max_attempts: Max attempts per point
+        
+    Returns:
+        List of (x, y, point_id) tuples from all regions
+    """
+    height, width = walkable_mask.shape
+    
+    # Step 1: Find connected components
+    analyzer = ConnectedComponentsAnalyzer(walkable_mask, min_component_area)
+    components = analyzer.find_connected_components()
+    
+    if not components:
+        raise RuntimeError("No valid connected components found")
+    
+    # Step 2: Sample each region independently
+    all_points = []
+    point_id_offset = 0
+    
+    for comp_idx, component in enumerate(components):
+        print(f"\n🎯 Processing component {comp_idx + 1}/{len(components)}")
+        
+        # Create PDS sampler for this region
+        sampler = PoissonDiskSampling(
+            width=width,
+            height=height, 
+            radius=radius,
+            max_attempts=max_attempts
+        )
+        
+        # Sample points in this region
+        region_points = sampler.sample_region(
+            walkable_mask=walkable_mask,
+            region_mask=component['mask'],
+            point_id_offset=point_id_offset
+        )
+        
+        all_points.extend(region_points)
+        point_id_offset += len(region_points)
+        
+        print(f"✓ Component {comp_idx}: {len(region_points)} points added")
+    
+    print(f"\n🎉 Multi-region sampling completed:")
+    print(f"  - Total components: {len(components)}")
+    print(f"  - Total points: {len(all_points)}")
+    
+    return all_points
+
 
 def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_path: str,
                             config: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
     """
-    Generate navigation graph using Poisson Disk Sampling.
+    Generate navigation graph using multi-region Poisson Disk Sampling.
     
     Args:
         topdown_path: Path to topdown view image
@@ -199,6 +449,8 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
     pds_radius_meters = graph_config.get('pds_radius', 1.0)
     max_attempts = graph_config.get('max_attempts', 10000)
     node_radius_pixels = graph_config.get('node_radius_pixels', 8)
+    min_component_area = graph_config.get('min_component_area', 100)
+    enable_multi_region = graph_config.get('enable_multi_region', True)
     
     # Convert PDS radius from meters to pixels
     pds_radius_pixels = pds_radius_meters / spacing_in_meters_per_pixel
@@ -207,18 +459,29 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
     print(f"  - PDS radius: {pds_radius_meters}m ({pds_radius_pixels:.1f} pixels)")
     print(f"  - Max attempts: {max_attempts}")
     print(f"  - Node visualization radius: {node_radius_pixels} pixels")
+    print(f"  - Min component area: {min_component_area} pixels")
+    print(f"  - Multi-region sampling: {enable_multi_region}")
     
-    # Initialize PDS sampler
+    # Generate points using appropriate method
     height, width = wall_mask.shape
-    sampler = PoissonDiskSampling(
-        width=width,
-        height=height,
-        radius=pds_radius_pixels,
-        max_attempts=30
-    )
     
-    # Generate points
-    points = sampler.sample(wall_mask)
+    if enable_multi_region:
+        # Use multi-region sampling
+        points = sample_multiple_regions(
+            walkable_mask=wall_mask,
+            radius=pds_radius_pixels,
+            min_component_area=min_component_area,
+            max_attempts=30
+        )
+    else:
+        # Use traditional single-region PDS
+        sampler = PoissonDiskSampling(
+            width=width,
+            height=height,
+            radius=pds_radius_pixels,
+            max_attempts=30
+        )
+        points = sampler.sample_region(wall_mask, wall_mask > 127)
     
     if not points:
         raise RuntimeError("No valid points generated by PDS")
@@ -294,6 +557,8 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
             "pds_radius_pixels": pds_radius_pixels,
             "spacing_in_meters_per_pixel": spacing_in_meters_per_pixel,
             "max_attempts": max_attempts,
+            "min_component_area": min_component_area,
+            "enable_multi_region": enable_multi_region,
             "total_nodes": len(points)
         },
         "nodes": nodes_data
