@@ -15,12 +15,14 @@ sys.path.insert(0, vlm_path)
 
 try:
     from vlm.grounding_dino import GroundingDINOClient
+    from vlm.yolov7 import YOLOv7Client
     from vlm.sam import MobileSAMClient
     from vlm.detections import ObjectDetections
 except ImportError as e:
     print(f"Warning: Could not import VLM modules: {e}")
     print("Object detection functionality will be disabled.")
     GroundingDINOClient = None
+    YOLOv7Client = None
     MobileSAMClient = None
     ObjectDetections = None
 
@@ -43,21 +45,41 @@ class ObjectDetector:
             return
             
         # 检查VLFM模块是否可用
-        if GroundingDINOClient is None or MobileSAMClient is None:
-            print("VLFM modules not available, object detection disabled")
+        if MobileSAMClient is None or ObjectDetections is None:
+            print("Essential VLM modules not available, object detection disabled")
             self.enabled = False
             return
         
+        # 获取检测器类型配置
+        self.detector_type = self.config.get('detector_type', 'grounding_dino')  # 'grounding_dino' or 'yolov7'
+        
         # 初始化客户端
         try:
-            grounding_dino_port = self.config.get('grounding_dino_port', 12181)
             mobile_sam_port = self.config.get('mobile_sam_port', 12184)
-            
-            self.grounding_dino = GroundingDINOClient(port=grounding_dino_port)
             self.mobile_sam = MobileSAMClient(port=mobile_sam_port)
             
+            # 根据配置选择检测器
+            if self.detector_type == 'yolov7':
+                if YOLOv7Client is None:
+                    print("YOLOv7Client not available, falling back to GroundingDINO")
+                    self.detector_type = 'grounding_dino'
+                else:
+                    yolov7_port = self.config.get('yolov7_port', 12184)
+                    self.detector_client = YOLOv7Client(port=yolov7_port)
+                    print(f"Using YOLOv7 detector on port: {yolov7_port}")
+            
+            if self.detector_type == 'grounding_dino':
+                if GroundingDINOClient is None:
+                    print("GroundingDINOClient not available, object detection disabled")
+                    self.enabled = False
+                    return
+                else:
+                    grounding_dino_port = self.config.get('grounding_dino_port', 12181)
+                    self.detector_client = GroundingDINOClient(port=grounding_dino_port)
+                    print(f"Using GroundingDINO detector on port: {grounding_dino_port}")
+            
             print(f"Object detector initialized successfully")
-            print(f"Grounding DINO port: {grounding_dino_port}")
+            print(f"Detector type: {self.detector_type}")
             print(f"Mobile SAM port: {mobile_sam_port}")
             
         except Exception as e:
@@ -89,10 +111,10 @@ class ObjectDetector:
             return None
             
         try:
-            # 1. 使用Grounding DINO检测物体
+            # 1. 使用配置的检测器检测物体
             # 使用更精确的检测策略：同时检测多个物体，然后选择目标物体
             caption = target_object + " ."
-            detections = self.grounding_dino.predict(rgb_image, caption=caption)
+            detections = self.detector_client.predict(rgb_image, caption=caption)
             
             if detections.num_detections == 0:
                 print(f"No {target_object} detected")

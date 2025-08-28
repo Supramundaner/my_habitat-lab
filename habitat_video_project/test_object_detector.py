@@ -60,26 +60,31 @@ def test_object_detector():
     print("🚀 测试ObjectDetector的detect_object函数")
     print("=" * 60)
     
-    # 初始化ObjectDetector
+    # 初始化ObjectDetector - 确保使用YOLOv7
     config = {
-        'grounding_dino_port': 12181,
-        'mobile_sam_port': 12184,
-        'confidence_threshold': 0.35
+        'object_detection': {
+            'enabled': True,
+            'detector_type': 'yolov7',  # 明确指定使用YOLOv7
+            'yolov7_port': 12185,       # YOLOv7服务端口
+            'mobile_sam_port': 12184,   # Mobile SAM端口
+            'detection_threshold': 0.4,
+            'max_detection_distance': 10.0
+        }
     }
     
     object_detector = ObjectDetector(config)
     print("✅ ObjectDetector初始化成功")
     
-    # 加载图像
-    image_path = "/home/awangas/my_habitat-lab/habitat_video_project/data/window.png"
+    # 加载图像 - 使用cat_dog.jpeg
+    image_path = "cat_dog.jpeg"
     rgb_image = load_image(image_path)
     
     if rgb_image is None:
         print("❌ 图像加载失败，退出")
         return
     
-    # 设置目标物体
-    target_object = "dog"
+    # 设置目标物体 - 测试cat和dog（COCO类别）
+    target_object = "cat"
     print(f"🎯 目标物体: {target_object}")
     
     try:
@@ -94,26 +99,26 @@ def test_object_detector():
             print(f"🎭 Mask形状: {object_mask.shape}")
             print(f"🎭 Mask中True像素数量: {np.sum(object_mask)}")
             
-            # 保存bbox可视化（使用detections.py的逻辑）
-            if hasattr(object_detector, 'grounding_dino'):
+            # 保存bbox可视化（兼容YOLOv7和GroundingDINO）
+            if hasattr(object_detector, 'detector_client'):
                 # 重新获取detections用于可视化
-                detections = object_detector.grounding_dino.predict(rgb_image, f"{target_object} .")
+                detections = object_detector.detector_client.predict(rgb_image, f"{target_object} .")
                 
                 if hasattr(detections, 'annotated_frame') and detections.annotated_frame is not None:
                     annotated_image = detections.annotated_frame
-                    bbox_output_path = "object_detector_bbox_result.jpg"
+                    bbox_output_path = f"yolov7_{target_object}_bbox_result.jpg"
                     cv2.imwrite(bbox_output_path, cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
-                    print(f"💾 Bbox可视化已保存为: {bbox_output_path}")
+                    print(f"💾 YOLOv7 Bbox可视化已保存为: {bbox_output_path}")
                 else:
                     print("⚠️  未找到bbox标注图像")
             
             # 保存mask可视化
-            mask_output_path = "object_detector_mask_result.jpg"
+            mask_output_path = f"yolov7_{target_object}_mask_result.jpg"
             save_mask_visualization(object_mask, rgb_image, mask_output_path)
             
             # 创建组合可视化（bbox + mask）
-            if hasattr(object_detector, 'grounding_dino'):
-                detections = object_detector.grounding_dino.predict(rgb_image, f"{target_object} .")
+            if hasattr(object_detector, 'detector_client'):
+                detections = object_detector.detector_client.predict(rgb_image, f"{target_object} .")
                 if hasattr(detections, 'annotated_frame') and detections.annotated_frame is not None:
                     combined_image = detections.annotated_frame.copy()
                     
@@ -124,9 +129,11 @@ def test_object_detector():
                     alpha = 0.3
                     combined_result = cv2.addWeighted(combined_image, 1-alpha, colored_mask, alpha, 0)
                     
-                    combined_output_path = "object_detector_combined_result.jpg"
+                    combined_output_path = f"yolov7_{target_object}_combined_result.jpg"
                     cv2.imwrite(combined_output_path, cv2.cvtColor(combined_result, cv2.COLOR_RGB2BGR))
-                    print(f"💾 组合可视化已保存为: {combined_output_path}")
+                    print(f"💾 YOLOv7组合可视化已保存为: {combined_output_path}")
+                    
+            print(f"🎉 使用检测器类型: {object_detector.detector_type}")
             
         else:
             print("❌ 检测失败，未找到目标物体")
@@ -142,24 +149,28 @@ def test_multiple_objects():
     print("\n🔍 测试多个物体的检测")
     print("=" * 60)
     
-    # 初始化ObjectDetector
+    # 初始化ObjectDetector - 使用YOLOv7
     config = {
-        'grounding_dino_port': 12181,
-        'mobile_sam_port': 12184,
-        'confidence_threshold': 0.1
+        'object_detection': {
+            'enabled': True,
+            'detector_type': 'yolov7',  # 使用YOLOv7
+            'yolov7_port': 12185,
+            'mobile_sam_port': 12184,
+            'detection_threshold': 0.3
+        }
     }
     
     object_detector = ObjectDetector(config)
     
-    # 加载图像
-    image_path = "/home/awangas/my_habitat-lab/habitat_video_project/debug_rgb_Window.jpg"
+    # 加载图像 - 使用cat_dog.jpeg测试多个目标
+    image_path = "cat_dog.jpeg"
     rgb_image = load_image(image_path)
     
     if rgb_image is None:
         return
     
-    # 测试多个目标物体
-    target_objects = ["window"]
+    # 测试多个目标物体 - cat和dog都是COCO类别
+    target_objects = ["cat", "dog"]
     
     for target_object in target_objects:
         print(f"\n🎯 检测目标: {target_object}")
@@ -174,7 +185,7 @@ def test_multiple_objects():
                 print(f"  🎭 Mask中True像素数量: {np.sum(object_mask)}")
                 
                 # 保存mask可视化
-                mask_output_path = f"object_detector_{target_object}_mask.jpg"
+                mask_output_path = f"yolov7_multi_{target_object}_mask.jpg"
                 save_mask_visualization(object_mask, rgb_image, mask_output_path)
                 
             else:

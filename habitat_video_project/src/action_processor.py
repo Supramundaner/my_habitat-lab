@@ -103,9 +103,9 @@ class ActionProcessor:
         
         # 死循环检测参数
         loop_config = config.get('loop_detection', {})
-        self.loop_detection_threshold = loop_config.get('distance_threshold', 0.5)  # 距离阈值（米）
+        self.loop_detection_threshold = loop_config.get('distance_threshold', 1.0)  # 距离阈值（米）
         self.loop_detection_min_iterations = loop_config.get('min_iterations', 15)  # 最小持续迭代次数
-        self.loop_detection_window_size = loop_config.get('window_size', 60)  # 位置历史窗口大小
+        self.loop_detection_window_size = loop_config.get('window_size', 30)  # 位置历史窗口大小
         
         # 死循环检测状态
         self.position_history = []  # 位置历史记录
@@ -1067,11 +1067,6 @@ class ActionProcessor:
         
         while open_set and iterations < max_iterations:
             iterations += 1
-            
-            if iterations % 20000 == 0:
-                # 如果开放集过大，可能路径不存在
-                if len(open_set) > 10000:
-                    print(f"[WARNING] 开放集过大，可能路径不存在")
             
             current_f, current_g, current = heapq.heappop(open_set)
             
