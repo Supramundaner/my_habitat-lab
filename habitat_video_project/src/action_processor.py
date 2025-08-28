@@ -295,6 +295,7 @@ class ActionProcessor:
             if vfh_target is None:
                 return {
                     'success': False,
+                    'failed': True,
                     'reason': 'no_intermediate_target',
                     'message': '无法找到中间目标点'
                 }
@@ -502,13 +503,13 @@ class ActionProcessor:
                     adjusted_target_pos = nearest_walkable_world
                 else:
                     print(f"[ERROR] 无法找到adjusted_target_pos附近的可行走区域")
-                    return {'failed': True, 'reason': 'no_walkable_area_near_target'}
+                    return {'success': False, 'failed': True, 'reason': 'no_walkable_area_near_target'}
         
         # 每5次行动重新规划A*路径
         if action_count % self.nav_config.a_star_interval == 0:
             current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
             if current_path_result is None:
-                return {'failed': True, 'reason': 'no_a_star_path'}
+                return {'success': False, 'failed': True, 'reason': 'no_a_star_path'}
             
             current_path = current_path_result['path']
             if current_path_result['was_adjusted']:
@@ -525,7 +526,7 @@ class ActionProcessor:
             print(f"距离信息 - 直线距离: {line_distance:.2f}m, 路径距离: {path_distance_to_target:.2f}m")
         
         if not vfh_target_result['success']:
-            return {'failed': True, 'reason': vfh_target_result['reason']}
+            return {'success': False, 'failed': True, 'reason': vfh_target_result['reason']}
         
         # 执行VFH*导航
         result = self._execute_vfh_navigation(
@@ -568,7 +569,7 @@ class ActionProcessor:
             depth_image = observation.get('depth')
             
             if rgb_image is None or depth_image is None:
-                return {'failed': True, 'reason': 'no_observation_data'}
+                return {'success': False, 'failed': True, 'reason': 'no_observation_data'}
             
             # 相机参数
             camera_params = self._get_camera_params()
@@ -602,7 +603,7 @@ class ActionProcessor:
                 target_pos_2d = detected_target_pos.copy()
             else:
                 print(f"[ERROR] 意外的坐标维度: {len(detected_target_pos)}")
-                return {'failed': True, 'reason': 'invalid_coordinates'}
+                return {'success': False, 'failed': True, 'reason': 'invalid_coordinates'}
         
         # 检查目标点是否在障碍物内
         if self.map_builder.grid_map is not None:
@@ -624,7 +625,7 @@ class ActionProcessor:
                         detected_target_pos = nearest_walkable_world
                 else:
                     print(f"[ERROR] 无法找到目标点附近的可行走区域")
-                    return {'failed': True, 'reason': 'no_walkable_area_near_target'}
+                    return {'success': False, 'failed': True, 'reason': 'no_walkable_area_near_target'}
         
         # 检查是否足够接近目标
         current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
@@ -711,7 +712,7 @@ class ActionProcessor:
         observation = self.simulator.get_observation()
         depth_observation = observation.get('depth')
         if depth_observation is None:
-            return {'failed': True, 'reason': 'no_depth_data'}
+            return {'success': False, 'failed': True, 'reason': 'no_depth_data'}
         
         # 更新占用地图
         # current_pos = np.array([current_pos_2d[0], 0, current_pos_2d[1]])
@@ -729,7 +730,7 @@ class ActionProcessor:
         ideal_direction = vfh_star.get_best_direction(current_pos_2d, robot_theta, obstacles, prev_direction)
         
         if ideal_direction is None:
-            return {'failed': True, 'reason': 'no_feasible_path'}
+            return {'success': False, 'failed': True, 'reason': 'no_feasible_path'}
             
         action_name, action_value = vfh_star.get_discrete_action(ideal_direction, robot_theta)
         
