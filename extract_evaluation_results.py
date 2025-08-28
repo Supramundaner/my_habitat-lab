@@ -146,7 +146,7 @@ def save_resulxts(results: List[Dict], stats: Dict, output_file: str = None):
 def main():
     parser = argparse.ArgumentParser(description='提取evaluation_results并计算平均SR和SPL')
     parser.add_argument('--output_dir', '-d', 
-                       default='/home/yaoaa/habitat-lab/habitat_video_project/eval/output_cons6',
+                       default='/home/yaoaa/habitat-lab/habitat_video_project/eval/output',
                        help='output文件夹路径 (默认: /home/yaoaa/habitat-lab/habitat_video_project/eval/output)')
     parser.add_argument('--save', '-s', 
                        help='保存详细结果到指定的JSON文件')
