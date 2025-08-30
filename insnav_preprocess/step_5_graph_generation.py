@@ -241,11 +241,18 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
     
     # Convert points to world coordinates
     corner_coords = metadata['unprojected_coords']
-    tl_x, tl_z = corner_coords['top_left']['world_x'], corner_coords['top_left']['world_z']
-    br_x, br_z = corner_coords['bottom_right']['world_x'], corner_coords['bottom_right']['world_z']
+    
+    # Extract coordinates from the 2D arrays [x, z]
+    tl_x, tl_z = corner_coords['top_left'][0], corner_coords['top_left'][1]
+    br_x, br_z = corner_coords['bottom_right'][0], corner_coords['bottom_right'][1]
     
     world_width = br_x - tl_x
     world_height = br_z - tl_z
+    
+    print(f"🌍 World coordinate conversion:")
+    print(f"  - Top-left: ({tl_x:.3f}, {tl_z:.3f})")
+    print(f"  - Bottom-right: ({br_x:.3f}, {br_z:.3f})")
+    print(f"  - World dimensions: {world_width:.3f}m x {world_height:.3f}m")
     
     nodes_data = []
     for x, y, point_id in points:

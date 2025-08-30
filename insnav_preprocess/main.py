@@ -233,7 +233,7 @@ class ImageInstanceNavigationOrchestrator:
             
             result = select_room_with_llm(
                 topdown_path, room_annotation_path, goal_image_path,
-                config_with_goal, self.output_dir
+                config_with_goal, self.output_dir, self.output_data
             )
             self._update_step_status("step_4_room_selection", True, result)
             return True
@@ -275,19 +275,19 @@ class ImageInstanceNavigationOrchestrator:
             
             selected_room = room_data['final_selected_room']
             
-            # Get room bounding box
-            room_segmentation_path = os.path.join(self.output_dir, "room_segmentation_results.json")
-            with open(room_segmentation_path, 'r', encoding='utf-8') as f:
-                segmentation_data = json.load(f)
+            # Get room bounding box from orchestrator's internal data
+            step3_results = self.output_data.get('final_results', {}).get('step_3_room_segmentation', {})
+            room_bboxes = step3_results.get('room_bounding_boxes', {})
             
-            room_bbox = None
-            for room in segmentation_data['room_annotations']:
-                if room['room_id'] == selected_room:
-                    room_bbox = room['bounding_box']
-                    break
+            if not room_bboxes:
+                raise ValueError("No room bounding boxes found in Step 3 results")
+            
+            room_bbox = room_bboxes.get(str(selected_room))
             
             if room_bbox is None:
-                raise ValueError(f"Room {selected_room} bounding box not found")
+                raise ValueError(f"Room {selected_room} bounding box not found in available rooms: {list(room_bboxes.keys())}")
+            
+            print(f"✓ Found room {selected_room} bounding box: {room_bbox}")
             
             graph_path = os.path.join(self.output_dir, "graph_with_topdown.png")
             topdown_path = os.path.join(self.output_dir, "topdown_view.png")
@@ -308,6 +308,7 @@ class ImageInstanceNavigationOrchestrator:
             print(f"✗ Step 6 failed: {e}")
             self._update_step_status("step_6_node_selection", False, {"error": str(e)})
             return False
+
     
     def run_step_7(self) -> bool:
         """Step 7: Generate action.json."""

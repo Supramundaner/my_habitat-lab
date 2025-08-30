@@ -92,13 +92,25 @@ def load_prompt_template(prompt_path: str) -> str:
     with open(prompt_path, 'r', encoding='utf-8') as f:
         return f.read()
 
-def get_available_rooms(output_dir: str) -> List[int]:
+def get_available_rooms(output_dir: str, orchestrator_data: Dict[str, Any] = None) -> List[int]:
     """Get available room numbers from room segmentation results."""
-    # Try to find room information from different possible sources during workflow
     room_ids = []
     
+    # First try: Get from orchestrator data (current workflow state)
+    if orchestrator_data and "final_results" in orchestrator_data:
+        try:
+            step3_results = orchestrator_data["final_results"].get("step_3_room_segmentation", {})
+            room_bboxes = step3_results.get("room_bounding_boxes", {})
+            if room_bboxes:
+                room_ids = [int(room_id) for room_id in room_bboxes.keys()]
+                print(f"✓ Found available rooms from orchestrator data: {sorted(room_ids)}")
+                return room_ids
+        except Exception as e:
+            print(f"⚠️ Could not load from orchestrator data: {e}")
+    
+    # Try to find room information from different possible sources during workflow
     try:
-        # First try: Check if there's a step3 intermediate result file
+        # Second try: Check if there's a step3 intermediate result file
         # (This would be saved by workflow orchestrator if it exists)
         step3_result_path = os.path.join(output_dir, "step3_results.json")
         if os.path.exists(step3_result_path):
@@ -113,7 +125,7 @@ def get_available_rooms(output_dir: str) -> List[int]:
         print(f"⚠️ Could not load from step3_results.json: {e}")
     
     try:
-        # Second try: Check final output.json (for completed workflows)
+        # Third try: Check final output.json (for completed workflows)
         output_json_path = os.path.join(output_dir, "output.json")
         if os.path.exists(output_json_path):
             with open(output_json_path, 'r', encoding='utf-8') as f:
@@ -142,7 +154,7 @@ def get_available_rooms(output_dir: str) -> List[int]:
         print(f"⚠️ Could not load from output.json: {e}")
     
     try:
-        # Third try: Try to parse room annotation image to get room numbers
+        # Fourth try: Try to parse room annotation image to get room numbers
         # This is a fallback method by analyzing the room annotation image
         room_annotation_path = os.path.join(output_dir, "room_annotation.png")
         if os.path.exists(room_annotation_path):
@@ -158,7 +170,7 @@ def get_available_rooms(output_dir: str) -> List[int]:
     return []
 
 def select_room_with_llm(topdown_path: str, room_annotation_path: str, goal_image_path: str,
-                        config: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
+                        config: Dict[str, Any], output_dir: str, orchestrator_data: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Use LLM to select target room from room annotation and goal image.
     
@@ -183,8 +195,8 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str, goal_imag
             raise FileNotFoundError(f"{name.capitalize()} image not found: {path}")
     
     # Get available rooms for validation
-    available_rooms = get_available_rooms(output_dir)
-    has_actual_room_data = any(os.path.exists(os.path.join(output_dir, f)) for f in ["step3_results.json", "output.json"])
+    available_rooms = get_available_rooms(output_dir, orchestrator_data)
+    has_actual_room_data = any(os.path.exists(os.path.join(output_dir, f)) for f in ["step3_results.json", "output.json"]) or (orchestrator_data and "final_results" in orchestrator_data and "step_3_room_segmentation" in orchestrator_data["final_results"])
     
     if not available_rooms:
         print("⚠️ Warning: Could not determine available rooms, proceeding without validation")

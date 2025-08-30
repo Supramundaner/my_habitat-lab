@@ -1,11 +1,14 @@
 {
-  "workflow_status": "failed_at_step_5",
+  "workflow_status": "completed_successfully",
   "steps_completed": [
     "step_0_goal_image_rendering",
     "step_1_topdown_generation",
     "step_2_wall_mask_generation",
     "step_3_room_segmentation",
-    "step_4_room_selection"
+    "step_4_room_selection",
+    "step_5_graph_generation",
+    "step_6_node_selection",
+    "step_7_action_generation"
   ],
   "generated_files": {
     "goal_image": "output_insnav/goal_image.png",
@@ -16,7 +19,14 @@
     "room_annotation": "output_insnav/room_annotation.png",
     "room_segmentation": "output_insnav/room_segmentation.png",
     "llm_log": "output_insnav/llm_room_selection_log.json",
-    "llm_content": "output_insnav/preprocess/llm_room_selection_content.json"
+    "llm_content": "output_insnav/preprocess/llm_room_selection_content.json",
+    "graph_image": "output_insnav/graph_with_topdown.png",
+    "nodes_data": "output_insnav/navigation_nodes.json",
+    "padded_mask": "output_insnav/padded_wall_mask.png",
+    "node_selection_log": "output_insnav/node_selection_log.json",
+    "cropped_original": "output_insnav/room_1_original.png",
+    "cropped_with_nodes": "output_insnav/room_1_with_nodes.png",
+    "action_json": "output_insnav/action.json"
   },
   "llm_responses": {
     "room_selection": {
@@ -107,15 +117,42 @@
         1,
         2,
         3,
-        4,
-        5
+        4
       ]
+    },
+    "step_5_graph_generation": {
+      "total_nodes": 172,
+      "node_spacing_m": 1.0,
+      "wall_padding_m": 0.1,
+      "generation_success": true
+    },
+    "step_6_node_selection": {
+      "selected_node_id": 0,
+      "selected_node_world_coords": [
+        9.010813351604753,
+        1.0732333311196527
+      ],
+      "selected_room": 1,
+      "total_nodes_in_room": 133,
+      "llm_attempts": 3,
+      "selection_success": true
+    },
+    "step_7_action_generation": {
+      "action_file_generated": true,
+      "agent_start_position": [
+        0.8021568059921265,
+        2.0644748210906982,
+        4.757991790771484
+      ],
+      "target_node_id": 0,
+      "target_coordinate": [
+        9.010813351604753,
+        1.0732333311196527
+      ],
+      "target_name": "toilet_379",
+      "target_category": "toilet",
+      "navigation_type": "image_instance_navigation"
     }
   },
-  "errors": [
-    {
-      "step": "step_5_graph_generation",
-      "error": "list indices must be integers or slices, not str"
-    }
-  ]
+  "errors": []
 }
