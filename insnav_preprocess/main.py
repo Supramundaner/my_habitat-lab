@@ -248,21 +248,18 @@ class ImageInstanceNavigationOrchestrator:
         print("STEP 5: Navigation graph generation")
         print("="*60)
         
-        try:
-            topdown_path = os.path.join(self.output_dir, "topdown_view.png")
-            wall_mask_path = os.path.join(self.output_dir, "wall_mask.png")
-            metadata_path = os.path.join(self.output_dir, "metadata.json")
-            
-            result = generate_navigation_graph(
-                topdown_path, wall_mask_path, metadata_path,
-                self.config, self.output_dir
-            )
-            self._update_step_status("step_5_graph_generation", True, result)
-            return True
-        except Exception as e:
-            print(f"✗ Step 5 failed: {e}")
-            self._update_step_status("step_5_graph_generation", False, {"error": str(e)})
-            return False
+        
+        topdown_path = os.path.join(self.output_dir, "topdown_view.png")
+        wall_mask_path = os.path.join(self.output_dir, "wall_mask.png")
+        metadata_path = os.path.join(self.output_dir, "metadata.json")
+        
+        result = generate_navigation_graph(
+            topdown_path, wall_mask_path, metadata_path,
+            self.config, self.output_dir
+        )
+        self._update_step_status("step_5_graph_generation", True, result)
+        return True
+
     
     def run_step_6(self) -> bool:
         """Step 6: Navigation node selection with retry logic."""

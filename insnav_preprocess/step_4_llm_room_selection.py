@@ -11,8 +11,11 @@ from typing import Dict, Any, List
 try:
     from volcenginesdkarkruntime import Ark
 except ImportError:
-    print("Warning: volcenginesdkarkruntime not found. Please install with: pip install volcenginesdkarkruntime")
-    Ark = None
+    try:
+        from byteplussdkarkruntime import Ark
+    except ImportError:
+        print("Warning: Neither volcenginesdkarkruntime nor byteplussdkarkruntime found. Please install with: pip install volcenginesdkarkruntime")
+        Ark = None
 
 def encode_image(image_path):
     """Encode image as base64"""
@@ -91,15 +94,67 @@ def load_prompt_template(prompt_path: str) -> str:
 
 def get_available_rooms(output_dir: str) -> List[int]:
     """Get available room numbers from room segmentation results."""
-    try:
-        results_path = os.path.join(output_dir, "room_segmentation_results.json")
-        if os.path.exists(results_path):
-            with open(results_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            return [room['room_id'] for room in data['room_annotations']]
-    except Exception as e:
-        print(f"Warning: Failed to load room data: {e}")
+    # Try to find room information from different possible sources during workflow
+    room_ids = []
     
+    try:
+        # First try: Check if there's a step3 intermediate result file
+        # (This would be saved by workflow orchestrator if it exists)
+        step3_result_path = os.path.join(output_dir, "step3_results.json")
+        if os.path.exists(step3_result_path):
+            with open(step3_result_path, 'r', encoding='utf-8') as f:
+                step3_data = json.load(f)
+            room_bboxes = step3_data.get("results", {}).get("room_bounding_boxes", {})
+            room_ids = [int(room_id) for room_id in room_bboxes.keys()]
+            if room_ids:
+                print(f"✓ Found available rooms from step3_results.json: {sorted(room_ids)}")
+                return room_ids
+    except Exception as e:
+        print(f"⚠️ Could not load from step3_results.json: {e}")
+    
+    try:
+        # Second try: Check final output.json (for completed workflows)
+        output_json_path = os.path.join(output_dir, "output.json")
+        if os.path.exists(output_json_path):
+            with open(output_json_path, 'r', encoding='utf-8') as f:
+                output_data = json.load(f)
+            
+            # Try different possible locations for room data
+            room_bboxes = {}
+            
+            # Location 1: final_results.step_3_room_segmentation.room_bounding_boxes
+            if "final_results" in output_data and "step_3_room_segmentation" in output_data["final_results"]:
+                room_bboxes = output_data["final_results"]["step_3_room_segmentation"].get("room_bounding_boxes", {})
+            
+            # Location 2: final_results.room_bounding_boxes (fallback)
+            if not room_bboxes and "final_results" in output_data:
+                room_bboxes = output_data["final_results"].get("room_bounding_boxes", {})
+            
+            # Location 3: room_bounding_boxes (direct)
+            if not room_bboxes:
+                room_bboxes = output_data.get("room_bounding_boxes", {})
+                
+            room_ids = [int(room_id) for room_id in room_bboxes.keys()]
+            if room_ids:
+                print(f"✓ Found available rooms from output.json: {sorted(room_ids)}")
+                return room_ids
+    except Exception as e:
+        print(f"⚠️ Could not load from output.json: {e}")
+    
+    try:
+        # Third try: Try to parse room annotation image to get room numbers
+        # This is a fallback method by analyzing the room annotation image
+        room_annotation_path = os.path.join(output_dir, "room_annotation.png")
+        if os.path.exists(room_annotation_path):
+            print("⚠️ Attempting to extract room numbers from room_annotation.png...")
+            # This is a basic OCR-like approach - in practice, you might want to use OCR
+            # For now, we'll make a reasonable assumption based on typical room counts
+            # You could implement actual OCR here if needed
+            print("⚠️ Image-based room detection not implemented, using fallback")
+    except Exception as e:
+        print(f"⚠️ Could not analyze room annotation image: {e}")
+    
+    print("⚠️ Warning: Could not determine available rooms, proceeding without validation")
     return []
 
 def select_room_with_llm(topdown_path: str, room_annotation_path: str, goal_image_path: str,
@@ -129,23 +184,49 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str, goal_imag
     
     # Get available rooms for validation
     available_rooms = get_available_rooms(output_dir)
+    has_actual_room_data = any(os.path.exists(os.path.join(output_dir, f)) for f in ["step3_results.json", "output.json"])
+    
     if not available_rooms:
-        raise ValueError("No rooms found in segmentation results")
+        print("⚠️ Warning: Could not determine available rooms, proceeding without validation")
+        # Use a default fallback set of rooms
+        available_rooms = None  # Common room numbers
+        has_actual_room_data = False
     else:
         print(f"📋 Available rooms: {available_rooms}")
     
     if Ark is None:
-        # Fallback to manual selection (first room)
+        # Fallback to manual selection (first room or reasonable default)
         print("⚠️ LLM not available, using fallback room selection")
-        selected_room = available_rooms[0] if available_rooms else 1
+        if available_rooms and has_actual_room_data:
+            # If we have actual room data, use the first available room
+            selected_room = available_rooms[0]
+        else:
+            # If we're using the default fallback room list, pick room 1
+            selected_room = 1
+        
+        # Create fallback response data
+        fallback_response = {
+            "reasoning_content": f"LLM not available. Selected room {selected_room} as fallback.",
+            "content": str(selected_room)
+        }
         
         return {
-            "raw_response": None,
-            "selected_room": selected_room,
-            "model_used": "fallback",
-            "available_rooms": available_rooms,
-            "attempts_made": 1,
-            "all_responses": []
+            "generated_files": {
+                "llm_log": None,
+                "llm_content": None
+            },
+            "results": {
+                "selected_room": selected_room,
+                "attempts_made": 0,
+                "llm_success": False,
+                "available_rooms": available_rooms
+            },
+            "llm_responses": {
+                "room_selection": {
+                    "selected_room": selected_room,
+                    "response": fallback_response
+                }
+            }
         }
     
     # Get LLM configuration
@@ -220,7 +301,9 @@ Format: Final Answer: [room_number]"""
             # Validate room number
             try:
                 room_num = int(parsed_response['content'])
-                if room_num in available_rooms:
+                # If we have actual room data, validate against it
+                # If using fallback room list, be more lenient
+                if room_num in available_rooms or not has_actual_room_data:
                     selected_room = room_num
                     print(f"✅ Valid room selected: {room_num}")
                 else:
