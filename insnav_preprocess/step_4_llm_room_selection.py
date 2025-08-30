@@ -66,7 +66,8 @@ def parse_llm_response(response):
     lines = full_response.split('\\n')
     content = ""
     
-    # Look for "Final Answer:" or just a number at the end
+    # Look for various answer formats with more flexible logic
+    import re
     for line in reversed(lines):
         line = line.strip()
         if line.lower().startswith('final answer:'):
@@ -78,6 +79,13 @@ def parse_llm_response(response):
         elif line.isdigit():
             content = line
             break
+        # Try to match common answer formats with keywords
+        if any(keyword in line.lower() for keyword in ["答案", "answer", "room", "房间", "选择", "select"]):
+            # Extract numbers from the line
+            numbers = re.findall(r'\d+', line)
+            if numbers:
+                content = numbers[-1]  # Take the last number found
+                break
     
     return {
         "reasoning_content": reasoning_content,
