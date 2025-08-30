@@ -112,8 +112,13 @@ def get_nodes_in_bbox(nodes_data: List[Dict], bbox: Dict[str, int]) -> List[Dict
     nodes_in_room = []
     
     for node in nodes_data:
-        x = node["pixel_coordinates"]["x"]
-        y = node["pixel_coordinates"]["y"]
+        # Handle both list format [x, y] and dict format {"x": x, "y": y}
+        pixel_coords = node["pixel_coordinates"]
+        if isinstance(pixel_coords, list):
+            x, y = pixel_coords[0], pixel_coords[1]
+        else:
+            x = pixel_coords["x"]
+            y = pixel_coords["y"]
         
         if (bbox['x_min'] <= x <= bbox['x_max'] and 
             bbox['y_min'] <= y <= bbox['y_max']):
@@ -127,9 +132,17 @@ def draw_nodes_on_cropped_image(cropped_image: np.ndarray, nodes_in_room: List[D
     result_image = cropped_image.copy()
     
     for node in nodes_in_room:
+        # Handle both list format [x, y] and dict format {"x": x, "y": y}
+        pixel_coords = node["pixel_coordinates"]
+        if isinstance(pixel_coords, list):
+            x, y = pixel_coords[0], pixel_coords[1]
+        else:
+            x = pixel_coords["x"]
+            y = pixel_coords["y"]
+            
         # Adjust coordinates relative to crop
-        x = int(node["pixel_coordinates"]["x"] - bbox['x_min'])
-        y = int(node["pixel_coordinates"]["y"] - bbox['y_min'])
+        x = int(x - bbox['x_min'])
+        y = int(y - bbox['y_min'])
         node_id = node["node_id"]
         
         # Ensure coordinates are within cropped image bounds

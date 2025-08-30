@@ -31,7 +31,7 @@ def world_to_pixel(world_coords, nodes_data):
     # If the target is exactly a node, return its pixel coordinates
     if min_dist < 0.01:  # Very close match
         pixel_coords = closest_node['pixel_coordinates']
-        return (int(pixel_coords['x']), int(pixel_coords['y']))
+        return (int(pixel_coords[0]), int(pixel_coords[1]))
     
     # For points not exactly on nodes, use linear interpolation
     # Find two closest nodes for better interpolation
@@ -45,8 +45,8 @@ def world_to_pixel(world_coords, nodes_data):
         # Simple linear interpolation based on world distance
         world1 = node1['world_coordinates']
         world2 = node2['world_coordinates']
-        pixel1 = (node1['pixel_coordinates']['x'], node1['pixel_coordinates']['y'])
-        pixel2 = (node2['pixel_coordinates']['x'], node2['pixel_coordinates']['y'])
+        pixel1 = (node1['pixel_coordinates'][0], node1['pixel_coordinates'][1])
+        pixel2 = (node2['pixel_coordinates'][0], node2['pixel_coordinates'][1])
         
         # Calculate interpolation weights
         dist1 = ((world_coords[0] - world1[0])**2 + (world_coords[1] - world1[1])**2)**0.5
@@ -66,7 +66,7 @@ def world_to_pixel(world_coords, nodes_data):
     
     # Fallback to closest node
     pixel_coords = closest_node['pixel_coordinates']
-    return (int(pixel_coords['x']), int(pixel_coords['y']))
+    return (int(pixel_coords[0]), int(pixel_coords[1]))
 
 def generate_path_visualization(topdown_path: str, agent_position: list, target_coords: list, 
                               output_dir: str, nodes_data: Dict = None) -> str:

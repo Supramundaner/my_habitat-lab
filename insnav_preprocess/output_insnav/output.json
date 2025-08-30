@@ -20,9 +20,8 @@
     "room_segmentation": "output_insnav/room_segmentation.png",
     "llm_log": "output_insnav/llm_room_selection_log.json",
     "llm_content": "output_insnav/preprocess/llm_room_selection_content.json",
-    "graph_image": "output_insnav/graph_with_topdown.png",
-    "nodes_data": "output_insnav/navigation_nodes.json",
-    "padded_mask": "output_insnav/padded_wall_mask.png",
+    "graph_with_topdown_view": "output_insnav/graph_with_topdown_view.png",
+    "navigation_nodes": "output_insnav/navigation_nodes.json",
     "node_selection_log": "output_insnav/node_selection_log.json",
     "cropped_original": "output_insnav/room_4_original.png",
     "cropped_with_nodes": "output_insnav/room_4_with_nodes.png",
@@ -33,7 +32,7 @@
     "room_selection": {
       "selected_room": 4,
       "response": {
-        "reasoning_content": "\nOkay, let's try to figure this out. First, the target object is a toilet, right? The first image shows a bathroom with a toilet, sink, and shower curtain. So we need to find which room in the layout is a bathroom.\n\nLooking at the second image, the floor plan has four numbered rooms. Let's go through each one. \n\nRoom 1: Let's see, the layout shows room 1 near the stairs. Wait, what's in room 1? The image might have furniture. Wait, no, let's check the other rooms. Room 2 has a bed, maybe? Because a bed is a common bedroom item. Room 3 looks like it has a desk or something, maybe a living room or office? Room 4: Let's look at room 4. The floor plan shows a small room with what looks like a sink and a toilet? Wait, in typical house layouts, bathrooms are smaller and have fixtures like toilets, sinks, showers. Let's think about the size. Bathrooms are usually not as big as bedrooms or living rooms. Room 4 in the layout is a smaller room, and if you look at the details, maybe there's a toilet and sink visible, which matches the first image. \n\nTypical rooms: Toilets are found in bathrooms. So we need to identify which room is the bathroom. Let's eliminate the others. Room 2: If there's a bed, that's a bedroom. Room 3: Maybe a living room or dining area? Room 1: Maybe a hallway or another living space? Room 4: Small, has plumbing fixtures (since toilets need plumbing), so that's likely the bathroom. \n\nSo putting it all together, the target object is a toilet, which is in a bathroom. Room 4 is the bathroom in the layout.",
+        "reasoning_content": "\nOkay, let's try to figure this out. First, the target object is a toilet, right? The first image shows a bathroom with a toilet, sink, and shower curtain. So we need to find which room in the layout is a bathroom, because that's where toilets are typically found.\n\nNow, looking at the second image, the room layout has four numbered rooms. Let's go through each one. \n\nRoom 1: Let's see, the layout shows different areas. Room 1 is near the stairs maybe? Wait, no, let's check the details. The rooms are labeled 1,2,3,4. Let's look at each room's contents. Room 2 has a bed, I think. Because a bed is a common furniture in a bedroom, so room 2 might be a bedroom. Room 3 has a desk or table and chairs, maybe a living room or office? Room 4: let's see, the description of the first image has a toilet, sink, and shower. In the layout, room 4 has a small area with what looks like a toilet and sink? Wait, the first image's bathroom has a toilet, sink, and a shower curtain. So in the floor plan, room 4 might be the bathroom because it's a smaller room with plumbing fixtures. Toilets are usually in bathrooms, so we need to identify which room is the bathroom. \n\nTypical room types: Toilets are in bathrooms. So we need to find the bathroom in the layout. Let's check the size. Bathrooms are usually smaller than bedrooms or living rooms. Room 4 looks like a small room with a toilet and sink, which matches the first image. The other rooms: room 1 might be a hallway or entry? No, wait, the labels are on the rooms. Wait, looking again, room 4 in the layout has a toilet and sink visible? Let me visualize. The first image is a bathroom, so the room with plumbing fixtures (toilet, sink) is the bathroom. So room 4 is likely the bathroom. Therefore, the target object (toilet) is in room 4.",
         "content": "4"
       }
     }
@@ -108,7 +107,7 @@
         "spacing_in_meters_per_pixel": 0.006619405495855953,
         "morph_closing_width_meters": 0.01,
         "seed_distance_threshold": "dynamic_otsu",
-        "min_room_area_pixels": 1000
+        "min_room_area_pixels": 18000
       }
     },
     "step_4_room_selection": {
@@ -123,19 +122,526 @@
       ]
     },
     "step_5_graph_generation": {
-      "total_nodes": 167,
-      "node_spacing_m": 1.0,
-      "wall_padding_m": 0.1,
-      "generation_success": true
+      "total_nodes": 46,
+      "pds_radius_meters": 1.0,
+      "pds_radius_pixels": 151.0709686279297,
+      "nodes_data": [
+        {
+          "node_id": 0,
+          "pixel_coordinates": [
+            1057.0,
+            1245.0
+          ],
+          "world_coordinates": [
+            4.990328160599085,
+            3.9308108252775247
+          ]
+        },
+        {
+          "node_id": 1,
+          "pixel_coordinates": [
+            1072.527361812717,
+            985.8837883268507
+          ],
+          "world_coordinates": [
+            5.093110064718327,
+            2.215615549662905
+          ]
+        },
+        {
+          "node_id": 2,
+          "pixel_coordinates": [
+            1286.2870242856538,
+            1217.7783415961449
+          ],
+          "world_coordinates": [
+            6.508071949283999,
+            3.7506196300327312
+          ]
+        },
+        {
+          "node_id": 3,
+          "pixel_coordinates": [
+            861.0857008616665,
+            1365.4462170214638
+          ],
+          "world_coordinates": [
+            3.6934919721660338,
+            4.728093176184459
+          ]
+        },
+        {
+          "node_id": 4,
+          "pixel_coordinates": [
+            875.5416603239992,
+            1173.1405640617522
+          ],
+          "world_coordinates": [
+            3.7891818296788697,
+            3.455144080098778
+          ]
+        },
+        {
+          "node_id": 5,
+          "pixel_coordinates": [
+            1161.2345383934125,
+            1419.381412903848
+          ],
+          "world_coordinates": [
+            5.680298836898449,
+            5.085112108228382
+          ]
+        },
+        {
+          "node_id": 6,
+          "pixel_coordinates": [
+            1403.151533063547,
+            1361.4477393796335
+          ],
+          "world_coordinates": [
+            7.281645520958892,
+            4.7016256313070715
+          ]
+        },
+        {
+          "node_id": 7,
+          "pixel_coordinates": [
+            627.2529710860288,
+            1310.6229360154252
+          ],
+          "world_coordinates": [
+            2.145658315578178,
+            4.365195648592233
+          ]
+        },
+        {
+          "node_id": 8,
+          "pixel_coordinates": [
+            1664.2679853962234,
+            1382.719059190729
+          ],
+          "world_coordinates": [
+            9.010081200588218,
+            4.842429122568746
+          ]
+        },
+        {
+          "node_id": 9,
+          "pixel_coordinates": [
+            1146.1842883513862,
+            1121.5069101183255
+          ],
+          "world_coordinates": [
+            5.580675129056253,
+            3.113359987414535
+          ]
+        },
+        {
+          "node_id": 10,
+          "pixel_coordinates": [
+            1525.977758068229,
+            1465.854458829138
+          ],
+          "world_coordinates": [
+            8.094682109790124,
+            5.392736043835412
+          ]
+        },
+        {
+          "node_id": 11,
+          "pixel_coordinates": [
+            1344.742419721514,
+            1514.8837144022893
+          ],
+          "world_coordinates": [
+            6.895011915094565,
+            5.717280567634057
+          ]
+        },
+        {
+          "node_id": 12,
+          "pixel_coordinates": [
+            1452.0828259687432,
+            1070.5661684975405
+          ],
+          "world_coordinates": [
+            7.605541590134885,
+            2.776162562366933
+          ]
+        },
+        {
+          "node_id": 13,
+          "pixel_coordinates": [
+            1811.459618421408,
+            1306.9645637432634
+          ],
+          "world_coordinates": [
+            9.984402305179138,
+            4.340979399067998
+          ]
+        },
+        {
+          "node_id": 14,
+          "pixel_coordinates": [
+            1040.344874289558,
+            1539.0681127574953
+          ],
+          "world_coordinates": [
+            4.8800811299372135,
+            5.877366907020476
+          ]
+        },
+        {
+          "node_id": 15,
+          "pixel_coordinates": [
+            1341.7996048838038,
+            940.9203221215207
+          ],
+          "world_coordinates": [
+            6.8755322303845405,
+            1.9179841343506103
+          ]
+        },
+        {
+          "node_id": 16,
+          "pixel_coordinates": [
+            1225.7164540731483,
+            834.4636437430618
+          ],
+          "world_coordinates": [
+            6.107130783932212,
+            1.2133042124216695
+          ]
+        },
+        {
+          "node_id": 17,
+          "pixel_coordinates": [
+            1693.841402875461,
+            1142.4881073037197
+          ],
+          "world_coordinates": [
+            9.205839642781527,
+            3.2522430393731705
+          ]
+        },
+        {
+          "node_id": 18,
+          "pixel_coordinates": [
+            1614.629401600106,
+            958.1366087143289
+          ],
+          "world_coordinates": [
+            8.681503286201693,
+            2.0319457164412764
+          ]
+        },
+        {
+          "node_id": 19,
+          "pixel_coordinates": [
+            1738.953903732423,
+            864.8625926045821
+          ],
+          "world_coordinates": [
+            9.504457578885908,
+            1.4145271815838614
+          ]
+        },
+        {
+          "node_id": 20,
+          "pixel_coordinates": [
+            1343.973287617564,
+            595.7399034187871
+          ],
+          "world_coordinates": [
+            6.889920717818639,
+            -0.3669050262721232
+          ]
+        },
+        {
+          "node_id": 21,
+          "pixel_coordinates": [
+            1534.6182865088958,
+            789.108417349252
+          ],
+          "world_coordinates": [
+            8.151877271237375,
+            0.9130795775646945
+          ]
+        },
+        {
+          "node_id": 22,
+          "pixel_coordinates": [
+            1531.8508447119152,
+            458.8120364921617
+          ],
+          "world_coordinates": [
+            8.13355845179698,
+            -1.2732861011420593
+          ]
+        },
+        {
+          "node_id": 23,
+          "pixel_coordinates": [
+            1766.0766044552363,
+            705.7841059423864
+          ],
+          "world_coordinates": [
+            9.683993733112953,
+            0.3615221726996758
+          ]
+        },
+        {
+          "node_id": 24,
+          "pixel_coordinates": [
+            1795.0215055309657,
+            499.4722021436254
+          ],
+          "world_coordinates": [
+            9.875591770370644,
+            -1.0041399771663473
+          ]
+        },
+        {
+          "node_id": 25,
+          "pixel_coordinates": [
+            1731.7477562573981,
+            1527.9083032379506
+          ],
+          "world_coordinates": [
+            9.45675716668578,
+            5.803495602554096
+          ]
+        },
+        {
+          "node_id": 26,
+          "pixel_coordinates": [
+            710.1715212735485,
+            1111.488353672426
+          ],
+          "world_coordinates": [
+            2.694529822397853,
+            3.0470430998160047
+          ]
+        },
+        {
+          "node_id": 27,
+          "pixel_coordinates": [
+            408.67055510071634,
+            1183.7994397022057
+          ],
+          "world_coordinates": [
+            0.6987726699075285,
+            3.5256995000928413
+          ]
+        },
+        {
+          "node_id": 28,
+          "pixel_coordinates": [
+            629.4491677657842,
+            844.2885343669091
+          ],
+          "world_coordinates": [
+            2.160195831950131,
+            1.278339147413348
+          ]
+        },
+        {
+          "node_id": 29,
+          "pixel_coordinates": [
+            1580.4636538148222,
+            605.3498434167325
+          ],
+          "world_coordinates": [
+            8.455346347541756,
+            -0.3032929366348771
+          ]
+        },
+        {
+          "node_id": 30,
+          "pixel_coordinates": [
+            587.3834268542786,
+            1014.6968293813684
+          ],
+          "world_coordinates": [
+            1.8817456353732585,
+            2.406340751971503
+          ]
+        },
+        {
+          "node_id": 31,
+          "pixel_coordinates": [
+            482.4743945386082,
+            1507.42864349452
+          ],
+          "world_coordinates": [
+            1.18731021029798,
+            5.6679324302951715
+          ]
+        },
+        {
+          "node_id": 32,
+          "pixel_coordinates": [
+            337.34688143469805,
+            1008.8563175672145
+          ],
+          "world_coordinates": [
+            0.22665235245805082,
+            2.367680035970281
+          ]
+        },
+        {
+          "node_id": 33,
+          "pixel_coordinates": [
+            1820.3071730972374,
+            1047.7867214820658
+          ],
+          "world_coordinates": [
+            10.04296785722521,
+            2.62537616560014
+          ]
+        },
+        {
+          "node_id": 34,
+          "pixel_coordinates": [
+            541.1139253099068,
+            606.8010495663459
+          ],
+          "world_coordinates": [
+            1.5754690425599285,
+            -0.29368681467250646
+          ]
+        },
+        {
+          "node_id": 35,
+          "pixel_coordinates": [
+            395.45021584945397,
+            790.0648864653191
+          ],
+          "world_coordinates": [
+            0.6112618836106423,
+            0.9194108344882057
+          ]
+        },
+        {
+          "node_id": 36,
+          "pixel_coordinates": [
+            1486.1453731132262,
+            1233.0677719838575
+          ],
+          "world_coordinates": [
+            7.831015401905929,
+            3.8518265695696643
+          ]
+        },
+        {
+          "node_id": 37,
+          "pixel_coordinates": [
+            292.21790337253185,
+            544.1073704822968
+          ],
+          "world_coordinates": [
+            -0.07207465294901483,
+            -0.7086816985568904
+          ]
+        },
+        {
+          "node_id": 38,
+          "pixel_coordinates": [
+            454.8162990376049,
+            1344.8280925939337
+          ],
+          "world_coordinates": [
+            1.0042300609337302,
+            4.591613450034624
+          ]
+        },
+        {
+          "node_id": 39,
+          "pixel_coordinates": [
+            245.60227614480598,
+            721.8539472765312
+          ],
+          "world_coordinates": [
+            -0.380642392012996,
+            0.4678949687444476
+          ]
+        },
+        {
+          "node_id": 40,
+          "pixel_coordinates": [
+            315.431567384953,
+            1436.7066109698649
+          ],
+          "world_coordinates": [
+            0.08158600219375911,
+            5.199794619523366
+          ]
+        },
+        {
+          "node_id": 41,
+          "pixel_coordinates": [
+            446.02129645884145,
+            447.6527258361753
+          ],
+          "world_coordinates": [
+            0.9460123725277962,
+            -1.34715410342826
+          ]
+        },
+        {
+          "node_id": 42,
+          "pixel_coordinates": [
+            254.98342517722114,
+            1240.1714343262831
+          ],
+          "world_coordinates": [
+            -0.3185447625503832,
+            3.8988485911198216
+          ]
+        },
+        {
+          "node_id": 43,
+          "pixel_coordinates": [
+            227.0925021348767,
+            874.8645549056442
+          ],
+          "world_coordinates": [
+            -0.5031660918213734,
+            1.480734225808856
+          ]
+        },
+        {
+          "node_id": 44,
+          "pixel_coordinates": [
+            227.6259838345362,
+            1582.0995087152653
+          ],
+          "world_coordinates": [
+            -0.4996347601267086,
+            6.162209165917692
+          ]
+        },
+        {
+          "node_id": 45,
+          "pixel_coordinates": [
+            806.0,
+            553.0
+          ],
+          "world_coordinates": [
+            3.3288573811392412,
+            -0.6498177778547949
+          ]
+        }
+      ]
     },
     "step_6_node_selection": {
-      "selected_node_id": 9,
+      "selected_node_id": 3,
       "selected_node_world_coords": [
-        4.227042064175864,
-        4.863062716070703
+        3.6934919721660338,
+        4.728093176184459
       ],
       "selected_room": 4,
-      "total_nodes_in_room": 6,
+      "total_nodes_in_room": 1,
       "llm_attempts": 1,
       "selection_success": true
     },
@@ -147,10 +653,10 @@
         2.0644748210906982,
         4.757991790771484
       ],
-      "target_node_id": 9,
+      "target_node_id": 3,
       "target_coordinate": [
-        4.227042064175864,
-        4.863062716070703
+        3.6934919721660338,
+        4.728093176184459
       ],
       "target_name": "toilet_379",
       "target_category": "toilet",

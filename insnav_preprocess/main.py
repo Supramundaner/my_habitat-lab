@@ -289,7 +289,7 @@ class ImageInstanceNavigationOrchestrator:
             
             print(f"✓ Found room {selected_room} bounding box: {room_bbox}")
             
-            graph_path = os.path.join(self.output_dir, "graph_with_topdown.png")
+            graph_path = os.path.join(self.output_dir, "graph_with_topdown_view.png")
             topdown_path = os.path.join(self.output_dir, "topdown_view.png")
             goal_image_path = os.path.join(self.output_dir, "goal_image.png")
             
