@@ -76,7 +76,7 @@ def test_object_detector():
     print("✅ ObjectDetector初始化成功")
     
     # 加载图像 - 使用cat_dog.jpeg
-    image_path = "cat_dog.jpeg"
+    image_path = "/home/yaoaa/habitat-lab/habitat_video_project/eval/potted_plant.jpeg"
     rgb_image = load_image(image_path)
     
     if rgb_image is None:
@@ -163,14 +163,14 @@ def test_multiple_objects():
     object_detector = ObjectDetector(config)
     
     # 加载图像 - 使用cat_dog.jpeg测试多个目标
-    image_path = "cat_dog.jpeg"
+    image_path = "/home/yaoaa/habitat-lab/habitat_video_project/eval/potted_plant.jpeg"
     rgb_image = load_image(image_path)
     
     if rgb_image is None:
         return
     
     # 测试多个目标物体 - cat和dog都是COCO类别
-    target_objects = ["cat", "dog"]
+    target_objects = ["cat", "dog", "potted plant"]
     
     for target_object in target_objects:
         print(f"\n🎯 检测目标: {target_object}")

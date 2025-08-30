@@ -40,7 +40,7 @@ def generate_wall_mask(topdown_path: str, output_dir: str) -> Dict[str, Any]:
     
     # Define threshold for wall detection
     # Pixels darker than this threshold are considered walls
-    wall_threshold = 30
+    wall_threshold = 0
     
     # Create binary mask: 255 for walkable, 0 for walls
     _, wall_mask = cv2.threshold(gray, wall_threshold, 255, cv2.THRESH_BINARY)
@@ -50,10 +50,10 @@ def generate_wall_mask(topdown_path: str, output_dir: str) -> Dict[str, Any]:
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     
     # Close small gaps in walkable areas
-    wall_mask = cv2.morphologyEx(wall_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    #wall_mask = cv2.morphologyEx(wall_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     
     # Remove small noise in walls
-    wall_mask = cv2.morphologyEx(wall_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    #wall_mask = cv2.morphologyEx(wall_mask, cv2.MORPH_OPEN, kernel, iterations=1)
     
     # Create inverted mask (255 for walls, 0 for walkable)
     wall_mask_inverted = 255 - wall_mask

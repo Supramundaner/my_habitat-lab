@@ -104,7 +104,7 @@ class ActionProcessor:
         # 死循环检测参数
         loop_config = config.get('loop_detection', {})
         self.loop_detection_threshold = loop_config.get('distance_threshold', 1.0)  # 距离阈值（米）
-        self.loop_detection_min_iterations = loop_config.get('min_iterations', 15)  # 最小持续迭代次数
+        self.loop_detection_min_iterations = loop_config.get('min_iterations', 30)  # 最小持续迭代次数
         self.loop_detection_window_size = loop_config.get('window_size', 30)  # 位置历史窗口大小
         
         # 死循环检测状态
@@ -1049,7 +1049,7 @@ class ActionProcessor:
         # 2. 设置参数
 
         # weight_w = self.nav_config.a_star_weight_w  # 权重系数，控制远离障碍物的程度
-        constant = 0.006
+        constant = 0.06
         resolution = self.map_builder.map_resolution
         weight_w = constant / (resolution**2)
         epsilon = self.nav_config.a_star_epsilon  # 防止除零的小正数

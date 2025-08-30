@@ -9,9 +9,72 @@ import json
 import numpy as np
 import random
 import math
-from scipy.ndimage import label, binary_dilation
+from scipy.ndimage import label, binary_dilation, binary_erosion
 from sklearn.cluster import DBSCAN
 from typing import Dict, Any, List, Tuple, Optional
+
+
+def apply_wall_padding(wall_mask: np.ndarray, padding_meters: float, 
+                      spacing_in_meters_per_pixel: float) -> np.ndarray:
+    """
+    对wall_mask应用padding，使生成的导航点距离墙壁至少有指定距离。
+    
+    Args:
+        wall_mask: 原始墙壁mask (255为可行走区域，0为墙壁)
+        padding_meters: 距离墙壁的最小距离（米）
+        spacing_in_meters_per_pixel: 每像素对应的米数
+        
+    Returns:
+        处理后的wall_mask，可行走区域被缩小了padding距离
+    """
+    print(f"🛡️ 应用墙壁padding:")
+    print(f"  - Padding距离: {padding_meters}m")
+    print(f"  - 像素间距: {spacing_in_meters_per_pixel:.6f} m/pixel")
+    
+    # 计算padding对应的像素数
+    padding_pixels = int(np.ceil(padding_meters / spacing_in_meters_per_pixel))
+    print(f"  - Padding像素数: {padding_pixels} pixels")
+    
+    if padding_pixels == 0:
+        print("  - Padding像素数为0，跳过处理")
+        return wall_mask
+    
+    # 转换为二值mask (True为可行走，False为墙壁)
+    binary_walkable = wall_mask > 127
+    
+    # 统计原始可行走区域
+    original_walkable_pixels = np.sum(binary_walkable)
+    
+    # 使用binary_erosion来缩小可行走区域
+    # 创建圆形结构元素以获得更自然的padding效果
+    from scipy.ndimage import generate_binary_structure
+    
+    if padding_pixels <= 3:
+        # 对于小的padding，使用简单的结构元素
+        structure = generate_binary_structure(2, 1)  # 4-连通
+        iterations = padding_pixels
+    else:
+        # 对于大的padding，使用圆形结构元素
+        y, x = np.ogrid[-padding_pixels:padding_pixels+1, -padding_pixels:padding_pixels+1]
+        structure = x*x + y*y <= padding_pixels*padding_pixels
+        iterations = 1
+    
+    # 应用腐蚀操作来缩小可行走区域
+    eroded_walkable = binary_erosion(binary_walkable, structure=structure, iterations=iterations)
+    
+    # 转换回原始格式 (255为可行走，0为墙壁)
+    padded_mask = np.where(eroded_walkable, 255, 0).astype(np.uint8)
+    
+    # 统计处理后的可行走区域
+    final_walkable_pixels = np.sum(eroded_walkable)
+    reduction_percentage = (1 - final_walkable_pixels / original_walkable_pixels) * 100
+    
+    print(f"  - 原始可行走像素: {original_walkable_pixels}")
+    print(f"  - 处理后可行走像素: {final_walkable_pixels}")
+    print(f"  - 可行走区域减少: {reduction_percentage:.1f}%")
+    
+    return padded_mask
+
 
 class ConnectedComponentsAnalyzer:
     """Analyze connected components in walkable areas."""
@@ -451,6 +514,7 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
     node_radius_pixels = graph_config.get('node_radius_pixels', 8)
     min_component_area = graph_config.get('min_component_area', 100)
     enable_multi_region = graph_config.get('enable_multi_region', True)
+    wall_padding_meters = graph_config.get('wall_padding_meters', 0.1)
     
     # Convert PDS radius from meters to pixels
     pds_radius_pixels = pds_radius_meters / spacing_in_meters_per_pixel
@@ -461,6 +525,12 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
     print(f"  - Node visualization radius: {node_radius_pixels} pixels")
     print(f"  - Min component area: {min_component_area} pixels")
     print(f"  - Multi-region sampling: {enable_multi_region}")
+    print(f"  - Wall padding: {wall_padding_meters}m")
+    
+    # Apply wall padding to ensure minimum distance from walls
+    if wall_padding_meters > 0:
+        wall_mask = apply_wall_padding(wall_mask, wall_padding_meters, spacing_in_meters_per_pixel)
+        print(f"✓ Wall padding applied")
     
     # Generate points using appropriate method
     height, width = wall_mask.shape
@@ -559,6 +629,7 @@ def generate_navigation_graph(topdown_path: str, wall_mask_path: str, metadata_p
             "max_attempts": max_attempts,
             "min_component_area": min_component_area,
             "enable_multi_region": enable_multi_region,
+            "wall_padding_meters": wall_padding_meters,
             "total_nodes": len(points)
         },
         "nodes": nodes_data

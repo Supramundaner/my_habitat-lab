@@ -49,11 +49,11 @@ def call_llm_with_image(client, room_annotation_path, prompt_text,model):
 def parse_llm_response(response):
     """解析LLM响应，分离reasoning_content和content"""
     full_response = response.choices[0].message.content
+    reasoning_content = response.choices[0].message.reasoning_content
     
     # 尝试提取最终答案（假设是最后一个数字或在特定格式中）
     lines = full_response.split('\n')
     content = ""
-    reasoning_content = full_response
     
     # 查找最后一行中的数字作为最终答案
     for line in reversed(lines):

@@ -103,7 +103,7 @@ class EpisodeEvaluator:
         if 'output_dir' in self.config:
             self.output_dir = Path(self.config['output_dir'])
         else:
-            self.output_dir = self.project_root / "eval" / "output" / self.scene_id
+            self.output_dir = self.project_root / "eval" / "output_plant" / self.scene_id
         
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)

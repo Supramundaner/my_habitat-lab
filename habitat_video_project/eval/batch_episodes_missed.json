@@ -1,10 +1,28 @@
 {
-    "episode": {
-        "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/objectnav/hm3d/v1/val/content_preprocessed/6s7QHgap2fW.json",
-        "episode_id": "397"
-    },
+    "evaluation_tasks": [
+        {
+            "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/ovon/hm3d/val_seen_synonyms/content/7MXmsvcQjpJ.json",
+            "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00823-7MXmsvcQjpJ/7MXmsvcQjpJ.basis.glb",
+            "episode_ids": [
+                "2084"
+            ]
+        },
+        {
+            "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/ovon/hm3d/val_unseen/content/Dd4bFSTQ8gi.json",
+            "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00824-Dd4bFSTQ8gi/Dd4bFSTQ8gi.basis.glb",
+            "episode_ids": [
+                "3331"
+            ]
+        },
+        {
+            "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/ovon/hm3d/val_unseen/content/p53SfW6mjZe.json",
+            "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00814-p53SfW6mjZe/p53SfW6mjZe.basis.glb",
+            "episode_ids": [
+                "655"
+            ]
+        }
+    ],
     "scene": {
-        "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00890-6s7QHgap2fW/6s7QHgap2fW.basis.glb",
         "robot_urdf": "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
     },
     "preprocess": {
@@ -37,6 +55,9 @@
         "prompts": {
             "choose_room_prompt": "preprocess/prompts/choose_a_room.txt",
             "choose_node_prompt": "preprocess/prompts/choose_a_node.txt"
+        },
+        "output": {
+            "output_dir": "preprocess/output"
         }
     },
     "video_generation": {
@@ -53,8 +74,8 @@
             "linear_speed": 2.0,
             "angular_speed": 240.0,
             "sensor_height": 1.31,
-            "time_steps_num": 10,
-            "min_displacement": 1.0,
+            "time_steps_num": 15,
+            "min_displacement": 0.3,
             "max_time_steps": 50
         },
         "simulation": {
@@ -62,7 +83,7 @@
         },
         "gpu": {
             "enabled": true,
-            "device": "cuda:1",
+            "device": "cuda:0",
             "mixed_precision": false,
             "memory_efficient": true,
             "max_chunk_size": 50000
@@ -84,21 +105,19 @@
             "mu3_prime": 1.0,
             "lambda": 0.8,
             "robot_radius": 0.14,
-            "sensor_range": 0.6,
+            "sensor_range": 0.8,
             "search_depth": 5
         },
         "navigation": {
-            "waypoint_distance": 1.5,
-            "destination_distance": 0.8
+            "waypoint_distance": 1.2,
+            "destination_distance": 1.0
         },
         "object_detection": {
             "enabled": true,
-            "detector_type": "yolov7",
-            "yolov7_port": 12185,
+            "grounding_dino_port": 12181,
             "mobile_sam_port": 12184,
             "detection_threshold": 0.4,
-            "max_detection_distance": 10.0,
-            "grounding_dino_port": null
+            "max_detection_distance": 10.0
         }
     },
     "evaluation": {

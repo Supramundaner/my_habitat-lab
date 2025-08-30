@@ -1,0 +1,32 @@
+# YOLOv7检测器配置示例
+# 使用此配置可以将object detection从GroundingDINO切换到YOLOv7
+
+object_detection:
+  enabled: true
+  
+  # 检测器类型选择: 'grounding_dino' 或 'yolov7'
+  detector_type: 'yolov7'
+  
+  # 端口配置
+  grounding_dino_port: 12181  # GroundingDINO服务端口
+  yolov7_port: 12185          # YOLOv7服务端口  
+  mobile_sam_port: 12184      # Mobile SAM服务端口
+  
+  # 检测参数
+  detection_threshold: 0.4    # 检测置信度阈值
+  max_detection_distance: 10.0 # 最大检测距离(米)
+
+# 使用GroundingDINO的配置示例（原有配置）
+# object_detection:
+#   enabled: true
+#   detector_type: 'grounding_dino'
+#   grounding_dino_port: 12181
+#   mobile_sam_port: 12184
+#   detection_threshold: 0.4
+#   max_detection_distance: 10.0
+
+# 注意事项:
+# 1. YOLOv7使用预训练的COCO数据集，支持80个类别
+# 2. 不需要像GroundingDINO那样提供文本描述，会自动检测所有COCO类别
+# 3. 如果在caption中指定特定类别，会过滤结果只保留指定类别
+# 4. 确保YOLOv7权重文件存在于 data/yolov7-e6e.pt（可通过环境变量YOLOV7_WEIGHTS修改）
