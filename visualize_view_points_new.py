@@ -106,9 +106,9 @@ def draw_points(
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize viewpoints on a floor topdown view for a specific object.")
-    parser.add_argument("--episodes", required=True, help="Path to the episodes JSON file for the scene")
-    parser.add_argument("--scene", required=True, help="Path to the scene .glb file")
-    parser.add_argument("--object_id", type=int, required=True, help="Target object_id to visualize")
+    parser.add_argument("--episodes", default="/home/yaoaa/habitat-lab/data/datasets/objectnav/hm3d/v1/val/content_preprocessed/qyAac8rV8Zk.json",help="Path to the episodes JSON file for the scene")
+    parser.add_argument("--scene", default="/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00832-qyAac8rV8Zk/qyAac8rV8Zk.basis.glb", help="Path to the scene .glb file")
+    parser.add_argument("--object_id",default=160, type=int, help="Target object_id to visualize")
     parser.add_argument("--output", default=None, help="Output image path. Default: viewpoints_visualization/<scene_id>_<object_id>.png")
     parser.add_argument("--show_indices", action="store_true", help="Label viewpoint indices next to markers")
     parser.add_argument("--marker_radius", type=int, default=6, help="Radius of viewpoint markers in pixels")
