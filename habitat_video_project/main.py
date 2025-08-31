@@ -43,7 +43,7 @@ def parse_arguments():
     parser.add_argument(
         '--actions',
         type=str,
-        default="/home/yaoaa/habitat-lab/habitat_video_project/eval/output/5cdEh9F2hJL/1421/preprocess/action.json",
+        default="/home/yaoaa/habitat-lab/habitat_video_project/insnav_eval/output/example/13/insnav_preprocess_output/action.json",
         help='动作序列文件路径'
     )
     
