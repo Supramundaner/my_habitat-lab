@@ -204,8 +204,8 @@ def path_planning_step(config: Dict[str, Any], output_dir: str) -> Dict[str, Any
 
     target_info = {
         "coordinate": target_world_coords,  # These are already [x, z]
-        "name": goal_object_name,
-        "category": goal_object_category
+        "name": goal_object_category,
+        "id": goal_object_name
     }
     print(f"✓ Target info loaded: node_id={selected_node['node_id']}, coordinate={target_world_coords}, name={goal_object_name}")
 
