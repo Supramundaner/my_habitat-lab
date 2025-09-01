@@ -328,33 +328,19 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str, goal_path
     # Format the prompt based on mode
     if use_text_nav:
         text_desc = config['scene_config'].get('text_description', text_description)
-        enhanced_prompt = prompt_template.format(text_description=text_desc)
+        # Generate final prompt from template with all necessary variables
+        enhanced_prompt = prompt_template.format(
+            text_description=text_desc,
+            available_rooms=available_rooms,
+            goal_object=goal_object
+        )
         print(f"📝 Using text description for room selection")
     else:
-        # Get goal object and replace placeholder
-        goal_object = config['scene_config']['goal_object']
-        prompt_template = prompt_template.format(goal_object=goal_object)
-        
-        # Enhanced prompt for image-instance navigation
-        enhanced_prompt = f"""I need you to analyze these images to select the best room for finding a specific object instance.
-
-The first image shows the target object that I need to find - this is the exact instance I'm looking for.
-
-The second image shows a room layout with different rooms numbered and colored. Each room is labeled with a number.
-
-Your task is to identify which room would most likely contain the target object shown in the first image.
-
-Consider:
-1. The type and characteristics of the target object
-2. Typical room types where such objects are found
-3. The layout and apparent function of each numbered room
-4. Size and accessibility of rooms
-
-Available rooms: {available_rooms}
-
-Please provide your reasoning and then give your final answer as just the room number.
-
-Format: Final Answer: [room_number]"""
+        # Generate final prompt from template with all necessary variables
+        enhanced_prompt = prompt_template.format(
+            goal_object=goal_object,
+            available_rooms=available_rooms
+        )
     
     print(f"🤖 LLM Configuration:")
     print(f"  - Model: {model}")

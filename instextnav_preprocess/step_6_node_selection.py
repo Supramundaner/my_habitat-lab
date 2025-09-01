@@ -252,35 +252,22 @@ def select_node_with_llm(original_room_image: np.ndarray,
     
     prompt_template = load_prompt_template(prompt_path)
     
-    # Format the prompt based on mode
+    # Format the prompt based mode
     if use_text_nav:
         text_description = config['scene_config'].get('text_description', '')
-        enhanced_prompt = prompt_template.format(text_description=text_description)
+        # Generate final prompt from template with all necessary variables
+        enhanced_prompt = prompt_template.format(
+            text_description=text_description,
+            available_node_ids=available_node_ids,
+            goal_object=goal_object
+        )
         print(f"📝 Using text description for node selection")
     else:
-        # Enhanced prompt for image-instance navigation
-        enhanced_prompt = f"""I need you to analyze these three images to select the best navigation node for finding a specific object instance.
-
-The first image shows the target object instance that I need to find - this is the exact object I'm looking for.
-
-The second image shows the room layout without navigation nodes.
-
-The third image shows the same room with numbered navigation nodes (red circles with numbers).
-
-Your task is to select the navigation node that would provide the best position to find and reach the target object shown in the first image.
-
-Consider:
-1. The likely location of the target object based on its type and typical placement
-2. Proximity to areas where such objects are commonly found
-3. Clear line of sight and accessibility to potential object locations
-4. Room layout and obstacles that might block access
-5. Strategic positioning for searching the room effectively
-
-Available nodes: {available_node_ids}
-
-Please provide your detailed analysis and reasoning, then give your final answer as just the node number.
-
-Format: Final Answer: [node_number]"""
+        # Generate final prompt from template with all necessary variables
+        enhanced_prompt = prompt_template.format(
+            goal_object=goal_object,
+            available_node_ids=available_node_ids
+        )
     
     print(f"🤖 Using LLM for node selection:")
     print(f"  - Model: {model}")

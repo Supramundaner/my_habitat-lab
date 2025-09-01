@@ -1,25 +1,30 @@
-I need you to analyze these three images to help me select the best navigation node position to reach a specific target object instance.
+You are an AI assistant for a robot's navigation system. Your task is to identify the optimal navigation point to find a specific object in a room.
 
-The first image shows the exact target object instance that I need to find - this is what the agent is looking for.
-Target object category: {goal_object}
+**CONTEXT:**
+You are given 3 images:
+1.  **Goal Image** A specific image of the {goal_object} that you need to find
+1.  **Map Image:** A top-down schematic of the room's layout.
+2.  **Node Image:** The same map with numbered navigation nodes.
 
-The second image shows the original room layout without navigation nodes.
 
-The third image shows the same room with numbered navigation nodes (red circles with numbers).
+**GOAL:**
+Find the {goal_object}
 
 Your task is to select the navigation node that would provide the best position to find and reach the target object (a {goal_object}) shown in the first image.
 
 **AVAILABLE NODES:**
 Available nodes: {available_node_ids}
 
-Please consider:
-1. The likely location of the target object based on its appearance and typical placement patterns for {goal_object}s
-2. Typical placement patterns for {goal_object}s in similar rooms
-3. Proximity to areas where {goal_object}s would commonly be positioned
-4. Accessibility and clear path to potential {goal_object} locations
-5. Good viewing angle for {goal_object} detection and recognition
-6. Strategic positioning for effective room exploration to find a {goal_object}
-7. Avoiding obstacles and walls that might block access to typical {goal_object} placement areas
+
+**INSTRUCTIONS:**
+1.  **Analyze the Goal:** Consider the likely location of the target {goal_object} based on its appearance and the placement patterns shown in the image for the {goal_object} and locate it on the map.
+2.  **Select Best Node:** Based on your location analysis, choose the single best node from the Node Image. The best node is determined by this priority:
+    *   **Priority 1:** A node located directly on the {goal_object}.
+    *   **Priority 2:** If no node is on the {goal_object}, the node closest to the {goal_object}.
+    *   **Priority 3:** If the {goal_object} cannot be found on the topdown-view, the node that provides the best vantage point to search the inferred area.
+3.  **Verify The Node:** Make sure the selected node satisfy the above requirements.
+
+Note that you should identify the unique specific {goal_object} in the image instead of any other {goal_object}.
 
 Please analyze all three images carefully and provide your reasoning for why you chose that specific navigation node. At the end, provide only the node number as your final answer.
 
