@@ -43,6 +43,7 @@ def generate_topdown_view(scene_path: str, target_floor,
     Args:
         scene_path: Path to scene file
         target_floor: Floor level - can be either an integer (floor index) or a 3-element list/tuple (world coordinate [x,y,z])
+                     This coordinate determines the center point of the topdown view
         custom_ortho_scale: Custom orthographic scale
         target_coverage: Target coverage for auto-scaling
         draw_coordinates: Whether to draw coordinate system
@@ -54,7 +55,7 @@ def generate_topdown_view(scene_path: str, target_floor,
     """
     print(f"📁 Scene path: {scene_path}")
     print(f"📏 Resolution: {resolution}")
-    print(f"� Target floor/coordinate: {target_floor}")
+    print(f"🎯 Target floor/coordinate: {target_floor}")
     
     # Check if scene file exists
     if not os.path.exists(scene_path):

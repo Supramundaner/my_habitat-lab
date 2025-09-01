@@ -236,20 +236,16 @@ def select_node_with_llm(original_room_image: np.ndarray,
     goal_object = config['scene_config']['goal_object']
     
     # Determine if we're using text navigation mode
-    use_text_nav = config.get('scene_config', {}).get('use_text_nav', False)
+    use_text_nav = config.get('scene_config', {}).get('use_text_nav', True)
     
     # Load appropriate prompt template
     if use_text_nav:
         # Use text-specific prompt
-        text_prompt_path = os.path.join(os.path.dirname(config['prompts']['choose_node_prompt']), 
+        text_prompt_path = os.path.join(os.path.dirname(config['prompts']['choose_node_prompt_text']), 
                                       'choose_node_prompt_text.txt')
         if os.path.exists(text_prompt_path):
             prompt_path = text_prompt_path
-        else:
-            prompt_path = config['prompts']['choose_node_prompt']
-    else:
-        prompt_path = config['prompts']['choose_node_prompt']
-    
+
     prompt_template = load_prompt_template(prompt_path)
     
     # Format the prompt based mode

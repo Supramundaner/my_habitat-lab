@@ -538,7 +538,7 @@ if __name__ == '__main__':
     try:
         # 请确保这里的路径是正确的
         # hm3d_scene_path = "/path/to/your/scene.glb" 
-        hm3d_scene_path = "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00808-y9hTuugGdiq/y9hTuugGdiq.basis.glb"
+        hm3d_scene_path = "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00891-cvZr5TUy5C5/cvZr5TUy5C5.basis.glb"
         if not os.path.exists(hm3d_scene_path):
              raise FileNotFoundError(f"Scene file not found at: {hm3d_scene_path}. Please check the path.")
     except Exception as e:
@@ -582,9 +582,9 @@ if __name__ == '__main__':
     print("### RUNNING EXAMPLE 2: RENDER BY 3D COORDINATE ###")
     try:
         target_point = [
-            8.86527,
-            -2.78861,
-            4.09266
+                -7.304915428161621,
+                0.07216382026672363,
+                1.8428062200546265
         ]
         result_image_pt, _, meta_data_pt = render_topdown_view(
             hm3d_scene_path, 

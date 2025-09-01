@@ -64,10 +64,18 @@ class ImageInstanceNavigationOrchestrator:
             self.goals_data = data['goals']
             self.episodes_data = data['episodes']
             
-            if episode_id >= len(self.episodes_data):
-                raise ValueError(f"Episode ID {episode_id} is out of range. Available episodes: 0-{len(self.episodes_data)-1}")
+            # Find episode by episode_id (string match, not array index)
+            self.current_episode = None
+            for episode in self.episodes_data:
+                if str(episode['episode_id']) == str(episode_id):
+                    self.current_episode = episode
+                    break
             
-            self.current_episode = self.episodes_data[episode_id]
+            if self.current_episode is None:
+                available_ids = [str(ep['episode_id']) for ep in self.episodes_data]
+                raise ValueError(f"Episode ID {episode_id} not found. Available episodes: {', '.join(available_ids)}")
+            
+            episode_index = self.episodes_data.index(self.current_episode)
             
             # Get goal information
             goal_object_id = self.current_episode['goal_object_id']
@@ -154,11 +162,12 @@ class ImageInstanceNavigationOrchestrator:
         print("STEP 1: Generating topdown view and metadata")
         print("="*60)
         
-        # Use the goal image position as the target coordinate for topdown generation
-        # This ensures the topdown view is centered around the target area
-        target_coordinate = self.goal_image_data['position']  # 3D world coordinate [x, y, z]
+        # Use the agent's starting position as the target coordinate for topdown generation
+        # This ensures the topdown view is centered around the agent's starting area
+        target_coordinate = self.agent_start_position  # 3D world coordinate [x, y, z]
         
-        print(f"🎯 Using goal image position as target coordinate: {target_coordinate}")
+        print(f"🎯 Using agent start position as target coordinate: {target_coordinate}")
+        print(f"📍 Goal image position (for reference): {self.goal_image_data['position']}")
         
         try:
             result = generate_topdown_view(
