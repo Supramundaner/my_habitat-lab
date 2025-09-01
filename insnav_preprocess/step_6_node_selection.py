@@ -199,29 +199,15 @@ def select_node_with_llm(original_room_image: np.ndarray,
     
     goal_object = config['scene_config']['goal_object']
     
-    # Enhanced prompt for image-instance navigation
-    enhanced_prompt = f"""I need you to analyze these three images to select the best navigation node for finding a specific object instance.
-
-The first image shows the target object instance that I need to find - this is the exact object I'm looking for.
-
-The second image shows the room layout without navigation nodes.
-
-The third image shows the same room with numbered navigation nodes (red circles with numbers).
-
-Your task is to select the navigation node that would provide the best position to find and reach the target object shown in the first image.
-
-Consider:
-1. The likely location of the target object based on its type and typical placement
-2. Proximity to areas where such objects are commonly found
-3. Clear line of sight and accessibility to potential object locations
-4. Room layout and obstacles that might block access
-5. Strategic positioning for searching the room effectively
-
-Available nodes: {available_node_ids}
-
-Please provide your detailed analysis and reasoning, then give your final answer as just the node number.
-
-Format: Final Answer: [node_number]"""
+    # Load prompt template and generate final prompt
+    prompt_path = config['prompts']['choose_node_prompt']
+    prompt_template = load_prompt_template(prompt_path)
+    
+    # Generate final prompt from template with all necessary variables
+    enhanced_prompt = prompt_template.format(
+        goal_object=goal_object,
+        available_node_ids=available_node_ids
+    )
     
     print(f"🤖 Using LLM for node selection:")
     print(f"  - Model: {model}")

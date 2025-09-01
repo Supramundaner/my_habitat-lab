@@ -3,14 +3,24 @@ You are an AI assistant for a robot's navigation system. Your task is to identif
 **CONTEXT:**
 You will be provided with 3 images. The first image shows the specific goal_object instance that I need to find - this is the only goal that the agent is looking for. The second image shows a segmented top-down view (The floor plan is segmented to at least one room/region with numbered room annotations. The boundaries of different rooms is noted in white.)
 
+**TARGET OBJECT:**
+The target object category is: {goal_object}
+You are looking for a specific instance of a {goal_object}.
+
 **GOAL:**
 Identify the room number that contains the goal object shown in the first image.
 
+**AVAILABLE ROOMS:**
+Available rooms: {available_rooms}
+
 **INSTRUCTIONS:**
-1.  If you can find the object directly from map, describe the object's location using text.
-2.  **Analyze the Goal Object:** Determine the room number where the goal_object can be found . If you cannot find goal_object on the top-down view, then please consider the most-possible room that the goal_object may locate at. (e.g., a "bed" is in a bedroom). Note that you can also determine the location by the surrounding provided in the first image.
-3.  **Verify the Room:** Scan the top-down view to make sure that the goal_object indeed locates in the chosen room.  If goal_object cannot be found, make sure the chosen room is the most appropriate room to search. 
+1. If you can find the object directly from map, describe the object's location using text.
+2. **Analyze the Goal Object:** Determine the room number where the {goal_object} can be found. If you cannot find the {goal_object} on the top-down view, then please consider the most-possible room that the {goal_object} may locate at. (e.g., a "bed" is in a bedroom). Note that you can also determine the location by the surrounding provided in the first image.
+3. **Verify the Room:** Scan the top-down view to make sure that the {goal_object} indeed locates in the chosen room. If the {goal_object} cannot be found, make sure the chosen room is the most appropriate room to search for a {goal_object}.
 
-Repeat the insutructions until the verification (3.) is passed.
 
-Provide your answer in the last line in the form of: "Room X" where X is your chosen number. (e.g. Room 1)
+Repeat the instructions until the verification (3.) is passed.
+
+Please provide your reasoning and then give your final answer as just the room number.
+
+Format: Final Answer: [room_number]
