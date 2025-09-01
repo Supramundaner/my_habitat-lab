@@ -1,0 +1,122 @@
+{
+    "preprocess": {
+        "scene_config": {
+            "custom_ortho_scale": null,
+            "target_coverage": 0.9,
+            "draw_coordinates": false,
+            "use_text_nav": true
+        },
+        "val_text_path": "/home/yaoaa/habitat-lab/data/datasets/instancenav/val/val_text.json",
+        "output": {
+            "output_dir": "/home/yaoaa/habitat-lab/habitat_video_project/instextnav_eval/output"
+        },
+        "resolution": [
+            2048,
+            2048
+        ],
+        "room_segmentation": {
+            "morph_closing_width_meters": 0.01,
+            "seed_min_distance_from_wall_meters": null,
+            "min_room_area_pixels": 18000
+        },
+        "graph_generation": {
+            "pds_radius": 0.5,
+            "max_attempts": 10000,
+            "node_radius_pixels": 8,
+            "min_component_area": 100,
+            "enable_multi_region": true,
+            "wall_padding_meters": 0.1
+        },
+        "llm_config": {
+            "api_key": "f439a220-87c7-4845-8f66-71b6bf849de6",
+            "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "model": "seed-1-6-250615",
+            "max_tokens": 35000
+        },
+        "prompts": {
+            "choose_room_prompt": "/home/yaoaa/habitat-lab/instextnav_preprocess/prompts/choose_room_prompt.txt",
+            "choose_node_prompt": "/home/yaoaa/habitat-lab/instextnav_preprocess/prompts/choose_node_prompt.txt",
+            "choose_room_prompt_text": "/home/yaoaa/habitat-lab/instextnav_preprocess/prompts/choose_room_prompt_text.txt",
+            "choose_node_prompt_text": "/home/yaoaa/habitat-lab/instextnav_preprocess/prompts/choose_node_prompt_text.txt"
+        }
+    },
+    "video_generation": {
+        "video": {
+            "fps": 8,
+            "resolution": {
+                "width": 2048,
+                "height": 1024
+            },
+            "fpv_width": 1024,
+            "map_width": 1024
+        },
+        "agent": {
+            "linear_speed": 2.0,
+            "angular_speed": 240.0,
+            "sensor_height": 1.31,
+            "time_steps_num": 15,
+            "min_displacement": 0.3,
+            "max_time_steps": 50
+        },
+        "simulation": {
+            "enable_physics": true
+        },
+        "gpu": {
+            "enabled": true,
+            "device": "cuda:1",
+            "mixed_precision": false,
+            "memory_efficient": true,
+            "max_chunk_size": 50000
+        },
+        "OCCUPANCY_MAP": {
+            "MIN_DEPTH": 0.2,
+            "MAX_DEPTH": 8.0,
+            "CAMERA_HEIGHT": 1.31,
+            "MIN_H": -1.2,
+            "MAX_H": 0.2,
+            "HFOV": 90
+        },
+        "vfh": {
+            "mu1": 5.0,
+            "mu2": 2.0,
+            "mu3": 2.0,
+            "mu1_prime": 5.0,
+            "mu2_prime": 1.0,
+            "mu3_prime": 1.0,
+            "lambda": 0.8,
+            "robot_radius": 0.14,
+            "sensor_range": 0.6,
+            "search_depth": 5
+        },
+        "navigation": {
+            "waypoint_distance": 1.5,
+            "destination_distance": 0.8
+        },
+        "object_detection": {
+            "enabled": true,
+            "detector_type": "yolov7",
+            "yolov7_port": 12185,
+            "mobile_sam_port": 12184,
+            "detection_threshold": 0.4,
+            "max_detection_distance": 10.0,
+            "grounding_dino_port": null
+        }
+    },
+    "evaluation": {
+        "success_distance_threshold": 0.25
+    },
+    "scene": {
+        "robot_urdf": "/home/yaoaa/habitat-lab/data/robots/hab_fetch/robots/hab_fetch.urdf"
+    },
+    "evaluation_tasks": [
+        {
+            "scene_file": "/home/yaoaa/habitat-lab/data/versioned_data/hm3d-0.2/hm3d/val/00877-4ok3usBNeis/4ok3usBNeis.basis.glb",
+            "episode_json_path": "/home/yaoaa/habitat-lab/data/datasets/instance_imagenav_hm3d_v3/val/",
+            "episode_ids": [
+                "13",
+                "14",
+                "15"
+            ]
+        }
+    ]
+}
