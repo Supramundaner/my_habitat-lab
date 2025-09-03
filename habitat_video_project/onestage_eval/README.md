@@ -29,12 +29,12 @@ The one-stage evaluation pipeline consists of:
 
 ### Single Episode Evaluation
 ```bash
-python run_eval.py test_config.json
+python run_eval.py /home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/eval_config_episode_427.json
 ```
 
 ### Batch Evaluation
 ```bash
-python batch_eval.py batch_eval.json
+python batch_eval.py /home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/challenge_batch_episodes_0_5.json
 ```
 
 ## Configuration
