@@ -35,7 +35,7 @@ current_dir = Path(__file__).parent.absolute()
 # and main_workflow_onestage.py is in project/onestage_preprocess/
 project_root = current_dir.parent.parent  # Go up two levels to reach habitat-lab
 onestage_preprocess_root = project_root / "onestage_preprocess"
-video_root = current_dir.parent / "video"
+video_root = current_dir.parent 
 
 sys.path.insert(0, str(onestage_preprocess_root))
 sys.path.insert(0, str(video_root))
