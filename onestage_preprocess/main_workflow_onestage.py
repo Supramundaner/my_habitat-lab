@@ -13,8 +13,8 @@ import traceback
 # Import workflow modules
 from step_1_generate_topdown import generate_topdown_view
 from step_2_generate_wall_mask import generate_wall_mask
-from step_3_onestage_node_selection import select_navigation_node_onestage
 from step_4_graph_generation import generate_navigation_graph
+from step_3_onestage_node_selection import select_navigation_node_onestage
 from step_5_path_planning import path_planning_step
 
 class OneStageWorkflowOrchestrator:

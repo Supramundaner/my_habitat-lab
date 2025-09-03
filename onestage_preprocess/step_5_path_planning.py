@@ -43,12 +43,21 @@ def path_planning_step(config: Dict[str, Any], output_dir: str) -> Dict[str, Any
     print(f"✓ Agent initial state loaded: position={agent_position}, rotation={agent_rotation}")
 
     # 2. Get target information
-    # Load the results from the node selection step
+    # Load the results from the one-stage node selection step
+    # First try the one-stage log file, then fallback to traditional log file for compatibility
+    onestage_node_log_path = os.path.join(output_dir, "onestage_node_selection_log.json")
     node_log_path = os.path.join(output_dir, "node_selection_log.json")
-    if not os.path.exists(node_log_path):
-        raise FileNotFoundError(f"Node selection log not found: {node_log_path}")
     
-    with open(node_log_path, 'r', encoding='utf-8') as f:
+    if os.path.exists(onestage_node_log_path):
+        log_file_path = onestage_node_log_path
+        print(f"✓ Using one-stage node selection log: {log_file_path}")
+    elif os.path.exists(node_log_path):
+        log_file_path = node_log_path
+        print(f"✓ Using traditional node selection log: {log_file_path}")
+    else:
+        raise FileNotFoundError(f"Node selection log not found. Tried:\n  - {onestage_node_log_path}\n  - {node_log_path}")
+    
+    with open(log_file_path, 'r', encoding='utf-8') as f:
         node_log = json.load(f)
     
     selected_node = node_log['selected_node']
