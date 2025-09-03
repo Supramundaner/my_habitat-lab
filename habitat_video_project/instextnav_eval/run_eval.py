@@ -31,47 +31,59 @@ logging.getLogger("habitat_sim").setLevel(logging.ERROR)
 
 # Add paths for local imports
 current_dir = Path(__file__).parent.absolute()
-# Assuming run_eval.py is in a structure like: habitat-lab/habitat_video_project/insnav_eval/run_eval.py
-# and main.py is in habitat-lab/insnav_preprocess/main.py
-# and video main.py is in habitat-lab/habitat_video_project/main.py
+# Current file: habitat-lab/habitat_video_project/instextnav_eval/run_eval.py
+# Target: habitat-lab/instextnav_preprocess/main.py
 project_root = current_dir.parent  # habitat_video_project
 habitat_lab_root = project_root.parent  # habitat-lab
-insnav_preprocess_root = habitat_lab_root / "insnav_preprocess"
+instextnav_preprocess_root = habitat_lab_root / "instextnav_preprocess"
 video_root = project_root
 
-# Insert insnav_preprocess path FIRST to ensure we import from the correct main.py
-sys.path.insert(0, str(insnav_preprocess_root))
+# Insert instextnav_preprocess path FIRST to ensure we import from the correct main.py
+sys.path.insert(0, str(instextnav_preprocess_root))
 sys.path.insert(1, str(video_root))
 
-# Imports from main.py (insnav_preprocess)
+# Imports from main.py (instextnav_preprocess)
 try:
     # First check if the main.py file exists
-    main_py_path = insnav_preprocess_root / "main.py"
+    main_py_path = instextnav_preprocess_root / "main.py"
     if not main_py_path.exists():
         raise ImportError(f"main.py not found at {main_py_path}")
     
-    # Try to import the specific module
+    print(f"✓ Found main.py at: {main_py_path}")
+    
+    # Try to import the specific module using importlib
     import importlib.util
-    spec = importlib.util.spec_from_file_location("insnav_main", main_py_path)
-    insnav_main = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(insnav_main)
+    spec = importlib.util.spec_from_file_location("instextnav_main", str(main_py_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not create module spec for {main_py_path}")
     
-    # Get the class from the module (support both old and new class names)
-    if hasattr(insnav_main, 'TextNavigationOrchestrator'):
-        # New TextNav class name
-        NavigationOrchestrator = insnav_main.TextNavigationOrchestrator
-        print("✓ Using TextNavigationOrchestrator for evaluation")
-    elif hasattr(insnav_main, 'ImageInstanceNavigationOrchestrator'):
-        # Legacy class name for backward compatibility
-        NavigationOrchestrator = insnav_main.ImageInstanceNavigationOrchestrator
-        print("✓ Using ImageInstanceNavigationOrchestrator for evaluation")
+    instextnav_main = importlib.util.module_from_spec(spec)
+    
+    # Add to sys.modules to avoid import conflicts
+    sys.modules["instextnav_main"] = instextnav_main
+    
+    # Execute the module
+    spec.loader.exec_module(instextnav_main)
+    
+    # Get TextNavigationOrchestrator class (TextNav only)
+    if hasattr(instextnav_main, 'TextNavigationOrchestrator'):
+        NavigationOrchestrator = instextnav_main.TextNavigationOrchestrator
+        print("✓ Successfully imported TextNavigationOrchestrator from instextnav_preprocess/main.py")
     else:
-        raise ImportError("Neither TextNavigationOrchestrator nor ImageInstanceNavigationOrchestrator found")
+        available_classes = [attr for attr in dir(instextnav_main) if not attr.startswith('_')]
+        raise ImportError(f"TextNavigationOrchestrator not found in main.py. Available classes: {available_classes}")
     
-except ImportError as e:
+except Exception as e:
     print(f"Fatal: Could not import navigation orchestrator from main.py: {e}")
-    print(f"Checked path: {insnav_preprocess_root / 'main.py'}")
-    print("Please ensure main.py is in the correct path (instextnav_preprocess/).")
+    print(f"Checked path: {main_py_path}")
+    print(f"InstExtNav preprocess directory contents:")
+    if instextnav_preprocess_root.exists():
+        for item in instextnav_preprocess_root.iterdir():
+            print(f"  - {item.name}")
+    else:
+        print(f"  Directory does not exist: {instextnav_preprocess_root}")
+    print("Please ensure main.py is in the correct path (instextnav_preprocess/) and contains TextNavigationOrchestrator class.")
+    traceback.print_exc()
     sys.exit(1)
 
 # Imports from main.py (video generation)
@@ -119,7 +131,7 @@ class EpisodeEvaluator:
         self.config_path = Path(config_path)
         self.config = self._load_config()
         self.project_root = project_root
-        self.insnav_preprocess_dir = insnav_preprocess_root
+        self.instextnav_preprocess_dir = instextnav_preprocess_root
 
         # Extract scene identifier for output directory
         episode_json_path = Path(self.config['episode']['episode_json_path'])
@@ -129,7 +141,7 @@ class EpisodeEvaluator:
         if 'output_dir' in self.config:
             self.output_dir = Path(self.config['output_dir'])
         else:
-            # Use instextnav_eval instead of insnav_eval
+            # Use instextnav_eval instead of instextnav_eval
             self.output_dir = self.project_root / "instextnav_eval" / "output" / self.scene_id
         
         try:
@@ -325,10 +337,10 @@ class EpisodeEvaluator:
         return episode_info
 
     def _create_preprocess_config(self, episode_data: Dict[str, Any]) -> Path:
-        """Create preprocessing configuration file for insnav_preprocess."""
+        """Create preprocessing configuration file for instextnav_preprocess."""
         try:
-            # Create insnav_preprocess compatible config
-            insnav_config = {
+            # Create instextnav_preprocess compatible config
+            instextnav_config = {
                 "scene_config": {
                     "scene_path": self.config['scene']['scene_file'],
                     "episodes_file": episode_data['episode']['scene_id'].replace('.basis.glb', ''),
@@ -336,11 +348,11 @@ class EpisodeEvaluator:
                     "custom_ortho_scale": self.config['preprocess']['scene_config'].get('custom_ortho_scale'),
                     "target_coverage": self.config['preprocess']['scene_config'].get('target_coverage', 0.9),
                     "draw_coordinates": self.config['preprocess']['scene_config'].get('draw_coordinates', False),
-                    "use_text_nav": self.config['preprocess']['scene_config'].get('use_text_nav', False)
+                    "use_text_nav": True  # Always use TextNav in this evaluation system
                 },
                 "val_text_path": self.config['preprocess'].get('val_text_path', '/home/yaoaa/habitat-lab/data/datasets/instancenav/val/val_text.json'),
                 "output": {
-                    "output_dir": str(self.output_dir / "insnav_preprocess_output")
+                    "output_dir": str(self.output_dir / "instextnav_preprocess_output")
                 },
                 "resolution": self.config['preprocess']['resolution'],
                 "room_segmentation": self.config['preprocess']['room_segmentation'],
@@ -360,15 +372,15 @@ class EpisodeEvaluator:
                 # Legacy single file path
                 scene_json_path = episode_json_base
             
-            insnav_config["scene_config"]["episodes_file"] = scene_json_path
+            instextnav_config["scene_config"]["episodes_file"] = scene_json_path
             print(f"✓ Using episode file: {scene_json_path}")
             
             # Save temporary config file
-            temp_config_path = self.output_dir / "temp_insnav_preprocess_config.json"
+            temp_config_path = self.output_dir / "temp_instextnav_preprocess_config.json"
             with open(temp_config_path, 'w', encoding='utf-8') as f:
-                json.dump(insnav_config, f, indent=2)
+                json.dump(instextnav_config, f, indent=2)
             
-            print(f"✓ Created insnav_preprocess config: {temp_config_path}")
+            print(f"✓ Created instextnav_preprocess config: {temp_config_path}")
             return temp_config_path
         except Exception as e:
             error_msg = f"Failed to create preprocess config: {e}"
@@ -379,15 +391,15 @@ class EpisodeEvaluator:
         """Run preprocessing pipeline by direct import."""
         original_cwd = os.getcwd()
         try:
-            os.chdir(self.insnav_preprocess_dir)
-            print(f"🔄 Running insnav_preprocess from: {self.insnav_preprocess_dir}")
+            os.chdir(self.instextnav_preprocess_dir)
+            print(f"🔄 Running instextnav_preprocess from: {self.instextnav_preprocess_dir}")
             
             # Initialize the orchestrator and run workflow
             orchestrator = NavigationOrchestrator(str(preprocess_config_path))
             success = orchestrator.run_workflow()
             
             if success:
-                print("✓ Insnav preprocessing completed successfully")
+                print("✓ InstExtNav preprocessing completed successfully")
                 self.results["preprocessing_success"] = True
                 
                 # Check for action.json output
@@ -402,12 +414,12 @@ class EpisodeEvaluator:
                 
                 return True
             else:
-                print("✗ Insnav preprocessing failed")
-                self.results["errors"].append("Insnav preprocessing pipeline failed")
+                print("✗ InstExtNav preprocessing failed")
+                self.results["errors"].append("InstExtNav preprocessing pipeline failed")
                 return False
                 
         except Exception as e:
-            error_msg = f"Insnav preprocessing error: {str(e)}"
+            error_msg = f"InstExtNav preprocessing error: {str(e)}"
             print(f"✗ {error_msg}")
             self.results["errors"].append(error_msg)
             return False
@@ -445,7 +457,7 @@ class EpisodeEvaluator:
                 "config_path": video_config_path,
                 "action_json_path": action_json_path,
                 "output_dir": Path(video_config['output_dir']),
-                "wall_mask_path": self.output_dir / "insnav_preprocess_output" / "wall_mask.png"
+                "wall_mask_path": self.output_dir / "instextnav_preprocess_output" / "wall_mask.png"
             }
         except Exception as e:
             error_msg = f"Failed to create video generation assets: {e}"
@@ -525,8 +537,8 @@ class EpisodeEvaluator:
             composer.set_map_builder(map_builder, config)
             
             # Initialize map from wall mask (if available from preprocessing)
-            # Check for wall mask in insnav_preprocess output
-            preprocess_output_dir = self.output_dir / "insnav_preprocess_output"
+            # Check for wall mask in instextnav_preprocess output
+            preprocess_output_dir = self.output_dir / "instextnav_preprocess_output"
             wall_mask_path = preprocess_output_dir / "wall_mask.png"
             if wall_mask_path.exists():
                 print(f"🗺️ 使用 wall mask 初始化占用地图: {wall_mask_path}")
@@ -782,7 +794,7 @@ class EpisodeEvaluator:
             self.results["episode_data"] = episode_data
             
             # Step 2: Run preprocessing
-            print("\n⚙️ Running insnav_preprocess pipeline...")
+            print("\n⚙️ Running instextnav_preprocess pipeline...")
             preprocess_config_path = self._create_preprocess_config(episode_data)
             
             if not self._run_preprocessing(preprocess_config_path):
@@ -823,7 +835,7 @@ class EpisodeEvaluator:
         finally:
             # Cleanup temporary files
             temp_files = [
-                self.output_dir / "temp_insnav_preprocess_config.json",
+                self.output_dir / "temp_instextnav_preprocess_config.json",
                 self.output_dir / "video_generation_config.json"
             ]
             for temp_file in temp_files:

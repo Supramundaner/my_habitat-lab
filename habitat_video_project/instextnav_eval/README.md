@@ -1,11 +1,11 @@
-# Image Instance Navigation Evaluation (InsnNav Eval)
+# Text Navigation Evaluation (TextNav Eval)
 
-This directory contains the evaluation pipeline for Image Instance Navigation tasks. Unlike Object Navigation where the goal can be any object of a specific category, Image Instance Navigation requires the agent to navigate to a specific object instance identified by a unique image goal.
+This directory contains the evaluation pipeline for Text Navigation tasks. Unlike Image Instance Navigation which uses image goals, Text Navigation requires the agent to navigate to a specific object instance identified by text descriptions of its intrinsic and extrinsic attributes.
 
 ## Overview
 
 The evaluation pipeline consists of three main stages:
-1. **Preprocessing** (`insnav_preprocess`): Generates navigation actions using LLM-guided room selection and graph-based path planning
+1. **Preprocessing** (`instextnav_preprocess`): Generates navigation actions using LLM-guided room selection with text descriptions and graph-based path planning
 2. **Video Generation**: Executes the navigation actions in Habitat simulator and records the agent's journey
 3. **Evaluation**: Measures navigation success based on proximity to target viewpoints
 
@@ -17,11 +17,12 @@ The evaluation pipeline consists of three main stages:
 - `batch_config_example.json`: Example configuration for batch evaluation
 - `README.md`: This documentation file
 
-## Key Differences from Object Navigation
+## Key Features of Text Navigation
 
-1. **Goal Specificity**: Targets a unique object instance with specific image goals, not any object of a category
-2. **Success Criteria**: Agent must reach viewpoints of the specific target object (identified by `goal_object_id` and `goal_image_id`)
-3. **Preprocessing Pipeline**: Uses `insnav_preprocess` instead of `preprocess`, which generates goal images and performs image-guided navigation planning
+1. **Text-Based Goals**: Uses intrinsic and extrinsic text descriptions instead of images to identify target objects
+2. **Attribute Analysis**: LLM analyzes object attributes (color, material, size, location context) to guide navigation
+3. **Multi-modal Reasoning**: Combines text descriptions with room layout images for optimal path planning
+4. **Preprocessing Pipeline**: Uses `instextnav_preprocess` with TextNav mode to generate text-guided navigation planning
 
 ## 使用方法 / Usage
 
@@ -29,7 +30,7 @@ The evaluation pipeline consists of three main stages:
 
 ```bash
 # Navigate to the insnav_eval directory
-cd /home/yaoaa/habitat-lab/habitat_video_project/insnav_eval
+cd /home/yaoaa/habitat-lab/habitat_video_project/instextnav_eval
 
 # Run single episode evaluation
 python run_eval.py example_config.json

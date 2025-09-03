@@ -102,7 +102,7 @@ class BatchEvaluator:
                             "success": results.get("success", False),
                             "sr": results.get("sr", 0.0),
                             "spl": results.get("spl", 0.0),
-                            "min_distance_to_target": results.get("min_distance_to_target", float('inf')),
+                            "min_distance_to_target": results.get("geodesic_distance_to_target", results.get("min_distance_to_target", float('inf'))),
                             "episode_key": episode_key
                         }
             return None
