@@ -87,7 +87,7 @@ def path_planning_step(config: Dict[str, Any], output_dir: str, iteration: int =
     }
 
     # 5. Save the action.json file with iteration-specific naming
-    action_filename = f"action_iter_{iteration + 1}.json" if iteration > 0 else "action.json"
+    action_filename = f"action_iter_{iteration + 1}.json"
     action_path = os.path.join(output_dir, action_filename)
     with open(action_path, 'w', encoding='utf-8') as f:
         json.dump(action_data, f, indent=4)

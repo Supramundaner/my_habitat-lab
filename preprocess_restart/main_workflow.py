@@ -307,7 +307,7 @@ class WorkflowOrchestrator:
             # Call room selection with marked images
             result = select_room_with_llm(
                 marked_topdown_path, marked_room_annotation_path,
-                self.config, self.output_dir, iteration
+                self.config, self.output_dir, iteration, selected_results
             )
             
             # Check if room selection was successful
@@ -344,10 +344,10 @@ class WorkflowOrchestrator:
             # Use the marked topdown from this iteration
             marked_topdown_path = os.path.join(self.output_dir, f"topdown_marked_iter_{iteration}.png")
             
-            # Call node selection with marked topdown
+            # Call node selection with marked topdown and selected results
             result = select_navigation_node(
                 graph_path, marked_topdown_path, room_bbox, selected_room,
-                self.config, self.output_dir, iteration
+                self.config, self.output_dir, iteration, selected_results
             )
             
             # Check if node selection was successful

@@ -1,0 +1,2668 @@
+{
+  "workflow_status": "completed_successfully",
+  "workflow_type": "one_stage",
+  "steps_completed": [
+    "step_0_topdown_generation",
+    "step_1_wall_mask",
+    "step_2_graph_generation",
+    "step_3_onestage_node_selection",
+    "step_4_path_planning"
+  ],
+  "generated_files": {
+    "topdown_view": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/topdown_view.png",
+    "metadata": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/metadata.json",
+    "wall_mask": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/wall_mask.png",
+    "graph_with_topdown_view": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/graph_with_topdown_view.png",
+    "navigation_nodes": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/navigation_nodes.json",
+    "topdown_with_nodes": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/topdown_with_nodes.png",
+    "selected_node_with_topdown": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/selected_node_with_topdown.png",
+    "node_selection_log": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/onestage_node_selection_log.json",
+    "llm_content": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/preprocess/llm_node_selection_content.json",
+    "reasoning_text": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/preprocess/llm_reasoning.txt",
+    "action_json": "/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output/DYehNKdT76V/1252/preprocess/action.json"
+  },
+  "llm_responses": {
+    "step_3_onestage_node_selection": {
+      "raw_response": "\nOkay, let's try to figure out where the sofa is. First, I need to remember that sofas are usually in living rooms. Let's start by analyzing the original image. \n\nLooking at the original top-down view, there are several rooms. On the left side, there's a room with a bed (since there's a striped mattress-like object), so that's a bedroom. In the middle, there's a large empty space, maybe a hallway or a big room. On the right side, there are a few areas. Let's check the right side: there's a room with a table and chairs (maybe a dining area) and another area with some furniture. Wait, living rooms often have sofas, TV, coffee tables. \n\nNow, the nodes image overlays the nodes. Let's think about the layout. The leftmost room is a bedroom (bed visible), so probably not the sofa. The middle area is empty, so maybe not. The right side: let's look at the nodes on the right. There's a section with nodes 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16, etc. Wait, in the original image, the right side has a room with a white rectangular object—could that be a sofa? Wait, no, wait. Let me check again. Wait, the original image's right side: there's a room with a bed (white mattress), that's another bedroom. Then above that, there's a room with two white chairs and a table—maybe a dining area. Wait, maybe the living room is in the upper middle? Wait, the original image has a wooden floor area in the upper middle. Let's see. \n\nWait, sofas are typically in living rooms, which are often near the entrance or in a central area. Let's look at the nodes image. The nodes are spread across the map. Let's identify the rooms again. Left: bedroom (bed). Middle: maybe a hallway. Right: there's a bedroom (white bed), a dining area (table and chairs), and maybe a living area. Wait, in the original image, the upper right part (above the dining area) has some furniture. Wait, no, let's think about the semantics. A sofa is a long seating piece, usually with a back. In top-down view, it might look like a long rectangle. \n\nWait, maybe I should look for the living room. Living rooms often have a TV. Is there a TV visible? In the original image, maybe not clearly, but let's think about the node positions. The nodes in the upper middle area (nodes 26, 28, 55, 58, 59, 62, 66, 68, 72, 74, 84) are in a wooden floor area. Maybe that's a living room. Alternatively, the area with nodes 7,8,9,10,13,14,15,17,26 is in a part with some furniture. Wait, in the original image, the right side has a section with a table and chairs (dining) and another section with a possible sofa. \n\nWait, let's re-examine the original image. Let's split the image into sections. Leftmost: two rooms. The lower left room has a bed (striped), so bedroom. The upper left has a sink and toilet? Maybe a bathroom. Middle: a large dark area, maybe a closet or empty space. Right side: upper right has a room with two white chairs and a table (dining). Below that, a room with a white bed (bedroom). To the left of that, a small area with a sink (kitchen?). Then, the upper middle area (between left and right) is a wooden floor area—maybe the living room. That's a common setup: living room in the central area. \n\nSo if the living room is in the upper middle wooden floor area, then the sofa is likely there. Now, looking at the nodes image, that area has nodes like 28, 55, 58, 59, 62, 66, 68, 72, 74, 84. Now, which node is best. Priority 1 is if the sofa is visible. If I can't see the sofa directly, priority 2 is the node with best access to the living room. \n\nWait, maybe the sofa is in the upper middle area. Let's check the nodes in that area. Node 28 is in the middle of that wooden area. Node 55 is nearby. Node 74 is on the left side of that area. Alternatively, maybe the living room is where the nodes 7,8,9 are. Wait, in the original image, the area with nodes 7,8,9 has some circular objects (maybe chairs) and a rectangular object—could that be a sofa? Wait, no, a sofa is longer. Maybe the rectangular object in the upper middle area is a sofa. \n\nAlternatively, let's think about the room context. The living room should be a space that's not a bedroom, kitchen, bathroom, or dining room. The upper middle area is a large open space with wooden floors, which is typical for a living room. So the sofa is likely there. Now, which node in that area is the best. The node that's in the center of that area would be best for access. Looking at the nodes image, the upper middle area has nodes 84 (top), 74 (left), 72 (left), 68 (middle left), 66 (middle), 62 (middle right), 59 (right), 58 (lower right), 55 (lower middle), 28 (lower left). Node 66 is in the middle of that area. Wait, but let's check the positions again. Maybe I'm misplacing the area. \n\nWait, another approach: the original image's upper middle area (between the left bathroom/bedroom and the right dining area) is a large wooden floor space. That's probably the living room. So the sofa is there. The nodes in that area are 28, 55, 58, 59, 62, 66, 68, 70, 72, 74, 84, 86, etc. The best node would be one that's centrally located in that space. Node 66 is in the middle of that area, which would provide good access. Alternatively, node 55 is also in that area. Wait, maybe I should look for the node that's closest to where a sofa would be placed. Sofas are often placed against a wall. In the upper middle area, the walls are on the top, left, and right. So a sofa might be against the left wall, right wall, or top wall. The node closest to that wall would be best. \n\nAlternatively, maybe the sofa is visible in the original image. Let me look again. The original image's upper middle area has a wooden floor. Is there a rectangular object there? Maybe not clearly visible, but since it's a top-down view, maybe the sofa is a darker rectangle. If not visible, then the best node is the one that gives access to the living room. The living room is the most likely place, so the node in the living room area. \n\nLooking at the nodes image, the upper middle area (wooden floor) has nodes like 66, 62, 59, 58, 55, 28, 68, 70, 72, 74, 84, 86. Node 66 is in the center of that area, which would be a good vantage point to search. So I think node 66 is the best choice. Wait, but let's confirm. Are there other possible areas? The left bedroom has a bed, so no. The right bedroom has a bed, no. The dining area has a table and chairs, no. The kitchen has a sink, no. The bathroom has a toilet, no. So the only possible area is the upper middle wooden floor area, which is the living room. Therefore, the best node is in that area. Node 66 is centrally located there, so it's the best choice.",
+      "selected_node_id": 66,
+      "selected_node_data": {
+        "node_id": 66,
+        "pixel_coordinates": [
+          671.0798654146294,
+          691.03667063945
+        ],
+        "world_coordinates": [
+          -4.767379232181366,
+          -5.873137858217671
+        ]
+      },
+      "model_used": "seed-1-6-250615",
+      "available_nodes": [
+        {
+          "node_id": 0,
+          "pixel_coordinates": [
+            1293.0,
+            907.0
+          ],
+          "world_coordinates": [
+            1.6051538993647547,
+            -3.6602597167716855
+          ]
+        },
+        {
+          "node_id": 1,
+          "pixel_coordinates": [
+            1246.6513406435433,
+            944.3989833894536
+          ],
+          "world_coordinates": [
+            1.130240239351675,
+            -3.2770493212852507
+          ]
+        },
+        {
+          "node_id": 2,
+          "pixel_coordinates": [
+            1172.940099656405,
+            881.1734040874111
+          ],
+          "world_coordinates": [
+            0.3749546339562446,
+            -3.9248931141736705
+          ]
+        },
+        {
+          "node_id": 3,
+          "pixel_coordinates": [
+            1159.585492475745,
+            804.9336381899378
+          ],
+          "world_coordinates": [
+            0.23811604008393594,
+            -4.706087365822839
+          ]
+        },
+        {
+          "node_id": 4,
+          "pixel_coordinates": [
+            1221.8864090881525,
+            869.8283822585547
+          ],
+          "world_coordinates": [
+            0.8764852343904455,
+            -4.041140399736632
+          ]
+        },
+        {
+          "node_id": 5,
+          "pixel_coordinates": [
+            1291.6544246236801,
+            971.8714007869063
+          ],
+          "world_coordinates": [
+            1.5913663996686598,
+            -2.9955519386902196
+          ]
+        },
+        {
+          "node_id": 6,
+          "pixel_coordinates": [
+            1198.1055501824312,
+            956.7399231300043
+          ],
+          "world_coordinates": [
+            0.6328135748865034,
+            -3.150597317245369
+          ]
+        },
+        {
+          "node_id": 7,
+          "pixel_coordinates": [
+            1215.788225478167,
+            818.2854164884711
+          ],
+          "world_coordinates": [
+            0.8139999168459475,
+            -4.5692777582207516
+          ]
+        },
+        {
+          "node_id": 8,
+          "pixel_coordinates": [
+            1102.1515307791017,
+            813.3358158806597
+          ],
+          "world_coordinates": [
+            -0.3503836778610694,
+            -4.619994067449472
+          ]
+        },
+        {
+          "node_id": 9,
+          "pixel_coordinates": [
+            1118.8396663639387,
+            764.3393817189777
+          ],
+          "world_coordinates": [
+            -0.17938793258099928,
+            -5.122038273223737
+          ]
+        },
+        {
+          "node_id": 10,
+          "pixel_coordinates": [
+            1224.2545410209482,
+            751.2444095106916
+          ],
+          "world_coordinates": [
+            0.9007504066567744,
+            -5.256216505465105
+          ]
+        },
+        {
+          "node_id": 11,
+          "pixel_coordinates": [
+            1098.9710892018443,
+            889.2384722686095
+          ],
+          "world_coordinates": [
+            -0.382972218088236,
+            -3.842254023823058
+          ]
+        },
+        {
+          "node_id": 12,
+          "pixel_coordinates": [
+            1049.5785457040529,
+            894.9905696485454
+          ],
+          "world_coordinates": [
+            -0.8890751763094773,
+            -3.7833148946791546
+          ]
+        },
+        {
+          "node_id": 13,
+          "pixel_coordinates": [
+            1178.1152268975989,
+            733.2503140697493
+          ],
+          "world_coordinates": [
+            0.42798181215889564,
+            -5.44059382819973
+          ]
+        },
+        {
+          "node_id": 14,
+          "pixel_coordinates": [
+            984.9162052752031,
+            958.9559086703093
+          ],
+          "world_coordinates": [
+            -1.5516408078609913,
+            -3.127891119955205
+          ]
+        },
+        {
+          "node_id": 15,
+          "pixel_coordinates": [
+            1046.0378406815396,
+            798.9798718945536
+          ],
+          "world_coordinates": [
+            -0.925355172421904,
+            -4.767092904741615
+          ]
+        },
+        {
+          "node_id": 16,
+          "pixel_coordinates": [
+            1247.3396636088175,
+            1055.541906867013
+          ],
+          "world_coordinates": [
+            1.1372931721279045,
+            -2.1382182675683055
+          ]
+        },
+        {
+          "node_id": 17,
+          "pixel_coordinates": [
+            954.1368099452334,
+            782.3673922820955
+          ],
+          "world_coordinates": [
+            -1.8670232912403968,
+            -4.9373134376370515
+          ]
+        },
+        {
+          "node_id": 18,
+          "pixel_coordinates": [
+            1108.972556124757,
+            955.5964743490839
+          ],
+          "world_coordinates": [
+            -0.28049172937915934,
+            -3.1623137175280185
+          ]
+        },
+        {
+          "node_id": 19,
+          "pixel_coordinates": [
+            1267.6447309542298,
+            818.8525323210081
+          ],
+          "world_coordinates": [
+            1.3453499742817403,
+            -4.563466779879175
+          ]
+        },
+        {
+          "node_id": 20,
+          "pixel_coordinates": [
+            937.5931730077084,
+            1020.363022926337
+          ],
+          "world_coordinates": [
+            -2.0365384245154026,
+            -2.49868031241307
+          ]
+        },
+        {
+          "node_id": 21,
+          "pixel_coordinates": [
+            970.4954919694505,
+            852.3791934204046
+          ],
+          "world_coordinates": [
+            -1.6994033069521386,
+            -4.219934312019035
+          ]
+        },
+        {
+          "node_id": 22,
+          "pixel_coordinates": [
+            1074.2939635463704,
+            1035.337332188189
+          ],
+          "world_coordinates": [
+            -0.6358275158760698,
+            -2.3452453670132254
+          ]
+        },
+        {
+          "node_id": 23,
+          "pixel_coordinates": [
+            1175.8908654096124,
+            1081.2016436241784
+          ],
+          "world_coordinates": [
+            0.40518979033734936,
+            -1.8752946001414514
+          ]
+        },
+        {
+          "node_id": 24,
+          "pixel_coordinates": [
+            1192.692697765664,
+            1032.227677118173
+          ],
+          "world_coordinates": [
+            0.5773505347888932,
+            -2.3771085900532203
+          ]
+        },
+        {
+          "node_id": 25,
+          "pixel_coordinates": [
+            986.7629751295101,
+            1030.176060485277
+          ],
+          "world_coordinates": [
+            -1.5327177960007017,
+            -2.398130573808542
+          ]
+        },
+        {
+          "node_id": 26,
+          "pixel_coordinates": [
+            1012.436388610387,
+            707.5279390696198
+          ],
+          "world_coordinates": [
+            -1.2696539893981953,
+            -5.7041593212507955
+          ]
+        },
+        {
+          "node_id": 27,
+          "pixel_coordinates": [
+            1005.913730697957,
+            1075.4172556531967
+          ],
+          "world_coordinates": [
+            -1.3364887023158172,
+            -1.9345645963048224
+          ]
+        },
+        {
+          "node_id": 28,
+          "pixel_coordinates": [
+            920.4509351949525,
+            708.6910395792389
+          ],
+          "world_coordinates": [
+            -2.212187149063384,
+            -5.692241558630347
+          ]
+        },
+        {
+          "node_id": 29,
+          "pixel_coordinates": [
+            941.619737904115,
+            933.4392602141069
+          ],
+          "world_coordinates": [
+            -1.995280042961669,
+            -3.3893486265554262
+          ]
+        },
+        {
+          "node_id": 30,
+          "pixel_coordinates": [
+            1062.3275646935585,
+            722.2839714833947
+          ],
+          "world_coordinates": [
+            -0.7584417695626442,
+            -5.552960959567844
+          ]
+        },
+        {
+          "node_id": 31,
+          "pixel_coordinates": [
+            936.3891318964772,
+            1075.5014009683155
+          ],
+          "world_coordinates": [
+            -2.048875686884596,
+            -1.933702397481147
+          ]
+        },
+        {
+          "node_id": 32,
+          "pixel_coordinates": [
+            1227.3576231366294,
+            1143.1677229411857
+          ],
+          "world_coordinates": [
+            0.9325462796192578,
+            -1.2403563315116575
+          ]
+        },
+        {
+          "node_id": 33,
+          "pixel_coordinates": [
+            982.1254218604175,
+            902.8926648329943
+          ],
+          "world_coordinates": [
+            -1.580236697887205,
+            -3.702345714600906
+          ]
+        },
+        {
+          "node_id": 34,
+          "pixel_coordinates": [
+            1054.8617466515373,
+            1090.6328603341524
+          ],
+          "world_coordinates": [
+            -0.8349406159275308,
+            -1.7786572063462351
+          ]
+        },
+        {
+          "node_id": 35,
+          "pixel_coordinates": [
+            1130.4752110612656,
+            683.0808611663689
+          ],
+          "world_coordinates": [
+            -0.060163791145644296,
+            -5.954657424213517
+          ]
+        },
+        {
+          "node_id": 36,
+          "pixel_coordinates": [
+            1153.689118147615,
+            933.4342700561178
+          ],
+          "world_coordinates": [
+            0.17769857058512883,
+            -3.389399758437719
+          ]
+        },
+        {
+          "node_id": 37,
+          "pixel_coordinates": [
+            1215.514665501013,
+            681.6656719607282
+          ],
+          "world_coordinates": [
+            0.8111968720160174,
+            -5.969158225198782
+          ]
+        },
+        {
+          "node_id": 38,
+          "pixel_coordinates": [
+            976.5233986679921,
+            1116.7916571479361
+          ],
+          "world_coordinates": [
+            -1.637638084998141,
+            -1.5106198972014582
+          ]
+        },
+        {
+          "node_id": 39,
+          "pixel_coordinates": [
+            1123.0721692659704,
+            1041.3218263907381
+          ],
+          "world_coordinates": [
+            -0.13601939782445172,
+            -2.2839249731869096
+          ]
+        },
+        {
+          "node_id": 40,
+          "pixel_coordinates": [
+            1120.0788387025675,
+            1092.2779082094135
+          ],
+          "world_coordinates": [
+            -0.16669069648190948,
+            -1.7618011479793996
+          ]
+        },
+        {
+          "node_id": 41,
+          "pixel_coordinates": [
+            1273.6786717014336,
+            719.1190316799001
+          ],
+          "world_coordinates": [
+            1.4071770243916024,
+            -5.585390660160453
+          ]
+        },
+        {
+          "node_id": 42,
+          "pixel_coordinates": [
+            1145.6960819268263,
+            1155.4166732063468
+          ],
+          "world_coordinates": [
+            0.09579755901459386,
+            -1.1148469018427818
+          ]
+        },
+        {
+          "node_id": 43,
+          "pixel_coordinates": [
+            1038.712565562867,
+            1169.9817295660205
+          ],
+          "world_coordinates": [
+            -1.0004139392884142,
+            -0.965605385041373
+          ]
+        },
+        {
+          "node_id": 44,
+          "pixel_coordinates": [
+            997.3068788483545,
+            1203.2455933360986
+          ],
+          "world_coordinates": [
+            -1.4246792038284717,
+            -0.6247656820473839
+          ]
+        },
+        {
+          "node_id": 45,
+          "pixel_coordinates": [
+            1082.115274876085,
+            1146.9567747894516
+          ],
+          "world_coordinates": [
+            -0.5556860912637713,
+            -1.201531638279432
+          ]
+        },
+        {
+          "node_id": 46,
+          "pixel_coordinates": [
+            958.0146681314565,
+            1167.5232231225145
+          ],
+          "world_coordinates": [
+            -1.8272886398005959,
+            -0.9907965838691872
+          ]
+        },
+        {
+          "node_id": 47,
+          "pixel_coordinates": [
+            961.4290054226565,
+            1260.1486852264725
+          ],
+          "world_coordinates": [
+            -1.7923034764323909,
+            -0.04170554587640396
+          ]
+        },
+        {
+          "node_id": 48,
+          "pixel_coordinates": [
+            1029.281510877699,
+            1247.1422947584986
+          ],
+          "world_coordinates": [
+            -1.097049672889037,
+            -0.17497612126024542
+          ]
+        },
+        {
+          "node_id": 49,
+          "pixel_coordinates": [
+            1287.9704906050988,
+            766.6938052105099
+          ],
+          "world_coordinates": [
+            1.5536188010907654,
+            -5.097913565128408
+          ]
+        },
+        {
+          "node_id": 50,
+          "pixel_coordinates": [
+            1214.0798711616394,
+            1232.486033294409
+          ],
+          "world_coordinates": [
+            0.7964951861304019,
+            -0.32515217533956964
+          ]
+        },
+        {
+          "node_id": 51,
+          "pixel_coordinates": [
+            1117.204104756757,
+            1234.8723671383464
+          ],
+          "world_coordinates": [
+            -0.19614678946766162,
+            -0.3007004963574147
+          ]
+        },
+        {
+          "node_id": 52,
+          "pixel_coordinates": [
+            1177.1167978275487,
+            1195.6232397202289
+          ],
+          "world_coordinates": [
+            0.4177513629829175,
+            -0.7028684773361622
+          ]
+        },
+        {
+          "node_id": 53,
+          "pixel_coordinates": [
+            1070.3742772095434,
+            1210.0970129806938
+          ],
+          "world_coordinates": [
+            -0.6759907613759957,
+            -0.554562296989884
+          ]
+        },
+        {
+          "node_id": 54,
+          "pixel_coordinates": [
+            1109.2020069337166,
+            1289.783229116013
+          ],
+          "world_coordinates": [
+            -0.27814065116052156,
+            0.2619461648054795
+          ]
+        },
+        {
+          "node_id": 55,
+          "pixel_coordinates": [
+            846.2648394330886,
+            727.007333885515
+          ],
+          "world_coordinates": [
+            -2.9723383756476665,
+            -5.504562810471292
+          ]
+        },
+        {
+          "node_id": 56,
+          "pixel_coordinates": [
+            990.5765057222574,
+            1299.9353133092086
+          ],
+          "world_coordinates": [
+            -1.4936422801924731,
+            0.3659699602700144
+          ]
+        },
+        {
+          "node_id": 57,
+          "pixel_coordinates": [
+            1161.6968287508214,
+            1287.8459518517075
+          ],
+          "world_coordinates": [
+            0.25974994388691997,
+            0.24209576462506277
+          ]
+        },
+        {
+          "node_id": 58,
+          "pixel_coordinates": [
+            778.0341789810146,
+            735.4558462217593
+          ],
+          "world_coordinates": [
+            -3.671466961680652,
+            -5.417994742031303
+          ]
+        },
+        {
+          "node_id": 59,
+          "pixel_coordinates": [
+            805.3481903118175,
+            691.9392487920534
+          ],
+          "world_coordinates": [
+            -3.3915926940996375,
+            -5.8638895498555215
+          ]
+        },
+        {
+          "node_id": 60,
+          "pixel_coordinates": [
+            1234.9896018465402,
+            1291.776543035981
+          ],
+          "world_coordinates": [
+            1.0107476988747788,
+            0.2823707471435899
+          ]
+        },
+        {
+          "node_id": 61,
+          "pixel_coordinates": [
+            937.3979030687775,
+            1304.0494540124546
+          ],
+          "world_coordinates": [
+            -2.038539266884433,
+            0.4081256913378901
+          ]
+        },
+        {
+          "node_id": 62,
+          "pixel_coordinates": [
+            726.3769068672552,
+            700.2812122263417
+          ],
+          "world_coordinates": [
+            -4.200775565348376,
+            -5.778413239617407
+          ]
+        },
+        {
+          "node_id": 63,
+          "pixel_coordinates": [
+            659.0564878822839,
+            741.0475963959984
+          ],
+          "world_coordinates": [
+            -4.890577320516358,
+            -5.360698617871528
+          ]
+        },
+        {
+          "node_id": 64,
+          "pixel_coordinates": [
+            1247.8402871648655,
+            1196.129216518736
+          ],
+          "world_coordinates": [
+            1.1424228343143117,
+            -0.6976839629058151
+          ]
+        },
+        {
+          "node_id": 65,
+          "pixel_coordinates": [
+            927.3973196550547,
+            1222.2539731035065
+          ],
+          "world_coordinates": [
+            -2.141010702676148,
+            -0.4299954485260411
+          ]
+        },
+        {
+          "node_id": 66,
+          "pixel_coordinates": [
+            671.0798654146294,
+            691.03667063945
+          ],
+          "world_coordinates": [
+            -4.767379232181366,
+            -5.873137858217671
+          ]
+        },
+        {
+          "node_id": 67,
+          "pixel_coordinates": [
+            1056.3087411169456,
+            1293.0519231564176
+          ],
+          "world_coordinates": [
+            -0.8201139208919592,
+            0.29543898793662393
+          ]
+        },
+        {
+          "node_id": 68,
+          "pixel_coordinates": [
+            593.3862357906744,
+            682.8837634070576
+          ],
+          "world_coordinates": [
+            -5.563470565064179,
+            -5.956676995427757
+          ]
+        },
+        {
+          "node_id": 69,
+          "pixel_coordinates": [
+            560.6210718251016,
+            720.2225314414471
+          ],
+          "world_coordinates": [
+            -5.899200317680015,
+            -5.574083599333744
+          ]
+        },
+        {
+          "node_id": 70,
+          "pixel_coordinates": [
+            595.6493256877563,
+            769.8900250545593
+          ],
+          "world_coordinates": [
+            -5.540281710825786,
+            -5.065163352168204
+          ]
+        },
+        {
+          "node_id": 71,
+          "pixel_coordinates": [
+            605.5955666979489,
+            830.5425985124128
+          ],
+          "world_coordinates": [
+            -5.438367096959728,
+            -4.443683981458667
+          ]
+        },
+        {
+          "node_id": 72,
+          "pixel_coordinates": [
+            520.1317685831812,
+            692.6171308869922
+          ],
+          "world_coordinates": [
+            -6.314075817014628,
+            -5.856943599935184
+          ]
+        },
+        {
+          "node_id": 73,
+          "pixel_coordinates": [
+            443.5096749325989,
+            752.8768020122571
+          ],
+          "world_coordinates": [
+            -7.099187607489616,
+            -5.239490120964225
+          ]
+        },
+        {
+          "node_id": 74,
+          "pixel_coordinates": [
+            454.9284867214154,
+            691.4712808335174
+          ],
+          "world_coordinates": [
+            -6.982184229723697,
+            -5.868684604966996
+          ]
+        },
+        {
+          "node_id": 75,
+          "pixel_coordinates": [
+            503.2959605788089,
+            746.3576925022612
+          ],
+          "world_coordinates": [
+            -6.4865846945021515,
+            -5.306288475013854
+          ]
+        },
+        {
+          "node_id": 76,
+          "pixel_coordinates": [
+            380.8618113626573,
+            730.5258174521457
+          ],
+          "world_coordinates": [
+            -7.741111809680294,
+            -5.4685105075238996
+          ]
+        },
+        {
+          "node_id": 77,
+          "pixel_coordinates": [
+            331.28902737098934,
+            748.9766949418349
+          ],
+          "world_coordinates": [
+            -8.249061610373746,
+            -5.279452746614563
+          ]
+        },
+        {
+          "node_id": 78,
+          "pixel_coordinates": [
+            423.488880702522,
+            821.5836282646695
+          ],
+          "world_coordinates": [
+            -7.30433159215268,
+            -4.535482480258425
+          ]
+        },
+        {
+          "node_id": 79,
+          "pixel_coordinates": [
+            262.8756939104663,
+            697.9194964550912
+          ],
+          "world_coordinates": [
+            -8.950061963750874,
+            -5.802612668390722
+          ]
+        },
+        {
+          "node_id": 80,
+          "pixel_coordinates": [
+            442.6744880551094,
+            870.6167521868409
+          ],
+          "world_coordinates": [
+            -7.107745388066028,
+            -4.033062331173587
+          ]
+        },
+        {
+          "node_id": 81,
+          "pixel_coordinates": [
+            323.01764754604244,
+            693.2526983788069
+          ],
+          "world_coordinates": [
+            -8.33381468242731,
+            -5.850431228532989
+          ]
+        },
+        {
+          "node_id": 82,
+          "pixel_coordinates": [
+            247.43047380522495,
+            746.8683748092255
+          ],
+          "world_coordinates": [
+            -9.108322118666573,
+            -5.301055745375677
+          ]
+        },
+        {
+          "node_id": 83,
+          "pixel_coordinates": [
+            281.60053489152824,
+            835.0256099321887
+          ],
+          "world_coordinates": [
+            -8.758197023384692,
+            -4.397748599706366
+          ]
+        },
+        {
+          "node_id": 84,
+          "pixel_coordinates": [
+            417.98960389909456,
+            655.5327615943072
+          ],
+          "world_coordinates": [
+            -7.360680183684852,
+            -6.236930287675532
+          ]
+        },
+        {
+          "node_id": 85,
+          "pixel_coordinates": [
+            312.41326268797366,
+            904.1058747464831
+          ],
+          "world_coordinates": [
+            -8.442472997361529,
+            -3.6899145036796153
+          ]
+        },
+        {
+          "node_id": 86,
+          "pixel_coordinates": [
+            468.63967077192285,
+            801.08809512209
+          ],
+          "world_coordinates": [
+            -6.841691954629826,
+            -4.745490898922769
+          ]
+        },
+        {
+          "node_id": 87,
+          "pixel_coordinates": [
+            232.7432306015054,
+            808.1675442255098
+          ],
+          "world_coordinates": [
+            -9.258815628559411,
+            -4.672950999575862
+          ]
+        },
+        {
+          "node_id": 88,
+          "pixel_coordinates": [
+            286.84005804024906,
+            782.0233301152448
+          ],
+          "world_coordinates": [
+            -8.704510009567418,
+            -4.940838886381414
+          ]
+        },
+        {
+          "node_id": 89,
+          "pixel_coordinates": [
+            249.2151227041187,
+            875.9973251717163
+          ],
+          "world_coordinates": [
+            -9.090035632019923,
+            -3.9779300437526643
+          ]
+        },
+        {
+          "node_id": 90,
+          "pixel_coordinates": [
+            360.7348565340342,
+            949.3616494079204
+          ],
+          "world_coordinates": [
+            -7.9473435737765685,
+            -3.226199136728095
+          ]
+        },
+        {
+          "node_id": 91,
+          "pixel_coordinates": [
+            269.86516118015913,
+            953.3610856384706
+          ],
+          "world_coordinates": [
+            -8.878444067382766,
+            -3.185218730291055
+          ]
+        },
+        {
+          "node_id": 92,
+          "pixel_coordinates": [
+            368.6913678463327,
+            891.5247071709096
+          ],
+          "world_coordinates": [
+            -7.86581681635305,
+            -3.8188280132290817
+          ]
+        },
+        {
+          "node_id": 93,
+          "pixel_coordinates": [
+            213.33873344442782,
+            695.9044209233693
+          ],
+          "world_coordinates": [
+            -9.457644697048902,
+            -5.823260232079951
+          ]
+        },
+        {
+          "node_id": 94,
+          "pixel_coordinates": [
+            317.4053593841039,
+            976.0466271036908
+          ],
+          "world_coordinates": [
+            -8.39132125001831,
+            -2.9527702910866243
+          ]
+        },
+        {
+          "node_id": 95,
+          "pixel_coordinates": [
+            427.02966349975395,
+            934.1566451542581
+          ],
+          "world_coordinates": [
+            -7.268050799118037,
+            -3.3819979089231165
+          ]
+        },
+        {
+          "node_id": 96,
+          "pixel_coordinates": [
+            284.54752277956305,
+            1044.6379988566437
+          ],
+          "world_coordinates": [
+            -8.728000577072036,
+            -2.2499456601952303
+          ]
+        },
+        {
+          "node_id": 97,
+          "pixel_coordinates": [
+            386.9533345042957,
+            993.4505028605995
+          ],
+          "world_coordinates": [
+            -7.678694738929642,
+            -2.774440681365668
+          ]
+        },
+        {
+          "node_id": 98,
+          "pixel_coordinates": [
+            452.20012983920145,
+            976.3912872380268
+          ],
+          "world_coordinates": [
+            -7.010140463425926,
+            -2.949238715241046
+          ]
+        },
+        {
+          "node_id": 99,
+          "pixel_coordinates": [
+            293.67281775612173,
+            1119.0230824683151
+          ],
+          "world_coordinates": [
+            -8.634497824323855,
+            -1.4877554954979075
+          ]
+        },
+        {
+          "node_id": 100,
+          "pixel_coordinates": [
+            422.2957263272537,
+            1060.034939138712
+          ],
+          "world_coordinates": [
+            -7.316557303083418,
+            -2.0921802066980035
+          ]
+        },
+        {
+          "node_id": 101,
+          "pixel_coordinates": [
+            388.6906431893916,
+            1111.200673159808
+          ],
+          "world_coordinates": [
+            -7.660893325950984,
+            -1.5679081706001696
+          ]
+        },
+        {
+          "node_id": 102,
+          "pixel_coordinates": [
+            229.55029742379625,
+            1007.9087796147348
+          ],
+          "world_coordinates": [
+            -9.29153216454249,
+            -2.626293286680953
+          ]
+        },
+        {
+          "node_id": 103,
+          "pixel_coordinates": [
+            334.48090350437366,
+            1031.2933846259639
+          ],
+          "world_coordinates": [
+            -8.216355905443733,
+            -2.386681860848073
+          ]
+        },
+        {
+          "node_id": 104,
+          "pixel_coordinates": [
+            468.0814907691041,
+            1039.1566054696452
+          ],
+          "world_coordinates": [
+            -6.847411371583098,
+            -2.3061110084822296
+          ]
+        },
+        {
+          "node_id": 105,
+          "pixel_coordinates": [
+            358.8420555494555,
+            1191.6785330177615
+          ],
+          "world_coordinates": [
+            -7.966738245720567,
+            -0.7432880951580945
+          ]
+        },
+        {
+          "node_id": 106,
+          "pixel_coordinates": [
+            419.01754898405636,
+            1209.6937901738743
+          ],
+          "world_coordinates": [
+            -7.35014729731079,
+            -0.5586939379401574
+          ]
+        },
+        {
+          "node_id": 107,
+          "pixel_coordinates": [
+            455.1300184002274,
+            1100.2963787429446
+          ],
+          "world_coordinates": [
+            -6.980119226150301,
+            -1.6796395225589258
+          ]
+        },
+        {
+          "node_id": 108,
+          "pixel_coordinates": [
+            467.7961232957216,
+            1195.6366679230757
+          ],
+          "world_coordinates": [
+            -6.8503354024637,
+            -0.7027308846409266
+          ]
+        },
+        {
+          "node_id": 109,
+          "pixel_coordinates": [
+            338.2550293114192,
+            1094.3831659794573
+          ],
+          "world_coordinates": [
+            -8.177684152576212,
+            -1.7402295278565152
+          ]
+        },
+        {
+          "node_id": 110,
+          "pixel_coordinates": [
+            228.08755731670192,
+            1073.2581536617947
+          ],
+          "world_coordinates": [
+            -9.306520198016457,
+            -1.9566879337069292
+          ]
+        },
+        {
+          "node_id": 111,
+          "pixel_coordinates": [
+            333.5967694653272,
+            1148.9617642547207
+          ],
+          "world_coordinates": [
+            -8.22541522535192,
+            -1.180987421931869
+          ]
+        },
+        {
+          "node_id": 112,
+          "pixel_coordinates": [
+            440.73903021418414,
+            1149.0724938824985
+          ],
+          "world_coordinates": [
+            -7.127577145441482,
+            -1.1798528257314604
+          ]
+        },
+        {
+          "node_id": 113,
+          "pixel_coordinates": [
+            282.512138617608,
+            1204.6537709260053
+          ],
+          "world_coordinates": [
+            -8.748856234070711,
+            -0.6103367259037409
+          ]
+        },
+        {
+          "node_id": 114,
+          "pixel_coordinates": [
+            219.7289980498507,
+            959.426188690403
+          ],
+          "world_coordinates": [
+            -9.392166558212711,
+            -3.123072374199129
+          ]
+        },
+        {
+          "node_id": 115,
+          "pixel_coordinates": [
+            220.26442963480113,
+            1190.6103927494883
+          ],
+          "world_coordinates": [
+            -9.386680233964587,
+            -0.7542328433181584
+          ]
+        },
+        {
+          "node_id": 116,
+          "pixel_coordinates": [
+            232.13156801412183,
+            1131.2089090532804
+          ],
+          "world_coordinates": [
+            -9.265083057263945,
+            -1.3628928655080639
+          ]
+        }
+      ],
+      "attempts_made": 0,
+      "all_responses": [
+        {
+          "attempt": 1,
+          "raw_response": "\nOkay, let's try to figure out where the sofa is. First, I need to remember that sofas are usually in living rooms. Let's start by analyzing the original image. \n\nLooking at the original top-down view, there are several rooms. On the left side, there's a room with a bed (since there's a striped mattress-like object), so that's a bedroom. In the middle, there's a large empty space, maybe a hallway or a big room. On the right side, there are a few areas. Let's check the right side: there's a room with a table and chairs (maybe a dining area) and another area with some furniture. Wait, living rooms often have sofas, TV, coffee tables. \n\nNow, the nodes image overlays the nodes. Let's think about the layout. The leftmost room is a bedroom (bed visible), so probably not the sofa. The middle area is empty, so maybe not. The right side: let's look at the nodes on the right. There's a section with nodes 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16, etc. Wait, in the original image, the right side has a room with a white rectangular object—could that be a sofa? Wait, no, wait. Let me check again. Wait, the original image's right side: there's a room with a bed (white mattress), that's another bedroom. Then above that, there's a room with two white chairs and a table—maybe a dining area. Wait, maybe the living room is in the upper middle? Wait, the original image has a wooden floor area in the upper middle. Let's see. \n\nWait, sofas are typically in living rooms, which are often near the entrance or in a central area. Let's look at the nodes image. The nodes are spread across the map. Let's identify the rooms again. Left: bedroom (bed). Middle: maybe a hallway. Right: there's a bedroom (white bed), a dining area (table and chairs), and maybe a living area. Wait, in the original image, the upper right part (above the dining area) has some furniture. Wait, no, let's think about the semantics. A sofa is a long seating piece, usually with a back. In top-down view, it might look like a long rectangle. \n\nWait, maybe I should look for the living room. Living rooms often have a TV. Is there a TV visible? In the original image, maybe not clearly, but let's think about the node positions. The nodes in the upper middle area (nodes 26, 28, 55, 58, 59, 62, 66, 68, 72, 74, 84) are in a wooden floor area. Maybe that's a living room. Alternatively, the area with nodes 7,8,9,10,13,14,15,17,26 is in a part with some furniture. Wait, in the original image, the right side has a section with a table and chairs (dining) and another section with a possible sofa. \n\nWait, let's re-examine the original image. Let's split the image into sections. Leftmost: two rooms. The lower left room has a bed (striped), so bedroom. The upper left has a sink and toilet? Maybe a bathroom. Middle: a large dark area, maybe a closet or empty space. Right side: upper right has a room with two white chairs and a table (dining). Below that, a room with a white bed (bedroom). To the left of that, a small area with a sink (kitchen?). Then, the upper middle area (between left and right) is a wooden floor area—maybe the living room. That's a common setup: living room in the central area. \n\nSo if the living room is in the upper middle wooden floor area, then the sofa is likely there. Now, looking at the nodes image, that area has nodes like 28, 55, 58, 59, 62, 66, 68, 72, 74, 84. Now, which node is best. Priority 1 is if the sofa is visible. If I can't see the sofa directly, priority 2 is the node with best access to the living room. \n\nWait, maybe the sofa is in the upper middle area. Let's check the nodes in that area. Node 28 is in the middle of that wooden area. Node 55 is nearby. Node 74 is on the left side of that area. Alternatively, maybe the living room is where the nodes 7,8,9 are. Wait, in the original image, the area with nodes 7,8,9 has some circular objects (maybe chairs) and a rectangular object—could that be a sofa? Wait, no, a sofa is longer. Maybe the rectangular object in the upper middle area is a sofa. \n\nAlternatively, let's think about the room context. The living room should be a space that's not a bedroom, kitchen, bathroom, or dining room. The upper middle area is a large open space with wooden floors, which is typical for a living room. So the sofa is likely there. Now, which node in that area is the best. The node that's in the center of that area would be best for access. Looking at the nodes image, the upper middle area has nodes 84 (top), 74 (left), 72 (left), 68 (middle left), 66 (middle), 62 (middle right), 59 (right), 58 (lower right), 55 (lower middle), 28 (lower left). Node 66 is in the middle of that area. Wait, but let's check the positions again. Maybe I'm misplacing the area. \n\nWait, another approach: the original image's upper middle area (between the left bathroom/bedroom and the right dining area) is a large wooden floor space. That's probably the living room. So the sofa is there. The nodes in that area are 28, 55, 58, 59, 62, 66, 68, 70, 72, 74, 84, 86, etc. The best node would be one that's centrally located in that space. Node 66 is in the middle of that area, which would provide good access. Alternatively, node 55 is also in that area. Wait, maybe I should look for the node that's closest to where a sofa would be placed. Sofas are often placed against a wall. In the upper middle area, the walls are on the top, left, and right. So a sofa might be against the left wall, right wall, or top wall. The node closest to that wall would be best. \n\nAlternatively, maybe the sofa is visible in the original image. Let me look again. The original image's upper middle area has a wooden floor. Is there a rectangular object there? Maybe not clearly visible, but since it's a top-down view, maybe the sofa is a darker rectangle. If not visible, then the best node is the one that gives access to the living room. The living room is the most likely place, so the node in the living room area. \n\nLooking at the nodes image, the upper middle area (wooden floor) has nodes like 66, 62, 59, 58, 55, 28, 68, 70, 72, 74, 84, 86. Node 66 is in the center of that area, which would be a good vantage point to search. So I think node 66 is the best choice. Wait, but let's confirm. Are there other possible areas? The left bedroom has a bed, so no. The right bedroom has a bed, no. The dining area has a table and chairs, no. The kitchen has a sink, no. The bathroom has a toilet, no. So the only possible area is the upper middle wooden floor area, which is the living room. Therefore, the best node is in that area. Node 66 is centrally located there, so it's the best choice.",
+          "extracted_content": "66",
+          "timestamp": "2025-09-04 08:28:16.181550"
+        }
+      ]
+    }
+  },
+  "final_results": {
+    "image_size": [
+      2048,
+      2048
+    ],
+    "spacing_in_meters_per_pixel": 0.010246545781629405,
+    "total_pixels": 4194304,
+    "walkable_pixels": 441398,
+    "wall_pixels": 3752906,
+    "walkable_percentage": 10.523748397827148,
+    "wall_percentage": 89.47625160217285,
+    "wall_threshold": 0,
+    "total_nodes": 117,
+    "pds_radius_meters": 0.5,
+    "pds_radius_pixels": 48.796932220458984,
+    "nodes_data": [
+      {
+        "node_id": 0,
+        "pixel_coordinates": [
+          1293.0,
+          907.0
+        ],
+        "world_coordinates": [
+          1.6051538993647547,
+          -3.6602597167716855
+        ]
+      },
+      {
+        "node_id": 1,
+        "pixel_coordinates": [
+          1246.6513406435433,
+          944.3989833894536
+        ],
+        "world_coordinates": [
+          1.130240239351675,
+          -3.2770493212852507
+        ]
+      },
+      {
+        "node_id": 2,
+        "pixel_coordinates": [
+          1172.940099656405,
+          881.1734040874111
+        ],
+        "world_coordinates": [
+          0.3749546339562446,
+          -3.9248931141736705
+        ]
+      },
+      {
+        "node_id": 3,
+        "pixel_coordinates": [
+          1159.585492475745,
+          804.9336381899378
+        ],
+        "world_coordinates": [
+          0.23811604008393594,
+          -4.706087365822839
+        ]
+      },
+      {
+        "node_id": 4,
+        "pixel_coordinates": [
+          1221.8864090881525,
+          869.8283822585547
+        ],
+        "world_coordinates": [
+          0.8764852343904455,
+          -4.041140399736632
+        ]
+      },
+      {
+        "node_id": 5,
+        "pixel_coordinates": [
+          1291.6544246236801,
+          971.8714007869063
+        ],
+        "world_coordinates": [
+          1.5913663996686598,
+          -2.9955519386902196
+        ]
+      },
+      {
+        "node_id": 6,
+        "pixel_coordinates": [
+          1198.1055501824312,
+          956.7399231300043
+        ],
+        "world_coordinates": [
+          0.6328135748865034,
+          -3.150597317245369
+        ]
+      },
+      {
+        "node_id": 7,
+        "pixel_coordinates": [
+          1215.788225478167,
+          818.2854164884711
+        ],
+        "world_coordinates": [
+          0.8139999168459475,
+          -4.5692777582207516
+        ]
+      },
+      {
+        "node_id": 8,
+        "pixel_coordinates": [
+          1102.1515307791017,
+          813.3358158806597
+        ],
+        "world_coordinates": [
+          -0.3503836778610694,
+          -4.619994067449472
+        ]
+      },
+      {
+        "node_id": 9,
+        "pixel_coordinates": [
+          1118.8396663639387,
+          764.3393817189777
+        ],
+        "world_coordinates": [
+          -0.17938793258099928,
+          -5.122038273223737
+        ]
+      },
+      {
+        "node_id": 10,
+        "pixel_coordinates": [
+          1224.2545410209482,
+          751.2444095106916
+        ],
+        "world_coordinates": [
+          0.9007504066567744,
+          -5.256216505465105
+        ]
+      },
+      {
+        "node_id": 11,
+        "pixel_coordinates": [
+          1098.9710892018443,
+          889.2384722686095
+        ],
+        "world_coordinates": [
+          -0.382972218088236,
+          -3.842254023823058
+        ]
+      },
+      {
+        "node_id": 12,
+        "pixel_coordinates": [
+          1049.5785457040529,
+          894.9905696485454
+        ],
+        "world_coordinates": [
+          -0.8890751763094773,
+          -3.7833148946791546
+        ]
+      },
+      {
+        "node_id": 13,
+        "pixel_coordinates": [
+          1178.1152268975989,
+          733.2503140697493
+        ],
+        "world_coordinates": [
+          0.42798181215889564,
+          -5.44059382819973
+        ]
+      },
+      {
+        "node_id": 14,
+        "pixel_coordinates": [
+          984.9162052752031,
+          958.9559086703093
+        ],
+        "world_coordinates": [
+          -1.5516408078609913,
+          -3.127891119955205
+        ]
+      },
+      {
+        "node_id": 15,
+        "pixel_coordinates": [
+          1046.0378406815396,
+          798.9798718945536
+        ],
+        "world_coordinates": [
+          -0.925355172421904,
+          -4.767092904741615
+        ]
+      },
+      {
+        "node_id": 16,
+        "pixel_coordinates": [
+          1247.3396636088175,
+          1055.541906867013
+        ],
+        "world_coordinates": [
+          1.1372931721279045,
+          -2.1382182675683055
+        ]
+      },
+      {
+        "node_id": 17,
+        "pixel_coordinates": [
+          954.1368099452334,
+          782.3673922820955
+        ],
+        "world_coordinates": [
+          -1.8670232912403968,
+          -4.9373134376370515
+        ]
+      },
+      {
+        "node_id": 18,
+        "pixel_coordinates": [
+          1108.972556124757,
+          955.5964743490839
+        ],
+        "world_coordinates": [
+          -0.28049172937915934,
+          -3.1623137175280185
+        ]
+      },
+      {
+        "node_id": 19,
+        "pixel_coordinates": [
+          1267.6447309542298,
+          818.8525323210081
+        ],
+        "world_coordinates": [
+          1.3453499742817403,
+          -4.563466779879175
+        ]
+      },
+      {
+        "node_id": 20,
+        "pixel_coordinates": [
+          937.5931730077084,
+          1020.363022926337
+        ],
+        "world_coordinates": [
+          -2.0365384245154026,
+          -2.49868031241307
+        ]
+      },
+      {
+        "node_id": 21,
+        "pixel_coordinates": [
+          970.4954919694505,
+          852.3791934204046
+        ],
+        "world_coordinates": [
+          -1.6994033069521386,
+          -4.219934312019035
+        ]
+      },
+      {
+        "node_id": 22,
+        "pixel_coordinates": [
+          1074.2939635463704,
+          1035.337332188189
+        ],
+        "world_coordinates": [
+          -0.6358275158760698,
+          -2.3452453670132254
+        ]
+      },
+      {
+        "node_id": 23,
+        "pixel_coordinates": [
+          1175.8908654096124,
+          1081.2016436241784
+        ],
+        "world_coordinates": [
+          0.40518979033734936,
+          -1.8752946001414514
+        ]
+      },
+      {
+        "node_id": 24,
+        "pixel_coordinates": [
+          1192.692697765664,
+          1032.227677118173
+        ],
+        "world_coordinates": [
+          0.5773505347888932,
+          -2.3771085900532203
+        ]
+      },
+      {
+        "node_id": 25,
+        "pixel_coordinates": [
+          986.7629751295101,
+          1030.176060485277
+        ],
+        "world_coordinates": [
+          -1.5327177960007017,
+          -2.398130573808542
+        ]
+      },
+      {
+        "node_id": 26,
+        "pixel_coordinates": [
+          1012.436388610387,
+          707.5279390696198
+        ],
+        "world_coordinates": [
+          -1.2696539893981953,
+          -5.7041593212507955
+        ]
+      },
+      {
+        "node_id": 27,
+        "pixel_coordinates": [
+          1005.913730697957,
+          1075.4172556531967
+        ],
+        "world_coordinates": [
+          -1.3364887023158172,
+          -1.9345645963048224
+        ]
+      },
+      {
+        "node_id": 28,
+        "pixel_coordinates": [
+          920.4509351949525,
+          708.6910395792389
+        ],
+        "world_coordinates": [
+          -2.212187149063384,
+          -5.692241558630347
+        ]
+      },
+      {
+        "node_id": 29,
+        "pixel_coordinates": [
+          941.619737904115,
+          933.4392602141069
+        ],
+        "world_coordinates": [
+          -1.995280042961669,
+          -3.3893486265554262
+        ]
+      },
+      {
+        "node_id": 30,
+        "pixel_coordinates": [
+          1062.3275646935585,
+          722.2839714833947
+        ],
+        "world_coordinates": [
+          -0.7584417695626442,
+          -5.552960959567844
+        ]
+      },
+      {
+        "node_id": 31,
+        "pixel_coordinates": [
+          936.3891318964772,
+          1075.5014009683155
+        ],
+        "world_coordinates": [
+          -2.048875686884596,
+          -1.933702397481147
+        ]
+      },
+      {
+        "node_id": 32,
+        "pixel_coordinates": [
+          1227.3576231366294,
+          1143.1677229411857
+        ],
+        "world_coordinates": [
+          0.9325462796192578,
+          -1.2403563315116575
+        ]
+      },
+      {
+        "node_id": 33,
+        "pixel_coordinates": [
+          982.1254218604175,
+          902.8926648329943
+        ],
+        "world_coordinates": [
+          -1.580236697887205,
+          -3.702345714600906
+        ]
+      },
+      {
+        "node_id": 34,
+        "pixel_coordinates": [
+          1054.8617466515373,
+          1090.6328603341524
+        ],
+        "world_coordinates": [
+          -0.8349406159275308,
+          -1.7786572063462351
+        ]
+      },
+      {
+        "node_id": 35,
+        "pixel_coordinates": [
+          1130.4752110612656,
+          683.0808611663689
+        ],
+        "world_coordinates": [
+          -0.060163791145644296,
+          -5.954657424213517
+        ]
+      },
+      {
+        "node_id": 36,
+        "pixel_coordinates": [
+          1153.689118147615,
+          933.4342700561178
+        ],
+        "world_coordinates": [
+          0.17769857058512883,
+          -3.389399758437719
+        ]
+      },
+      {
+        "node_id": 37,
+        "pixel_coordinates": [
+          1215.514665501013,
+          681.6656719607282
+        ],
+        "world_coordinates": [
+          0.8111968720160174,
+          -5.969158225198782
+        ]
+      },
+      {
+        "node_id": 38,
+        "pixel_coordinates": [
+          976.5233986679921,
+          1116.7916571479361
+        ],
+        "world_coordinates": [
+          -1.637638084998141,
+          -1.5106198972014582
+        ]
+      },
+      {
+        "node_id": 39,
+        "pixel_coordinates": [
+          1123.0721692659704,
+          1041.3218263907381
+        ],
+        "world_coordinates": [
+          -0.13601939782445172,
+          -2.2839249731869096
+        ]
+      },
+      {
+        "node_id": 40,
+        "pixel_coordinates": [
+          1120.0788387025675,
+          1092.2779082094135
+        ],
+        "world_coordinates": [
+          -0.16669069648190948,
+          -1.7618011479793996
+        ]
+      },
+      {
+        "node_id": 41,
+        "pixel_coordinates": [
+          1273.6786717014336,
+          719.1190316799001
+        ],
+        "world_coordinates": [
+          1.4071770243916024,
+          -5.585390660160453
+        ]
+      },
+      {
+        "node_id": 42,
+        "pixel_coordinates": [
+          1145.6960819268263,
+          1155.4166732063468
+        ],
+        "world_coordinates": [
+          0.09579755901459386,
+          -1.1148469018427818
+        ]
+      },
+      {
+        "node_id": 43,
+        "pixel_coordinates": [
+          1038.712565562867,
+          1169.9817295660205
+        ],
+        "world_coordinates": [
+          -1.0004139392884142,
+          -0.965605385041373
+        ]
+      },
+      {
+        "node_id": 44,
+        "pixel_coordinates": [
+          997.3068788483545,
+          1203.2455933360986
+        ],
+        "world_coordinates": [
+          -1.4246792038284717,
+          -0.6247656820473839
+        ]
+      },
+      {
+        "node_id": 45,
+        "pixel_coordinates": [
+          1082.115274876085,
+          1146.9567747894516
+        ],
+        "world_coordinates": [
+          -0.5556860912637713,
+          -1.201531638279432
+        ]
+      },
+      {
+        "node_id": 46,
+        "pixel_coordinates": [
+          958.0146681314565,
+          1167.5232231225145
+        ],
+        "world_coordinates": [
+          -1.8272886398005959,
+          -0.9907965838691872
+        ]
+      },
+      {
+        "node_id": 47,
+        "pixel_coordinates": [
+          961.4290054226565,
+          1260.1486852264725
+        ],
+        "world_coordinates": [
+          -1.7923034764323909,
+          -0.04170554587640396
+        ]
+      },
+      {
+        "node_id": 48,
+        "pixel_coordinates": [
+          1029.281510877699,
+          1247.1422947584986
+        ],
+        "world_coordinates": [
+          -1.097049672889037,
+          -0.17497612126024542
+        ]
+      },
+      {
+        "node_id": 49,
+        "pixel_coordinates": [
+          1287.9704906050988,
+          766.6938052105099
+        ],
+        "world_coordinates": [
+          1.5536188010907654,
+          -5.097913565128408
+        ]
+      },
+      {
+        "node_id": 50,
+        "pixel_coordinates": [
+          1214.0798711616394,
+          1232.486033294409
+        ],
+        "world_coordinates": [
+          0.7964951861304019,
+          -0.32515217533956964
+        ]
+      },
+      {
+        "node_id": 51,
+        "pixel_coordinates": [
+          1117.204104756757,
+          1234.8723671383464
+        ],
+        "world_coordinates": [
+          -0.19614678946766162,
+          -0.3007004963574147
+        ]
+      },
+      {
+        "node_id": 52,
+        "pixel_coordinates": [
+          1177.1167978275487,
+          1195.6232397202289
+        ],
+        "world_coordinates": [
+          0.4177513629829175,
+          -0.7028684773361622
+        ]
+      },
+      {
+        "node_id": 53,
+        "pixel_coordinates": [
+          1070.3742772095434,
+          1210.0970129806938
+        ],
+        "world_coordinates": [
+          -0.6759907613759957,
+          -0.554562296989884
+        ]
+      },
+      {
+        "node_id": 54,
+        "pixel_coordinates": [
+          1109.2020069337166,
+          1289.783229116013
+        ],
+        "world_coordinates": [
+          -0.27814065116052156,
+          0.2619461648054795
+        ]
+      },
+      {
+        "node_id": 55,
+        "pixel_coordinates": [
+          846.2648394330886,
+          727.007333885515
+        ],
+        "world_coordinates": [
+          -2.9723383756476665,
+          -5.504562810471292
+        ]
+      },
+      {
+        "node_id": 56,
+        "pixel_coordinates": [
+          990.5765057222574,
+          1299.9353133092086
+        ],
+        "world_coordinates": [
+          -1.4936422801924731,
+          0.3659699602700144
+        ]
+      },
+      {
+        "node_id": 57,
+        "pixel_coordinates": [
+          1161.6968287508214,
+          1287.8459518517075
+        ],
+        "world_coordinates": [
+          0.25974994388691997,
+          0.24209576462506277
+        ]
+      },
+      {
+        "node_id": 58,
+        "pixel_coordinates": [
+          778.0341789810146,
+          735.4558462217593
+        ],
+        "world_coordinates": [
+          -3.671466961680652,
+          -5.417994742031303
+        ]
+      },
+      {
+        "node_id": 59,
+        "pixel_coordinates": [
+          805.3481903118175,
+          691.9392487920534
+        ],
+        "world_coordinates": [
+          -3.3915926940996375,
+          -5.8638895498555215
+        ]
+      },
+      {
+        "node_id": 60,
+        "pixel_coordinates": [
+          1234.9896018465402,
+          1291.776543035981
+        ],
+        "world_coordinates": [
+          1.0107476988747788,
+          0.2823707471435899
+        ]
+      },
+      {
+        "node_id": 61,
+        "pixel_coordinates": [
+          937.3979030687775,
+          1304.0494540124546
+        ],
+        "world_coordinates": [
+          -2.038539266884433,
+          0.4081256913378901
+        ]
+      },
+      {
+        "node_id": 62,
+        "pixel_coordinates": [
+          726.3769068672552,
+          700.2812122263417
+        ],
+        "world_coordinates": [
+          -4.200775565348376,
+          -5.778413239617407
+        ]
+      },
+      {
+        "node_id": 63,
+        "pixel_coordinates": [
+          659.0564878822839,
+          741.0475963959984
+        ],
+        "world_coordinates": [
+          -4.890577320516358,
+          -5.360698617871528
+        ]
+      },
+      {
+        "node_id": 64,
+        "pixel_coordinates": [
+          1247.8402871648655,
+          1196.129216518736
+        ],
+        "world_coordinates": [
+          1.1424228343143117,
+          -0.6976839629058151
+        ]
+      },
+      {
+        "node_id": 65,
+        "pixel_coordinates": [
+          927.3973196550547,
+          1222.2539731035065
+        ],
+        "world_coordinates": [
+          -2.141010702676148,
+          -0.4299954485260411
+        ]
+      },
+      {
+        "node_id": 66,
+        "pixel_coordinates": [
+          671.0798654146294,
+          691.03667063945
+        ],
+        "world_coordinates": [
+          -4.767379232181366,
+          -5.873137858217671
+        ]
+      },
+      {
+        "node_id": 67,
+        "pixel_coordinates": [
+          1056.3087411169456,
+          1293.0519231564176
+        ],
+        "world_coordinates": [
+          -0.8201139208919592,
+          0.29543898793662393
+        ]
+      },
+      {
+        "node_id": 68,
+        "pixel_coordinates": [
+          593.3862357906744,
+          682.8837634070576
+        ],
+        "world_coordinates": [
+          -5.563470565064179,
+          -5.956676995427757
+        ]
+      },
+      {
+        "node_id": 69,
+        "pixel_coordinates": [
+          560.6210718251016,
+          720.2225314414471
+        ],
+        "world_coordinates": [
+          -5.899200317680015,
+          -5.574083599333744
+        ]
+      },
+      {
+        "node_id": 70,
+        "pixel_coordinates": [
+          595.6493256877563,
+          769.8900250545593
+        ],
+        "world_coordinates": [
+          -5.540281710825786,
+          -5.065163352168204
+        ]
+      },
+      {
+        "node_id": 71,
+        "pixel_coordinates": [
+          605.5955666979489,
+          830.5425985124128
+        ],
+        "world_coordinates": [
+          -5.438367096959728,
+          -4.443683981458667
+        ]
+      },
+      {
+        "node_id": 72,
+        "pixel_coordinates": [
+          520.1317685831812,
+          692.6171308869922
+        ],
+        "world_coordinates": [
+          -6.314075817014628,
+          -5.856943599935184
+        ]
+      },
+      {
+        "node_id": 73,
+        "pixel_coordinates": [
+          443.5096749325989,
+          752.8768020122571
+        ],
+        "world_coordinates": [
+          -7.099187607489616,
+          -5.239490120964225
+        ]
+      },
+      {
+        "node_id": 74,
+        "pixel_coordinates": [
+          454.9284867214154,
+          691.4712808335174
+        ],
+        "world_coordinates": [
+          -6.982184229723697,
+          -5.868684604966996
+        ]
+      },
+      {
+        "node_id": 75,
+        "pixel_coordinates": [
+          503.2959605788089,
+          746.3576925022612
+        ],
+        "world_coordinates": [
+          -6.4865846945021515,
+          -5.306288475013854
+        ]
+      },
+      {
+        "node_id": 76,
+        "pixel_coordinates": [
+          380.8618113626573,
+          730.5258174521457
+        ],
+        "world_coordinates": [
+          -7.741111809680294,
+          -5.4685105075238996
+        ]
+      },
+      {
+        "node_id": 77,
+        "pixel_coordinates": [
+          331.28902737098934,
+          748.9766949418349
+        ],
+        "world_coordinates": [
+          -8.249061610373746,
+          -5.279452746614563
+        ]
+      },
+      {
+        "node_id": 78,
+        "pixel_coordinates": [
+          423.488880702522,
+          821.5836282646695
+        ],
+        "world_coordinates": [
+          -7.30433159215268,
+          -4.535482480258425
+        ]
+      },
+      {
+        "node_id": 79,
+        "pixel_coordinates": [
+          262.8756939104663,
+          697.9194964550912
+        ],
+        "world_coordinates": [
+          -8.950061963750874,
+          -5.802612668390722
+        ]
+      },
+      {
+        "node_id": 80,
+        "pixel_coordinates": [
+          442.6744880551094,
+          870.6167521868409
+        ],
+        "world_coordinates": [
+          -7.107745388066028,
+          -4.033062331173587
+        ]
+      },
+      {
+        "node_id": 81,
+        "pixel_coordinates": [
+          323.01764754604244,
+          693.2526983788069
+        ],
+        "world_coordinates": [
+          -8.33381468242731,
+          -5.850431228532989
+        ]
+      },
+      {
+        "node_id": 82,
+        "pixel_coordinates": [
+          247.43047380522495,
+          746.8683748092255
+        ],
+        "world_coordinates": [
+          -9.108322118666573,
+          -5.301055745375677
+        ]
+      },
+      {
+        "node_id": 83,
+        "pixel_coordinates": [
+          281.60053489152824,
+          835.0256099321887
+        ],
+        "world_coordinates": [
+          -8.758197023384692,
+          -4.397748599706366
+        ]
+      },
+      {
+        "node_id": 84,
+        "pixel_coordinates": [
+          417.98960389909456,
+          655.5327615943072
+        ],
+        "world_coordinates": [
+          -7.360680183684852,
+          -6.236930287675532
+        ]
+      },
+      {
+        "node_id": 85,
+        "pixel_coordinates": [
+          312.41326268797366,
+          904.1058747464831
+        ],
+        "world_coordinates": [
+          -8.442472997361529,
+          -3.6899145036796153
+        ]
+      },
+      {
+        "node_id": 86,
+        "pixel_coordinates": [
+          468.63967077192285,
+          801.08809512209
+        ],
+        "world_coordinates": [
+          -6.841691954629826,
+          -4.745490898922769
+        ]
+      },
+      {
+        "node_id": 87,
+        "pixel_coordinates": [
+          232.7432306015054,
+          808.1675442255098
+        ],
+        "world_coordinates": [
+          -9.258815628559411,
+          -4.672950999575862
+        ]
+      },
+      {
+        "node_id": 88,
+        "pixel_coordinates": [
+          286.84005804024906,
+          782.0233301152448
+        ],
+        "world_coordinates": [
+          -8.704510009567418,
+          -4.940838886381414
+        ]
+      },
+      {
+        "node_id": 89,
+        "pixel_coordinates": [
+          249.2151227041187,
+          875.9973251717163
+        ],
+        "world_coordinates": [
+          -9.090035632019923,
+          -3.9779300437526643
+        ]
+      },
+      {
+        "node_id": 90,
+        "pixel_coordinates": [
+          360.7348565340342,
+          949.3616494079204
+        ],
+        "world_coordinates": [
+          -7.9473435737765685,
+          -3.226199136728095
+        ]
+      },
+      {
+        "node_id": 91,
+        "pixel_coordinates": [
+          269.86516118015913,
+          953.3610856384706
+        ],
+        "world_coordinates": [
+          -8.878444067382766,
+          -3.185218730291055
+        ]
+      },
+      {
+        "node_id": 92,
+        "pixel_coordinates": [
+          368.6913678463327,
+          891.5247071709096
+        ],
+        "world_coordinates": [
+          -7.86581681635305,
+          -3.8188280132290817
+        ]
+      },
+      {
+        "node_id": 93,
+        "pixel_coordinates": [
+          213.33873344442782,
+          695.9044209233693
+        ],
+        "world_coordinates": [
+          -9.457644697048902,
+          -5.823260232079951
+        ]
+      },
+      {
+        "node_id": 94,
+        "pixel_coordinates": [
+          317.4053593841039,
+          976.0466271036908
+        ],
+        "world_coordinates": [
+          -8.39132125001831,
+          -2.9527702910866243
+        ]
+      },
+      {
+        "node_id": 95,
+        "pixel_coordinates": [
+          427.02966349975395,
+          934.1566451542581
+        ],
+        "world_coordinates": [
+          -7.268050799118037,
+          -3.3819979089231165
+        ]
+      },
+      {
+        "node_id": 96,
+        "pixel_coordinates": [
+          284.54752277956305,
+          1044.6379988566437
+        ],
+        "world_coordinates": [
+          -8.728000577072036,
+          -2.2499456601952303
+        ]
+      },
+      {
+        "node_id": 97,
+        "pixel_coordinates": [
+          386.9533345042957,
+          993.4505028605995
+        ],
+        "world_coordinates": [
+          -7.678694738929642,
+          -2.774440681365668
+        ]
+      },
+      {
+        "node_id": 98,
+        "pixel_coordinates": [
+          452.20012983920145,
+          976.3912872380268
+        ],
+        "world_coordinates": [
+          -7.010140463425926,
+          -2.949238715241046
+        ]
+      },
+      {
+        "node_id": 99,
+        "pixel_coordinates": [
+          293.67281775612173,
+          1119.0230824683151
+        ],
+        "world_coordinates": [
+          -8.634497824323855,
+          -1.4877554954979075
+        ]
+      },
+      {
+        "node_id": 100,
+        "pixel_coordinates": [
+          422.2957263272537,
+          1060.034939138712
+        ],
+        "world_coordinates": [
+          -7.316557303083418,
+          -2.0921802066980035
+        ]
+      },
+      {
+        "node_id": 101,
+        "pixel_coordinates": [
+          388.6906431893916,
+          1111.200673159808
+        ],
+        "world_coordinates": [
+          -7.660893325950984,
+          -1.5679081706001696
+        ]
+      },
+      {
+        "node_id": 102,
+        "pixel_coordinates": [
+          229.55029742379625,
+          1007.9087796147348
+        ],
+        "world_coordinates": [
+          -9.29153216454249,
+          -2.626293286680953
+        ]
+      },
+      {
+        "node_id": 103,
+        "pixel_coordinates": [
+          334.48090350437366,
+          1031.2933846259639
+        ],
+        "world_coordinates": [
+          -8.216355905443733,
+          -2.386681860848073
+        ]
+      },
+      {
+        "node_id": 104,
+        "pixel_coordinates": [
+          468.0814907691041,
+          1039.1566054696452
+        ],
+        "world_coordinates": [
+          -6.847411371583098,
+          -2.3061110084822296
+        ]
+      },
+      {
+        "node_id": 105,
+        "pixel_coordinates": [
+          358.8420555494555,
+          1191.6785330177615
+        ],
+        "world_coordinates": [
+          -7.966738245720567,
+          -0.7432880951580945
+        ]
+      },
+      {
+        "node_id": 106,
+        "pixel_coordinates": [
+          419.01754898405636,
+          1209.6937901738743
+        ],
+        "world_coordinates": [
+          -7.35014729731079,
+          -0.5586939379401574
+        ]
+      },
+      {
+        "node_id": 107,
+        "pixel_coordinates": [
+          455.1300184002274,
+          1100.2963787429446
+        ],
+        "world_coordinates": [
+          -6.980119226150301,
+          -1.6796395225589258
+        ]
+      },
+      {
+        "node_id": 108,
+        "pixel_coordinates": [
+          467.7961232957216,
+          1195.6366679230757
+        ],
+        "world_coordinates": [
+          -6.8503354024637,
+          -0.7027308846409266
+        ]
+      },
+      {
+        "node_id": 109,
+        "pixel_coordinates": [
+          338.2550293114192,
+          1094.3831659794573
+        ],
+        "world_coordinates": [
+          -8.177684152576212,
+          -1.7402295278565152
+        ]
+      },
+      {
+        "node_id": 110,
+        "pixel_coordinates": [
+          228.08755731670192,
+          1073.2581536617947
+        ],
+        "world_coordinates": [
+          -9.306520198016457,
+          -1.9566879337069292
+        ]
+      },
+      {
+        "node_id": 111,
+        "pixel_coordinates": [
+          333.5967694653272,
+          1148.9617642547207
+        ],
+        "world_coordinates": [
+          -8.22541522535192,
+          -1.180987421931869
+        ]
+      },
+      {
+        "node_id": 112,
+        "pixel_coordinates": [
+          440.73903021418414,
+          1149.0724938824985
+        ],
+        "world_coordinates": [
+          -7.127577145441482,
+          -1.1798528257314604
+        ]
+      },
+      {
+        "node_id": 113,
+        "pixel_coordinates": [
+          282.512138617608,
+          1204.6537709260053
+        ],
+        "world_coordinates": [
+          -8.748856234070711,
+          -0.6103367259037409
+        ]
+      },
+      {
+        "node_id": 114,
+        "pixel_coordinates": [
+          219.7289980498507,
+          959.426188690403
+        ],
+        "world_coordinates": [
+          -9.392166558212711,
+          -3.123072374199129
+        ]
+      },
+      {
+        "node_id": 115,
+        "pixel_coordinates": [
+          220.26442963480113,
+          1190.6103927494883
+        ],
+        "world_coordinates": [
+          -9.386680233964587,
+          -0.7542328433181584
+        ]
+      },
+      {
+        "node_id": 116,
+        "pixel_coordinates": [
+          232.13156801412183,
+          1131.2089090532804
+        ],
+        "world_coordinates": [
+          -9.265083057263945,
+          -1.3628928655080639
+        ]
+      }
+    ],
+    "selected_node_id": 66,
+    "selected_node_pixel_coordinates": [
+      671.0798654146294,
+      691.03667063945
+    ],
+    "selected_node_world_coordinates": [
+      -4.767379232181366,
+      -5.873137858217671
+    ],
+    "method": "one_stage_selection",
+    "action_file_generated": true,
+    "agent_start_position": [
+      -5.56987,
+      2.36594,
+      -3.54739
+    ],
+    "target_node_id": 66,
+    "target_coordinate": [
+      -4.767379232181366,
+      -5.873137858217671
+    ],
+    "target_name": "sofa"
+  },
+  "errors": []
+}

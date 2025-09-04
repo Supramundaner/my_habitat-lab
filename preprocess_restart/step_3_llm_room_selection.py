@@ -133,7 +133,8 @@ def get_available_rooms(output_dir: str) -> List[int]:
     return []
 
 def select_room_with_llm(topdown_path: str, room_annotation_path: str, 
-                        config: Dict[str, Any], output_dir: str, iteration: int = 0) -> Dict[str, Any]:
+                        config: Dict[str, Any], output_dir: str, iteration: int = 0,
+                        selected_results: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Use LLM to select target room from room annotation.
     
@@ -143,6 +144,7 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
         config: Configuration dictionary
         output_dir: Output directory path
         iteration: Current iteration number (0-based) for multi-point selection
+        selected_results: List of previous iteration results for multi-point context
         
     Returns:
         Dictionary with LLM response and results
@@ -183,10 +185,12 @@ def select_room_with_llm(topdown_path: str, room_annotation_path: str,
     # Add multi-point context if this is not the first iteration
     if iteration > 0:
         from multi_point_utils import generate_iteration_prompt_addition
-        # This will be implemented to add context about previous selections
-        additional_context = generate_iteration_prompt_addition(iteration, [], goal_object, "room")
+        # Pass the actual selected_results instead of empty list
+        if selected_results is None:
+            selected_results = []
+        additional_context = generate_iteration_prompt_addition(iteration, selected_results, goal_object, "room")
         prompt_template += additional_context
-        print(f"🔄 Added multi-point context for iteration {iteration + 1}")
+        print(f"🔄 Added multi-point context for iteration {iteration + 1} with {len(selected_results)} previous results")
     
     print(f"🤖 LLM Configuration:")
     print(f"  - Model: {model}")

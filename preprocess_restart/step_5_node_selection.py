@@ -155,7 +155,9 @@ def select_node_with_llm(original_room_image: np.ndarray,
                          room_image_with_nodes: np.ndarray, 
                          nodes_in_room: List[Dict], 
                          config: Dict[str, Any], 
-                         output_dir: str) -> Dict[str, Any]:
+                         output_dir: str,
+                         iteration: int = 0,
+                         selected_results: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Use LLM to select optimal navigation node using two images with retry logic."""
     
     if Ark is None:
@@ -178,11 +180,22 @@ def select_node_with_llm(original_room_image: np.ndarray,
     goal_object = config['scene_config']['goal_object']
     prompt_template = prompt_template.format(goal_object=goal_object)
     
+    # Add multi-point context if this is not the first iteration
+    if iteration > 0:
+        from multi_point_utils import generate_iteration_prompt_addition
+        # Pass the actual selected_results for multi-point context
+        if selected_results is None:
+            selected_results = []
+        additional_context = generate_iteration_prompt_addition(iteration, selected_results, goal_object, "node")
+        prompt_template += additional_context
+        print(f"🔄 Added multi-point context for iteration {iteration + 1} with {len(selected_results)} previous results")
+    
     print(f"🤖 Using LLM for node selection:")
     print(f"  - Model: {model}")
     print(f"  - Goal object: {goal_object}")
     print(f"  - Available nodes: {available_node_ids}")
     print(f"  - Max retries: {max_retries}")
+    print(f"  - Iteration: {iteration + 1}")
     print(f"  - Prompt from: {prompt_path}")
     
     # 重试逻辑
@@ -317,7 +330,8 @@ def select_node_with_llm(original_room_image: np.ndarray,
     }
 
 def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[str, int], 
-                          selected_room: int, config: Dict[str, Any], output_dir: str, iteration: int = 0) -> Dict[str, Any]:
+                          selected_room: int, config: Dict[str, Any], output_dir: str, iteration: int = 0,
+                          selected_results: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Select navigation node within the target room.
     
@@ -329,6 +343,7 @@ def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[s
         config: Configuration dictionary
         output_dir: Output directory path
         iteration: Current iteration number (0-based) for multi-point selection
+        selected_results: List of previous iteration results for multi-point context
         
     Returns:
         Dictionary with generated files and results
@@ -389,13 +404,15 @@ def select_navigation_node(graph_path: str, topdown_path: str, room_bbox: Dict[s
     
     # 使用 LLM 来选择节点
     try:
-        # --- 修改点 5: 调用函数时传入两张图片 ---
+        # --- 修改点 5: 调用函数时传入两张图片和多点选择参数 ---
         llm_result = select_node_with_llm(
             original_room_image=original_graph,         # 传入裁剪后的原图
             room_image_with_nodes=room_with_graph,      # 传入画了nodes的图
             nodes_in_room=nodes_in_room,
             config=config,
-            output_dir=output_dir
+            output_dir=output_dir,
+            iteration=iteration,
+            selected_results=selected_results
         )
         
         selected_node_data = llm_result['selected_node_data']
