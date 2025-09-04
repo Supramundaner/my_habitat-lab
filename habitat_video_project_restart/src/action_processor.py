@@ -352,12 +352,13 @@ class ActionProcessor:
             else:
                 print(f"[WARNING] 目标位置 ({target_x:.2f}, {target_z:.2f}) 不可导航，跳过前进动作")
     
-    def execute_sequence(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
+    def execute_sequence(self, action_data: Union[Dict[str, Any], List[Dict[str, Any]]], multi_action_mode: bool = False) -> Dict[str, Any]:
         """
-        执行目标导航序列
+        执行目标导航序列，支持单个action或多个action文件
         
         Args:
-            action_data: 动作数据字典，包含target_info和wall_mask_path
+            action_data: 单个动作数据字典或动作数据列表
+            multi_action_mode: 是否启用多action模式
         
         Returns:
             执行结果报告
@@ -373,6 +374,14 @@ class ActionProcessor:
         completed_actions = []
         collision_action = None
         
+        # 处理多action模式
+        if multi_action_mode and isinstance(action_data, list):
+            return self._execute_multi_action_sequence(action_data)
+        
+        # 单action模式（保持向后兼容）
+        if isinstance(action_data, list):
+            action_data = action_data[0]  # 取第一个action
+            
         # 从action_data中提取target_info
         target_info = action_data.get('target_info', None)
         
@@ -408,6 +417,90 @@ class ActionProcessor:
             'target_found': success
         }
     
+    def _execute_multi_action_sequence(self, action_data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        执行多action文件序列，当rotation search失败时尝试下一个action
+        
+        Args:
+            action_data_list: action数据列表
+        
+        Returns:
+            执行结果报告
+        """
+        print(f"\n🎯 [MULTI-ACTION] 开始多目标点导航序列，共 {len(action_data_list)} 个目标点")
+        
+        completed_actions = []
+        all_failed_reasons = []
+        
+        # 使用第一个action的agent_state进行初始化（按照你的建议）
+        first_action = action_data_list[0]
+        if 'agent_state' in first_action:
+            agent_state = first_action['agent_state']
+            print(f"🚀 [MULTI-ACTION] 使用第一个action的agent_state进行初始化")
+            self.simulator.set_robot_pose(agent_state['position'], agent_state['rotation'])
+        
+        for action_index, action_data in enumerate(action_data_list):
+            print(f"\n🎯 [MULTI-ACTION] 尝试目标点 {action_index + 1}/{len(action_data_list)}")
+            
+            target_info = action_data.get('target_info', None)
+            if target_info is None:
+                error_msg = f"Action {action_index + 1}: 未找到target_info"
+                print(f"❌ [MULTI-ACTION] {error_msg}")
+                all_failed_reasons.append(error_msg)
+                continue
+            
+            print(f"🎯 [MULTI-ACTION] 目标: {target_info.get('name', 'unknown')} 位置: {target_info.get('coordinate', 'unknown')}")
+            
+            # 执行目标导航，使用修改过的方法来检测rotation search失败
+            result = self._execute_target_navigation_with_rotation_check(target_info)
+            
+            if result.get('success', False):
+                # 成功找到目标
+                completed_actions.append({
+                    'type': 'target_navigation', 
+                    'target': target_info, 
+                    'action_index': action_index + 1
+                })
+                print(f"✅ [MULTI-ACTION] 成功！在目标点 {action_index + 1} 找到目标")
+                return {
+                    'completed_actions': completed_actions,
+                    'collision_action': None,
+                    'target_found': True,
+                    'successful_action_index': action_index + 1
+                }
+            elif result.get('reason') == 'rotation_search_failed':
+                # rotation search失败，尝试下一个目标点
+                failed_msg = f"Action {action_index + 1}: rotation search失败，未找到目标物体"
+                print(f"⚠️ [MULTI-ACTION] {failed_msg}")
+                all_failed_reasons.append(failed_msg)
+                completed_actions.append({
+                    'type': 'target_navigation', 
+                    'target': target_info, 
+                    'action_index': action_index + 1,
+                    'result': 'rotation_search_failed'
+                })
+                # 继续尝试下一个目标点
+                continue
+            else:
+                # 其他类型的失败（导航失败等）
+                failed_msg = f"Action {action_index + 1}: {result.get('message', '导航失败')}"
+                print(f"❌ [MULTI-ACTION] {failed_msg}")
+                all_failed_reasons.append(failed_msg)
+                # 对于导航失败，我们也继续尝试下一个目标点
+                continue
+        
+        # 所有目标点都失败了
+        print(f"❌ [MULTI-ACTION] 所有 {len(action_data_list)} 个目标点都失败了")
+        return {
+            'completed_actions': completed_actions,
+            'collision_action': {
+                'reason': 'all_actions_failed',
+                'message': f'所有 {len(action_data_list)} 个目标点都失败了',
+                'failed_reasons': all_failed_reasons
+            },
+            'target_found': False
+        }
+    
     def _execute_target_navigation(self, target_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行目标导航
@@ -425,6 +518,7 @@ class ActionProcessor:
         if target_coord is None:
             return {
                 'success': False,
+                'failed': True,
                 'reason': 'invalid_target_coordinate',
                 'message': '目标坐标无效'
             }
@@ -433,6 +527,7 @@ class ActionProcessor:
         if len(target_coord) != 2:
             return {
                 'success': False,
+                'failed': True,
                 'reason': 'invalid_target_coordinate',
                 'message': f'目标坐标格式错误，期望[x, z]，实际{target_coord}'
             }
@@ -457,6 +552,167 @@ class ActionProcessor:
         
         # 执行混合导航（A* + VFH*）
         return self._execute_hybrid_navigation(target_pos_2d, target_name, vfh_star)
+    
+    def _execute_target_navigation_with_rotation_check(self, target_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行目标导航，专门用于多action模式，能够正确识别rotation search失败
+        
+        Args:
+            target_info: 目标信息字典，包含coordinate和name
+        
+        Returns:
+            导航结果字典，如果是rotation search失败会返回特殊的reason
+        """
+        # 提取目标坐标
+        target_coord = target_info.get('coordinate', None)
+        target_name = target_info.get('name', 'unknown')
+        
+        if target_coord is None:
+            return {
+                'success': False,
+                'failed': True,
+                'reason': 'invalid_target_coordinate',
+                'message': '目标坐标无效'
+            }
+        
+        # 确保target_coord是[x, z]格式
+        if len(target_coord) != 2:
+            return {
+                'success': False,
+                'failed': True,
+                'reason': 'invalid_target_coordinate',
+                'message': f'目标坐标格式错误，期望[x, z]，实际{target_coord}'
+            }
+        
+        target_x, target_z = target_coord
+        
+        print(f"开始导航到目标: {target_name} 位置: ({target_x}, {target_z})")
+        
+        # 检查目标点是否可导航并获取其3D坐标
+        target_y = self.simulator.get_navigable_y(target_x, target_z)
+        if target_y is None:
+            return {
+                'success': False,
+                'failed': True,
+                'reason': 'target_unreachable',
+                'message': f'目标位置 ({target_x}, {target_z}) 不在可导航区域'
+            }
+        
+        # 初始化VFH*算法
+        target_pos_2d = np.array([target_x, target_z])
+        vfh_config = self.config.get('vfh', {})
+        vfh_star = VFHStar(target_pos_2d, vfh_config)
+        
+        # 执行混合导航（A* + VFH*），使用修改过的版本来检测rotation search失败
+        return self._execute_hybrid_navigation_with_rotation_check(target_pos_2d, target_name, vfh_star)
+    
+    def _execute_hybrid_navigation_with_rotation_check(self, target_pos_2d: np.ndarray, target_name: str, vfh_star: VFHStar) -> Dict[str, Any]:
+        """
+        主导航控制器 - 支持混合导航和对象检测导航两阶段，专门用于多action模式
+        与原版的区别：当rotation search失败时，不认为是成功，而是返回特殊的失败原因
+        
+        Args:
+            target_pos_2d: 目标位置 [x, z]
+            target_name: 目标名称
+            vfh_star: VFH*算法实例
+        
+        Returns:
+            导航结果，如果是rotation search失败，reason会是'rotation_search_failed'
+        """
+        print(f"开始主导航控制器（多action模式），目标: {target_name}")
+        
+        # 重置死循环检测状态（开始新的导航任务）
+        self._reset_loop_detection()
+        
+        # 初始化导航状态
+        navigation_phase = NavigationPhase.HYBRID_NAVIGATION
+        current_path = None
+        adjusted_target_pos = target_pos_2d
+        detected_target_pos = None  # 检测到的目标位置
+        
+        iteration = 0
+        action_count = 0
+        prev_direction = None
+        
+        while iteration < self.nav_config.max_iterations:
+            iteration += 1
+            
+            # 获取当前机器人状态
+            robot_state = self._get_robot_state()
+            current_pos = robot_state['position']
+            current_rot = robot_state['rotation']
+            current_pos_2d = robot_state['position_2d']
+            
+            # 死循环检测
+            loop_detected = self._check_loop_detection(current_pos_2d, iteration)
+            if loop_detected:
+                return {
+                    'success': False,
+                    'reason': 'loop_detected',
+                    'message': f'检测到死循环：在{self.loop_detection_threshold}m范围内持续{self.loop_detection_min_iterations}次迭代以上'
+                }
+            
+            # 检查阶段切换
+            if (navigation_phase == NavigationPhase.HYBRID_NAVIGATION and 
+                self._should_switch_to_object_detection(current_pos_2d, current_path, target_pos_2d)):
+                
+                navigation_phase = NavigationPhase.OBJECT_DETECTION_NAVIGATION
+                print(f"[PHASE SWITCH] 切换到对象检测导航阶段")
+                if current_path is not None:
+                    path_distance = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
+                    print(f"当前路径距离: {path_distance:.2f}m")
+            
+            # 根据当前阶段执行相应的导航逻辑
+            if navigation_phase == NavigationPhase.HYBRID_NAVIGATION:
+                print(f"迭代 {iteration}: 执行混合导航阶段")
+                result = self._execute_hybrid_phase(
+                    current_pos_2d, current_rot, target_pos_2d, 
+                    vfh_star, current_path, adjusted_target_pos, 
+                    action_count, prev_direction
+                )
+                
+                if result['success']:
+                    return result
+                elif result['failed']:
+                    return result
+                
+                # 更新状态
+                current_path = result.get('current_path', current_path)
+                adjusted_target_pos = result.get('adjusted_target_pos', adjusted_target_pos)
+                action_count = result.get('action_count', action_count)
+                prev_direction = result.get('prev_direction', prev_direction)
+                
+            elif navigation_phase == NavigationPhase.OBJECT_DETECTION_NAVIGATION:
+                print(f"迭代 {iteration}: 执行对象检测导航阶段")
+                result = self._execute_object_detection_phase_with_rotation_check(
+                    current_pos_2d, current_rot, target_name, vfh_star, prev_direction,
+                    adjusted_target_pos, detected_target_pos
+                )
+                
+                if result['success']:
+                    return result
+                elif result['failed']:
+                    return result
+                elif result.get('reason') == 'rotation_search_failed':
+                    # 这是关键！rotation search失败时，我们不认为任务成功
+                    print(f"[MULTI-ACTION] Rotation search失败，标记为需要尝试下一个目标点")
+                    return {
+                        'success': False,
+                        'failed': True,
+                        'reason': 'rotation_search_failed',
+                        'message': 'Rotation search完成但未找到目标物体，需要尝试下一个目标点'
+                    }
+                
+                prev_direction = result.get('prev_direction', prev_direction)
+                detected_target_pos = result.get('detected_target_pos', detected_target_pos)
+                adjusted_target_pos = result.get('target_pos_2d', adjusted_target_pos)
+        
+        return {
+            'success': False,
+            'failed': True,
+            'reason': 'max_iterations_exceeded',
+            'message': f'达到最大迭代次数{self.nav_config.max_iterations}，导航失败'
+        }
     
     def _execute_hybrid_phase(self, current_pos_2d: np.ndarray, current_rot: np.ndarray, 
                              target_pos_2d: np.ndarray, vfh_star: VFHStar, 
@@ -839,6 +1095,7 @@ class ActionProcessor:
         
         return {
             'success': False,
+            'failed': True,
             'reason': 'max_iterations_exceeded',
             'message': f'达到最大迭代次数{self.nav_config.max_iterations}，导航失败'
         }
@@ -1490,11 +1747,11 @@ class ActionProcessor:
         """
         if not self.rotation_search_enabled:
             print("[ROTATION SEARCH] 旋转搜索功能已禁用")
-            return {'success': False, 'reason': 'rotation_search_disabled'}
+            return {'success': False, 'failed': True, 'reason': 'rotation_search_disabled'}
         
         if not self.object_detector.is_enabled():
             print("[ROTATION SEARCH] 对象检测模块未启用，跳过旋转搜索")
-            return {'success': False, 'reason': 'object_detection_disabled'}
+            return {'success': False, 'failed': True, 'reason': 'object_detection_disabled'}
         
         print(f"[ROTATION SEARCH] 开始360度旋转搜索目标: {target_name}")
         print(f"[ROTATION SEARCH] 将进行{self.rotation_search_steps}次旋转，每次{self.rotation_search_angle}度")
@@ -1582,6 +1839,7 @@ class ActionProcessor:
         print(f"[ROTATION SEARCH] ❌ 完成360度搜索，未找到目标")
         return {
             'success': False,
+            'failed': True,
             'reason': 'target_not_found_in_rotation_search',
             'message': f'完成{self.rotation_search_steps}次旋转搜索，未检测到目标'
         }
@@ -1641,6 +1899,7 @@ class ActionProcessor:
         
         return {
             'success': False,
+            'failed': True,
             'reason': 'max_iterations_exceeded',
             'message': f'导航到检测目标超过最大迭代次数{max_iterations}'
         }
@@ -1830,3 +2089,148 @@ class ActionProcessor:
             
             # 添加视频帧
             self.composer.add_frame()
+
+    def _execute_object_detection_phase_with_rotation_check(self, current_pos_2d: np.ndarray, current_rot: np.ndarray, 
+                                       target_name: str, vfh_star: VFHStar, 
+                                       prev_direction: Optional[float], original_target_pos: np.ndarray,
+                                       detected_target_pos: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        """
+        执行对象检测导航阶段 - 多action模式版本
+        与原版的区别：当rotation search失败时，不认为是成功，而是返回特殊的失败原因
+        
+        Args:
+            current_pos_2d: 当前位置 [x, z]
+            current_rot: 当前旋转
+            target_name: 目标名称
+            vfh_star: VFH*算法实例
+            prev_direction: 前一个方向
+            original_target_pos: 原始目标位置（当检测失败时使用）
+            detected_target_pos: 已检测到的目标位置（如果为None则进行检测）
+            
+        Returns:
+            执行结果字典，rotation search失败时reason为'rotation_search_failed'
+        """
+        # 如果还没有检测到目标，则进行检测
+        if detected_target_pos is None:
+            # 获取当前观测
+            observation = self.simulator.get_observation()
+            rgb_image = observation.get('rgb')
+            depth_image = observation.get('depth')
+            
+            if rgb_image is None or depth_image is None:
+                return {'success': False, 'failed': True, 'reason': 'no_observation_data'}
+            
+            # 相机参数
+            camera_params = self._get_camera_params()
+            
+            # 对象检测
+            detected_target_pos_camera = self.object_detector.detect_and_get_target_coords(
+                rgb_image, depth_image, target_name, camera_params
+            )
+            
+            if detected_target_pos_camera is None:
+                print(f"[OBJECT DETECTION] 未能检测到目标: {target_name}，使用原始目标位置")
+                # 使用原始目标位置进行导航
+                target_pos_2d = original_target_pos
+                detected_target_pos = None
+            else:
+                print(f"[OBJECT DETECTION] 检测到目标相机坐标: {detected_target_pos_camera}")
+                # 将相机坐标转换为世界坐标
+                detected_target_pos = self._camera_to_world_coords(detected_target_pos_camera)
+                print(f"[OBJECT DETECTION] 转换为世界坐标: {detected_target_pos}")
+                # 将3D坐标转换为2D导航坐标
+                target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
+        else:
+            # 已经检测到目标，直接使用
+            print(f"[OBJECT DETECTION] 使用已检测到的目标位置: {detected_target_pos}")
+            # 安全地处理2D/3D坐标转换
+            if len(detected_target_pos) >= 3:
+                # 3D坐标 [x, y, z]
+                target_pos_2d = np.array([detected_target_pos[0], detected_target_pos[2]])
+            elif len(detected_target_pos) == 2:
+                # 2D坐标 [x, z]
+                target_pos_2d = detected_target_pos.copy()
+            else:
+                print(f"[ERROR] 意外的坐标维度: {len(detected_target_pos)}")
+                return {'success': False, 'failed': True, 'reason': 'invalid_coordinates'}
+        
+        # 检查目标点是否在障碍物内
+        if self.map_builder.grid_map is not None:
+            # 将世界坐标转换为地图坐标
+            target_map_coords = self.map_builder._world_to_map_coords(np.array([[target_pos_2d[0], 0, target_pos_2d[1]]]))
+            target_pixel = (int(target_map_coords[0, 0]), int(target_map_coords[0, 1]))
+            
+            target_value = self.map_builder.grid_map[target_pixel[1], target_pixel[0]]
+            if target_value == 0:  # 障碍物
+                print(f"[WARNING] 目标点在障碍物内，寻找最近的可行走点")
+                resolution = self.map_builder.map_resolution
+                nearest_walkable_pixel = self._find_nearest_walkable_point(target_pixel, self.map_builder.grid_map, resolution)
+                if nearest_walkable_pixel is not None:
+                    # 将像素坐标转换为世界坐标
+                    nearest_walkable_world = self._pixel_to_world_coord(nearest_walkable_pixel)
+                    print(f"[INFO] 目标点已调整: 原位置 {target_pos_2d} -> 新位置 {nearest_walkable_world}")
+                    target_pos_2d = nearest_walkable_world
+                    if detected_target_pos is not None:
+                        detected_target_pos = nearest_walkable_world
+                else:
+                    print(f"[ERROR] 无法找到目标点附近的可行走区域")
+                    return {'success': False, 'failed': True, 'reason': 'no_walkable_area_near_target'}
+        
+        # 检查是否足够接近目标
+        current_path_result = self._plan_a_star_path(current_pos_2d, target_pos_2d)
+        current_path = current_path_result['path']
+        distance_to_target = self._calculate_path_distance_to_target(current_pos_2d, current_path, target_pos_2d)
+        
+        if distance_to_target < self.nav_config.final_stop_threshold:
+            print(f"[OBJECT DETECTION] 已到达目标位置，距离: {distance_to_target:.3f}m")
+            
+            # 如果没有检测到目标，启动360度旋转搜索
+            if detected_target_pos is None:
+                print(f"[OBJECT DETECTION] 到达目标位置但未检测到目标，启动360度旋转搜索")
+                
+                # 执行旋转搜索
+                rotation_result = self._execute_rotation_search(target_name, vfh_star, original_target_pos)
+                
+                if rotation_result['success']:
+                    print(f"[OBJECT DETECTION] ✅ 旋转搜索成功！")
+                    return {'success': True}
+                else:
+                    print(f"[OBJECT DETECTION] ⚠️ 旋转搜索失败: {rotation_result.get('message', '未知错误')}")
+                    # 关键修改：rotation search失败时，返回特殊的失败原因而不是success=True
+                    return {
+                        'success': False,
+                        'failed': True, 
+                        'reason': 'rotation_search_failed',
+                        'message': f'已到达目标位置但rotation search失败: {rotation_result.get("message", "未找到目标")}'
+                    }
+            else:
+                print(f"[OBJECT DETECTION] ✅ 成功导航到检测目标")
+                return {'success': True}
+        
+        # 使用VFH*导航到目标
+        vfh_star.update_target(target_pos_2d)
+        
+        result = self._execute_vfh_navigation(
+            current_pos_2d, current_rot, vfh_star, target_pos_2d, prev_direction
+        )
+        
+        # 根据是否检测到目标，更新相应的位置信息
+        if detected_target_pos is not None:
+            # 如果检测到目标，更新检测到的目标位置（包含障碍物调整）
+            updated_detected_target_pos = detected_target_pos.copy()
+            updated_detected_target_pos[0] = target_pos_2d[0]  # X坐标
+            
+            # 处理Z坐标：检查数组维度
+            if len(detected_target_pos) >= 3:
+                # 3D坐标 [x, y, z]，更新Z坐标
+                updated_detected_target_pos[2] = target_pos_2d[1]
+            else:
+                # 2D坐标 [x, z]，更新第二个坐标
+                updated_detected_target_pos[1] = target_pos_2d[1]
+                
+            result['detected_target_pos'] = updated_detected_target_pos
+        
+        # 添加目标信息用于下次迭代
+        result['target_pos_2d'] = target_pos_2d
+        
+        return result

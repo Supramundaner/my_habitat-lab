@@ -296,6 +296,14 @@ class ObjectDetector:
         Returns:
             Optional[np.ndarray]: 目标3D坐标 [x, y, z] 或 None
         """
+        # 🔧 [TEST MODE] 临时禁用目标检测以测试multi-action切换逻辑
+        # 设置为 True 来禁用检测，False 来启用检测
+        DISABLE_DETECTION_FOR_TESTING = False
+        if DISABLE_DETECTION_FOR_TESTING:
+            print(f"[TEST MODE] 目标检测已临时禁用，返回None以触发multi-action切换")
+            return None
+        # 🔧 [TEST MODE END]
+        
         if not self.enabled:
             return None
         
