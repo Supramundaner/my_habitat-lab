@@ -119,6 +119,10 @@ class ActionProcessor:
         self.rotation_search_steps = rotation_search_config.get('steps', 12)  # 旋转步数（12步 = 360度）
         self.rotation_search_angle = rotation_search_config.get('angle_per_step', 30.0)  # 每步旋转角度
         
+        # 全局迭代计数器（用于多action模式的总迭代限制）
+        self.global_iteration_count = 0  # 跨所有action的全局迭代计数
+        self.max_global_iterations = 500  # 全局最大迭代次数
+        
         print(f"动作处理器初始化完成")
         print(f"线性速度: {self.linear_speed} m/s")
         print(f"角速度: {self.angular_speed} deg/s")
@@ -133,6 +137,7 @@ class ActionProcessor:
         print(f"旋转搜索: {'启用' if self.rotation_search_enabled else '禁用'}")
         print(f"旋转搜索步数: {self.rotation_search_steps} 步")
         print(f"每步旋转角度: {self.rotation_search_angle} 度")
+        print(f"全局最大迭代次数: {self.max_global_iterations} 次（多action模式）")
         print(f"GPU加速: {'启用' if self.use_gpu else '禁用'}")
     
     def _get_robot_state(self) -> Dict[str, Any]:
@@ -429,6 +434,10 @@ class ActionProcessor:
         """
         print(f"\n🎯 [MULTI-ACTION] 开始多目标点导航序列，共 {len(action_data_list)} 个目标点")
         
+        # 重置全局迭代计数器
+        self.global_iteration_count = 0
+        print(f"🔄 [MULTI-ACTION] 重置全局迭代计数器，最大限制: {self.max_global_iterations} 次")
+        
         completed_actions = []
         all_failed_reasons = []
         
@@ -440,7 +449,15 @@ class ActionProcessor:
             self.simulator.set_robot_pose(agent_state['position'], agent_state['rotation'])
         
         for action_index, action_data in enumerate(action_data_list):
-            print(f"\n🎯 [MULTI-ACTION] 尝试目标点 {action_index + 1}/{len(action_data_list)}")
+            # 检查全局迭代次数是否已超限
+            if self.global_iteration_count >= self.max_global_iterations:
+                error_msg = f"已达到全局最大迭代次数 {self.max_global_iterations}，停止尝试剩余目标点"
+                print(f"🛑 [MULTI-ACTION] {error_msg}")
+                all_failed_reasons.append(error_msg)
+                break
+            
+            remaining_iterations = self.max_global_iterations - self.global_iteration_count
+            print(f"\n🎯 [MULTI-ACTION] 尝试目标点 {action_index + 1}/{len(action_data_list)}，剩余迭代次数: {remaining_iterations}")
             
             target_info = action_data.get('target_info', None)
             if target_info is None:
@@ -489,14 +506,23 @@ class ActionProcessor:
                 # 对于导航失败，我们也继续尝试下一个目标点
                 continue
         
-        # 所有目标点都失败了
-        print(f"❌ [MULTI-ACTION] 所有 {len(action_data_list)} 个目标点都失败了")
+        # 所有目标点都失败了或达到全局迭代限制
+        if self.global_iteration_count >= self.max_global_iterations:
+            print(f"🛑 [MULTI-ACTION] 达到全局最大迭代次数 {self.max_global_iterations}，导航终止")
+            final_message = f'达到全局最大迭代次数 {self.max_global_iterations}，共尝试了 {len(completed_actions)} 个目标点'
+            final_reason = 'global_max_iterations_exceeded'
+        else:
+            print(f"❌ [MULTI-ACTION] 所有 {len(action_data_list)} 个目标点都失败了，总迭代次数: {self.global_iteration_count}")
+            final_message = f'所有 {len(action_data_list)} 个目标点都失败了，总迭代次数: {self.global_iteration_count}'
+            final_reason = 'all_actions_failed'
+        
         return {
             'completed_actions': completed_actions,
             'collision_action': {
-                'reason': 'all_actions_failed',
-                'message': f'所有 {len(action_data_list)} 个目标点都失败了',
-                'failed_reasons': all_failed_reasons
+                'reason': final_reason,
+                'message': final_message,
+                'failed_reasons': all_failed_reasons,
+                'total_iterations': self.global_iteration_count
             },
             'target_found': False
         }
@@ -518,7 +544,6 @@ class ActionProcessor:
         if target_coord is None:
             return {
                 'success': False,
-                'failed': True,
                 'reason': 'invalid_target_coordinate',
                 'message': '目标坐标无效'
             }
@@ -527,7 +552,6 @@ class ActionProcessor:
         if len(target_coord) != 2:
             return {
                 'success': False,
-                'failed': True,
                 'reason': 'invalid_target_coordinate',
                 'message': f'目标坐标格式错误，期望[x, z]，实际{target_coord}'
             }
@@ -570,7 +594,6 @@ class ActionProcessor:
         if target_coord is None:
             return {
                 'success': False,
-                'failed': True,
                 'reason': 'invalid_target_coordinate',
                 'message': '目标坐标无效'
             }
@@ -579,7 +602,6 @@ class ActionProcessor:
         if len(target_coord) != 2:
             return {
                 'success': False,
-                'failed': True,
                 'reason': 'invalid_target_coordinate',
                 'message': f'目标坐标格式错误，期望[x, z]，实际{target_coord}'
             }
@@ -593,7 +615,6 @@ class ActionProcessor:
         if target_y is None:
             return {
                 'success': False,
-                'failed': True,
                 'reason': 'target_unreachable',
                 'message': f'目标位置 ({target_x}, {target_z}) 不在可导航区域'
             }
@@ -634,8 +655,14 @@ class ActionProcessor:
         action_count = 0
         prev_direction = None
         
-        while iteration < self.nav_config.max_iterations:
+        while (iteration < self.nav_config.max_iterations and 
+               self.global_iteration_count < self.max_global_iterations):
             iteration += 1
+            self.global_iteration_count += 1  # 递增全局计数器
+            
+            # 每50次迭代打印一次进度
+            if self.global_iteration_count % 50 == 0:
+                print(f"🔄 [GLOBAL-PROGRESS] 全局迭代进度: {self.global_iteration_count}/{self.max_global_iterations}")
             
             # 获取当前机器人状态
             robot_state = self._get_robot_state()
@@ -707,12 +734,21 @@ class ActionProcessor:
                 detected_target_pos = result.get('detected_target_pos', detected_target_pos)
                 adjusted_target_pos = result.get('target_pos_2d', adjusted_target_pos)
         
-        return {
-            'success': False,
-            'failed': True,
-            'reason': 'max_iterations_exceeded',
-            'message': f'达到最大迭代次数{self.nav_config.max_iterations}，导航失败'
-        }
+        # 检查是否是因为全局迭代限制而退出
+        if self.global_iteration_count >= self.max_global_iterations:
+            return {
+                'success': False,
+                'failed': True,
+                'reason': 'global_max_iterations_exceeded',
+                'message': f'达到全局最大迭代次数{self.max_global_iterations}，导航失败'
+            }
+        else:
+            return {
+                'success': False,
+                'failed': True,
+                'reason': 'max_iterations_exceeded',
+                'message': f'达到局部最大迭代次数{self.nav_config.max_iterations}，导航失败'
+            }
     
     def _execute_hybrid_phase(self, current_pos_2d: np.ndarray, current_rot: np.ndarray, 
                              target_pos_2d: np.ndarray, vfh_star: VFHStar, 
@@ -1016,6 +1052,10 @@ class ActionProcessor:
         """
         print(f"开始主导航控制器，目标: {target_name}")
         
+        # 重置全局迭代计数器（单action模式）
+        self.global_iteration_count = 0
+        print(f"🔄 [SINGLE-ACTION] 重置全局迭代计数器，最大限制: {self.max_global_iterations} 次")
+        
         # 重置死循环检测状态（开始新的导航任务）
         self._reset_loop_detection()
         
@@ -1029,8 +1069,14 @@ class ActionProcessor:
         action_count = 0
         prev_direction = None
         
-        while iteration < self.nav_config.max_iterations:
+        while (iteration < self.nav_config.max_iterations and 
+               self.global_iteration_count < self.max_global_iterations):
             iteration += 1
+            self.global_iteration_count += 1  # 递增全局计数器
+            
+            # 每50次迭代打印一次进度
+            if self.global_iteration_count % 50 == 0:
+                print(f"🔄 [GLOBAL-PROGRESS] 全局迭代进度: {self.global_iteration_count}/{self.max_global_iterations}")
             
             # 获取当前机器人状态
             robot_state = self._get_robot_state()
@@ -1093,12 +1139,19 @@ class ActionProcessor:
                 detected_target_pos = result.get('detected_target_pos', detected_target_pos)
                 adjusted_target_pos = result.get('target_pos_2d', adjusted_target_pos)
         
-        return {
-            'success': False,
-            'failed': True,
-            'reason': 'max_iterations_exceeded',
-            'message': f'达到最大迭代次数{self.nav_config.max_iterations}，导航失败'
-        }
+        # 检查是否是因为全局迭代限制而退出
+        if self.global_iteration_count >= self.max_global_iterations:
+            return {
+                'success': False,
+                'reason': 'global_max_iterations_exceeded',
+                'message': f'达到全局最大迭代次数{self.max_global_iterations}，导航失败'
+            }
+        else:
+            return {
+                'success': False,
+                'reason': 'max_iterations_exceeded',
+                'message': f'达到局部最大迭代次数{self.nav_config.max_iterations}，导航失败'
+            }
     
     def _plan_a_star_path(self, start_pos: np.ndarray, goal_pos: np.ndarray) -> Optional[Dict[str, Any]]:
         """
@@ -1839,7 +1892,6 @@ class ActionProcessor:
         print(f"[ROTATION SEARCH] ❌ 完成360度搜索，未找到目标")
         return {
             'success': False,
-            'failed': True,
             'reason': 'target_not_found_in_rotation_search',
             'message': f'完成{self.rotation_search_steps}次旋转搜索，未检测到目标'
         }
@@ -1899,7 +1951,6 @@ class ActionProcessor:
         
         return {
             'success': False,
-            'failed': True,
             'reason': 'max_iterations_exceeded',
             'message': f'导航到检测目标超过最大迭代次数{max_iterations}'
         }

@@ -11,17 +11,19 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 
 
-def extract_evaluation_results(output_dir: str) -> List[Dict]:
+def extract_evaluation_results(output_dir: str, max_episodes: int = None) -> List[Dict]:
     """
     从output目录中提取所有的evaluation_results
     
     Args:
         output_dir: output文件夹的路径
+        max_episodes: 最大提取的episode数量，None表示提取所有
         
     Returns:
         包含所有evaluation_results的列表
     """
     results = []
+    episode_count = 0
     output_path = Path(output_dir)
     
     if not output_path.exists():
@@ -40,6 +42,11 @@ def extract_evaluation_results(output_dir: str) -> List[Dict]:
         for episode_dir in scene_dir.iterdir():
             if not episode_dir.is_dir():
                 continue
+            
+            # 检查是否达到最大episode数量限制
+            if max_episodes is not None and episode_count >= max_episodes:
+                print(f"  已达到最大episode数量限制 ({max_episodes})，停止处理")
+                return results
                 
             episode_id = episode_dir.name
             output_json_path = episode_dir / "output.json"
@@ -57,6 +64,7 @@ def extract_evaluation_results(output_dir: str) -> List[Dict]:
                     eval_results['scene_name'] = scene_name
                     eval_results['episode_id'] = episode_id
                     results.append(eval_results)
+                    episode_count += 1
                     print(f"  提取episode {episode_id}: SR={eval_results.get('sr', 'N/A')}, SPL={eval_results.get('spl', 'N/A')}")
                 else:
                     print(f"  警告: {output_json_path} 中没有evaluation_results字段")
@@ -122,7 +130,7 @@ def calculate_metrics(results: List[Dict]) -> Tuple[float, float, Dict]:
     return avg_sr, avg_spl, stats
 
 
-def save_resulxts(results: List[Dict], stats: Dict, output_file: str = None):
+def save_results(results: List[Dict], stats: Dict, output_file: str = None):
     """
     保存详细结果到JSON文件
     
@@ -147,11 +155,13 @@ def main():
     parser = argparse.ArgumentParser(description='提取evaluation_results并计算平均SR和SPL')
     parser.add_argument('--output_dir', '-d', 
                        default="/home/yaoaa/habitat-lab/habitat_video_project/onestage_eval/output",
-                       help='output文件夹路径 (默认: /home/yaoaa/habitat-lab/habitat_video_project/eval/output)')
+                       help='output文件夹路径 (默认: %(default)s)')
     parser.add_argument('--save', '-s', 
                        help='保存详细结果到指定的JSON文件')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='显示详细输出')
+    parser.add_argument('--max_episodes', '-k', type=int, default=None,
+                       help='只处理前k个episode (默认处理所有)')
     
     args = parser.parse_args()
     
@@ -161,7 +171,9 @@ def main():
     
     # 提取evaluation results
     print(f"\n从目录提取数据: {args.output_dir}")
-    results = extract_evaluation_results(args.output_dir)
+    if args.max_episodes:
+        print(f"限制处理前 {args.max_episodes} 个episode")
+    results = extract_evaluation_results(args.output_dir, args.max_episodes)
     
     if not results:
         print("没有找到任何evaluation_results数据")
