@@ -171,7 +171,7 @@ def create_multi_point_summary(selected_results: List[Dict[str, Any]],
     for i, result in enumerate(selected_results):
         room_result = result.get('room_result', {})
         node_result = result.get('node_result', {})
-        action_result = result.get('action_result', {})
+        candidate_result = result.get('candidate_result', {})
         
         # Extract room selection info
         room_selection = room_result.get('llm_response', {})
@@ -187,9 +187,9 @@ def create_multi_point_summary(selected_results: List[Dict[str, Any]],
         selected_node = node_result.get('selected_node', {})
         world_coordinates = selected_node.get('world_coordinates')
         
-        # Extract action file path
-        action_files = action_result.get('generated_files', {})
-        action_file = action_files.get('action_json')
+        # Extract candidate file path
+        candidate_files = candidate_result.get('generated_files', {})
+        candidate_file = candidate_files.get('candidate_json')
         
         iteration_summary = {
             "iteration": i + 1,
@@ -202,7 +202,7 @@ def create_multi_point_summary(selected_results: List[Dict[str, Any]],
                 "world_coordinates": world_coordinates,
                 "attempts_made": node_attempts
             },
-            "action_file": os.path.basename(action_file) if action_file else None
+            "candidate_file": os.path.basename(candidate_file) if candidate_file else None
         }
         
         summary_data["iterations"].append(iteration_summary)

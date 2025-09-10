@@ -20,6 +20,7 @@ from step_3_llm_room_selection import select_room_with_llm
 from step_4_graph_generation import generate_navigation_graph
 from step_5_node_selection import select_navigation_node
 from step_6_path_planning import path_planning_step
+from step_7_verification_sorting import verify_and_sort_candidates
 
 # Import multi-point utilities
 from multi_point_utils import (
@@ -27,6 +28,12 @@ from multi_point_utils import (
     save_marked_images,
     create_multi_point_summary,
     mark_selected_node
+)
+
+# Import action generation utilities
+from action_utils import (
+    generate_final_actions,
+    create_action_summary
 )
 
 class WorkflowOrchestrator:
@@ -50,7 +57,9 @@ class WorkflowOrchestrator:
             "multi_point_results": {
                 "k_points": self.k_points,
                 "iterations": []
-            }
+            },
+            "verification_results": {},
+            "final_actions": {}
         }
         self._setup_output_directory()
         
@@ -366,13 +375,13 @@ class WorkflowOrchestrator:
             raise RuntimeError(error_msg)
     
     def run_step_6_iteration(self, iteration: int, node_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Run Step 6 (action generation) for a specific iteration."""
-        print(f"\\n📋 STEP 6 - ITERATION {iteration + 1}: Generating action file")
+        """Run Step 6 (candidate generation) for a specific iteration."""
+        print(f"\\n📋 STEP 6 - ITERATION {iteration + 1}: Generating candidate file")
         
         try:
-            # Generate action file with iteration suffix
+            # Generate candidate file with iteration suffix
             result = path_planning_step(self.config, self.output_dir, iteration)
-            print(f"✓ Successfully generated action file for iteration {iteration + 1}")
+            print(f"✓ Successfully generated candidate file for iteration {iteration + 1}")
             return result
         except Exception as e:
             error_msg = f"Step 6 iteration {iteration + 1} failed: {str(e)}"
@@ -396,8 +405,8 @@ class WorkflowOrchestrator:
                 # Step 5: Node selection with marked context  
                 node_result = self.run_step_5_iteration(iteration, room_result, selected_results)
                 
-                # Step 6: Generate action file
-                action_result = self.run_step_6_iteration(iteration, node_result)
+                # Step 6: Generate candidate file
+                candidate_result = self.run_step_6_iteration(iteration, node_result)
                 
                 # Record results for this iteration
                 # Add standardized selected_node field for mark_selected_node compatibility
@@ -414,7 +423,7 @@ class WorkflowOrchestrator:
                     'iteration': iteration + 1,
                     'room_result': room_result,
                     'node_result': standardized_node_result,
-                    'action_result': action_result
+                    'candidate_result': candidate_result
                 }
                 selected_results.append(iteration_result)
                 
@@ -423,7 +432,7 @@ class WorkflowOrchestrator:
                     "iteration": iteration + 1,
                     "room_selected": room_result["llm_response"]["selected_room"],
                     "node_selected": node_result["llm_response"]["selected_node_id"],
-                    "action_file": os.path.basename(action_result["generated_files"]["action_json"])
+                    "candidate_file": os.path.basename(candidate_result["generated_files"]["candidate_json"])
                 })
                 
                 print(f"✅ ITERATION {iteration + 1} COMPLETED SUCCESSFULLY")
@@ -436,6 +445,74 @@ class WorkflowOrchestrator:
                 continue
         
         return selected_results
+    
+    def run_step_7(self, selected_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Step 7: Candidate verification and sorting using LLM."""
+        print("\\n" + "="*60)
+        print("STEP 7: Candidate verification and sorting")
+        print("="*60)
+        
+        try:
+            result = verify_and_sort_candidates(self.config, self.output_dir, selected_results)
+            self._update_step_status("step_7_verification", True, result)
+            
+            # Store verification results
+            self.output_data["verification_results"] = {
+                "verified_node_ids": result["verified_node_ids"],
+                "verified_count": len(result["verified_node_ids"]),
+                "parsing_method": result["verification_details"].get("parsing_method"),
+                "warnings": result["verification_details"].get("warnings", [])
+            }
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Step 7 failed: {str(e)}"
+            print(f"✗ {error_msg}")
+            self._update_step_status("step_7_verification", False, {"error": error_msg})
+            
+            # Return fallback result (empty list will trigger fallback strategy)
+            return {
+                "verified_node_ids": [],
+                "verification_details": {"error": error_msg},
+                "generated_files": {},
+                "llm_response": {"error": error_msg}
+            }
+    
+    def generate_final_action_files(self, verified_node_ids: List[int], 
+                                   candidate_results: List[Dict[str, Any]]) -> List[str]:
+        """Generate final action files based on verification results."""
+        print("\\n" + "="*60)
+        print("GENERATING FINAL ACTION FILES")
+        print("="*60)
+        
+        try:
+            action_files = generate_final_actions(
+                verified_node_ids, candidate_results, self.output_dir
+            )
+            
+            # Create action summary
+            summary_path = create_action_summary(
+                verified_node_ids, action_files, self.output_dir
+            )
+            
+            # Update output data
+            self.output_data["final_actions"] = {
+                "verified_node_ids": verified_node_ids,
+                "action_files": [os.path.basename(path) for path in action_files],
+                "action_count": len(action_files),
+                "fallback_used": len(verified_node_ids) == 0,
+                "action_summary": summary_path
+            }
+            
+            print(f"✅ Generated {len(action_files)} final action files")
+            return action_files
+            
+        except Exception as e:
+            error_msg = f"Failed to generate final action files: {str(e)}"
+            print(f"❌ {error_msg}")
+            self.output_data["errors"].append(error_msg)
+            return []
     
     def run_workflow(self) -> bool:
         print("\\n" + "🚀" + "="*58 + "🚀")
@@ -483,8 +560,8 @@ class WorkflowOrchestrator:
             
             print("✅ PHASE 1 COMPLETED: Base setup successful")
             
-            # Phase 2: Run multi-point iterations (Steps 3, 5, 6 repeated k times)
-            print("\\n📋 PHASE 2: MULTI-POINT SELECTION")
+            # Phase 2: Run multi-point candidate generation (Steps 3, 5, 6 repeated k times)
+            print("\\n📋 PHASE 2: MULTI-POINT CANDIDATE GENERATION")
             print("="*60)
             
             selected_results = self.run_multi_point_iterations()
@@ -497,8 +574,35 @@ class WorkflowOrchestrator:
                 self._save_output()
                 return False
             
-            # Phase 3: Generate summary
-            print("\\n📋 PHASE 3: GENERATING SUMMARY")
+            print("✅ PHASE 2 COMPLETED: Candidate generation successful")
+            
+            # Phase 3: Candidate verification and sorting
+            print("\\n📋 PHASE 3: CANDIDATE VERIFICATION & SORTING")
+            print("="*60)
+            
+            verification_result = self.run_step_7(selected_results)
+            verified_node_ids = verification_result["verified_node_ids"]
+            
+            print(f"✅ PHASE 3 COMPLETED: {len(verified_node_ids)} candidates verified")
+            
+            # Phase 4: Generate final action files
+            print("\\n📋 PHASE 4: GENERATING FINAL ACTION FILES")
+            print("="*60)
+            
+            action_files = self.generate_final_action_files(verified_node_ids, selected_results)
+            
+            if not action_files:
+                error_msg = "Failed to generate any action files"
+                print(f"❌ {error_msg}")
+                self.output_data["errors"].append(error_msg)
+                self.output_data["workflow_status"] = "failed_action_generation"
+                self._save_output()
+                return False
+            
+            print(f"✅ PHASE 4 COMPLETED: {len(action_files)} action files generated")
+            
+            # Phase 5: Generate final summary
+            print("\\n📋 PHASE 5: GENERATING FINAL SUMMARY")
             print("="*60)
             
             summary_path = create_multi_point_summary(selected_results, self.config, self.output_dir)
@@ -513,8 +617,9 @@ class WorkflowOrchestrator:
             self._save_output()
             
             print("\\n" + "🎉" + "="*58 + "🎉")
-            print("🎯 MULTI-POINT WORKFLOW COMPLETED SUCCESSFULLY! 🎯")
-            print(f"🎯 GENERATED {successful_iterations}/{self.k_points} NAVIGATION TARGETS 🎯")
+            print("🎯 MULTI-POINT WORKFLOW WITH VERIFICATION COMPLETED! 🎯")
+            print(f"🎯 VERIFIED {len(verified_node_ids)}/{successful_iterations} CANDIDATES 🎯")
+            print(f"🎯 GENERATED {len(action_files)} FINAL ACTION FILES 🎯")
             print("🎉" + "="*58 + "🎉")
             
             return True

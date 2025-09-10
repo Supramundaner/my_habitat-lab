@@ -1,28 +1,27 @@
 """
-Step 6: Generate candidate.json.
+Step 6: Generate action.json.
 This step consolidates the agent's starting state, the selected target's information,
-and the path to the wall mask into a single candidate.json file for verification.
+and the path to the wall mask into a single action.json file for the next stage of the pipeline.
 """
 
 import os
 import json
 from typing import Dict, Any
 
-def path_planning_step(config: Dict[str, Any], output_dir: str, iteration: int = 0) -> Dict[str, Any]:
+def path_planning_step(config: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
     """
-    Generates a candidate.json file containing the agent's initial state,
+    Generates an action.json file containing the agent's initial state,
     the target information, and the path to the wall mask.
 
     Args:
         config: Configuration dictionary.
         output_dir: Output directory path.
-        iteration: Current iteration number (0-based) for multi-point selection.
 
     Returns:
         Dictionary with generated files and results.
     """
     print("="*60)
-    print("STEP 6: Generating candidate.json")
+    print("STEP 6: Generating action.json")
     print("="*60)
 
     # 1. Get agent's initial state from config
@@ -44,9 +43,8 @@ def path_planning_step(config: Dict[str, Any], output_dir: str, iteration: int =
     print(f"✓ Agent initial state loaded: position={agent_position}, rotation={agent_rotation}")
 
     # 2. Get target information
-    # Load the results from the node selection step (iteration-specific)
-    log_filename = f"node_selection_log_iter_{iteration + 1}.json" if iteration > 0 else "node_selection_log.json"
-    node_log_path = os.path.join(output_dir, log_filename)
+    # Load the results from the node selection step
+    node_log_path = os.path.join(output_dir, "node_selection_log.json")
     if not os.path.exists(node_log_path):
         raise FileNotFoundError(f"Node selection log not found: {node_log_path}")
     
@@ -78,32 +76,26 @@ def path_planning_step(config: Dict[str, Any], output_dir: str, iteration: int =
     wall_mask_absolute_path = os.path.abspath(wall_mask_relative_path)
     print(f"✓ Wall mask path resolved: {wall_mask_absolute_path}")
 
-    # 4. Assemble the final candidate.json data
-    candidate_data = {
-        "iteration": iteration + 1,
+    # 4. Assemble the final action.json data
+    action_data = {
         "agent_state": agent_state,
         "target_info": target_info,
         "wall_mask": wall_mask_absolute_path
     }
 
-    # 5. Save the candidate.json file with iteration-specific naming
-    if iteration == 0:
-        candidate_filename = "candidate.json"
-    else:
-        candidate_filename = f"candidate_iter_{iteration + 1}.json"
-    
-    candidate_path = os.path.join(output_dir, candidate_filename)
-    with open(candidate_path, 'w', encoding='utf-8') as f:
-        json.dump(candidate_data, f, indent=4)
-    print(f"✓ Candidate file saved successfully: {candidate_path}")
+    # 5. Save the action.json file
+    action_path = os.path.join(output_dir, "action.json")
+    with open(action_path, 'w', encoding='utf-8') as f:
+        json.dump(action_data, f, indent=4)
+    print(f"✓ Action file saved successfully: {action_path}")
     
     # 6. Return the results
     return {
         "generated_files": {
-            "candidate_json": candidate_path
+            "action_json": action_path
         },
         "results": {
-            "candidate_file_generated": True,
+            "action_file_generated": True,
             "agent_start_position": agent_position,
             "target_node_id": selected_node['node_id'],
             "target_coordinate": target_world_coords,
