@@ -6,7 +6,7 @@ This utility script extracts and analyzes controversial episodes between two mod
 without running the full discrimination process. Useful for initial analysis and debugging.
 
 Usage:
-    python extract_controversial.py --model1_dir /path/to/model1/output --model2_dir /path/to/model2/output
+    python extract_controversial.py [--config_path /path/to/config.json]
 """
 
 import os
@@ -17,23 +17,81 @@ from typing import Dict, List, Tuple, Any
 import pandas as pd
 
 
+def load_config(config_path: str) -> Dict[str, Any]:
+    """Load configuration from JSON file"""
+    with open(config_path, 'r') as f:
+        return json.load(f)
+
+
 class ControversyExtractor:
     """Extract and analyze controversial episodes"""
     
-    def __init__(self, model1_dir: str, model2_dir: str):
-        self.model1_dir = Path(model1_dir)
-        self.model2_dir = Path(model2_dir)
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.model1_dir = Path(config['model_paths']['model1_output'])
+        self.model2_dir = Path(config['model_paths']['model2_output'])
+        self.output_dir = Path(config['output_config']['discriminator_output'])
         
     def load_batch_results(self, model_dir: Path) -> Dict[str, Dict[str, Any]]:
-        """Load batch results from model directory"""
-        batch_file = model_dir / "batch_output.json"
-        if not batch_file.exists():
-            raise FileNotFoundError(f"Batch output file not found: {batch_file}")
-            
-        with open(batch_file, 'r') as f:
-            data = json.load(f)
+        """Load batch results from individual episode directories"""
+        results = {}
         
-        return data.get('episode_details', {})
+        # Walk through all scene directories
+        for scene_dir in model_dir.iterdir():
+            if scene_dir.is_dir() and scene_dir.name != "batch_output.json":
+                scene_id = scene_dir.name
+                
+                # Walk through all episode directories in this scene
+                for episode_dir in scene_dir.iterdir():
+                    if episode_dir.is_dir() and episode_dir.name.isdigit():
+                        episode_id = episode_dir.name
+                        episode_key = f"{scene_id}/{episode_id}"
+                        
+                        # Check if output.json exists
+                        output_file = episode_dir / "output.json"
+                        if output_file.exists():
+                            try:
+                                with open(output_file, 'r') as f:
+                                    data = json.load(f)
+                                
+                                # Extract evaluation results
+                                eval_results = data.get('evaluation_results')
+                                if eval_results is None:
+                                    print(f"Warning: No evaluation_results found for {episode_key}")
+                                    continue
+                                
+                                # Get target object name from action.json (more reliable)
+                                target_object_name = 'unknown'
+                                preprocess_dir = episode_dir / "preprocess"
+                                action_file = preprocess_dir / "action.json"
+                                
+                                if action_file.exists():
+                                    try:
+                                        with open(action_file, 'r') as f:
+                                            action_data = json.load(f)
+                                        target_object_name = action_data.get('target_info', {}).get('name', 'unknown')
+                                    except (json.JSONDecodeError, KeyError) as e:
+                                        print(f"Warning: Could not load target name from {action_file}: {e}")
+                                        # Fallback to output.json
+                                        target_object_name = data.get('object_category', 'unknown')
+                                else:
+                                    print(f"Warning: action.json not found for {episode_key}, using fallback")
+                                    # Fallback to output.json
+                                    target_object_name = data.get('object_category', 'unknown')
+                                
+                                results[episode_key] = {
+                                    'sr': eval_results.get('sr', False),
+                                    'spl': eval_results.get('spl', 0.0),
+                                    'success': eval_results.get('success', False),
+                                    'geodesic_distance_to_target': eval_results.get('geodesic_distance_to_target', 0.0),
+                                    'path_length': eval_results.get('path_length', 0.0),
+                                    'object_category': target_object_name
+                                }
+                            except (json.JSONDecodeError, KeyError) as e:
+                                print(f"Warning: Could not load results for {episode_key}: {e}")
+                                continue
+        
+        return results
     
     def extract_controversies(self) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Extract controversial episodes and generate statistics"""
@@ -107,8 +165,9 @@ class ControversyExtractor:
         m1_total_success = sum(1 for ep in common_episodes if ep['model1_success'])
         m2_total_success = sum(1 for ep in common_episodes if ep['model2_success'])
         
-        m1_total_spl = sum(ep['model1_spl'] for ep in common_episodes) / len(common_episodes)
-        m2_total_spl = sum(ep['model2_spl'] for ep in common_episodes) / len(common_episodes)
+        # Avoid division by zero
+        m1_total_spl = sum(ep['model1_spl'] for ep in common_episodes) / len(common_episodes) if len(common_episodes) > 0 else 0.0
+        m2_total_spl = sum(ep['model2_spl'] for ep in common_episodes) / len(common_episodes) if len(common_episodes) > 0 else 0.0
         
         # Object category analysis
         category_controversy = {}
@@ -161,13 +220,14 @@ class ControversyExtractor:
         
         return stats
     
-    def save_results(self, controversial: List[Dict[str, Any]], stats: Dict[str, Any], output_dir: str):
+    def save_results(self, controversial: List[Dict[str, Any]], stats: Dict[str, Any]):
         """Save extraction results"""
-        output_path = Path(output_dir)
+        output_path = self.output_dir
         output_path.mkdir(exist_ok=True)
         
         # Save controversial episodes
-        with open(output_path / "controversial_episodes.json", 'w') as f:
+        controversial_file = self.config['output_config']['controversial_episodes_file']
+        with open(controversial_file, 'w') as f:
             json.dump(controversial, f, indent=2)
         
         # Save statistics
@@ -180,6 +240,7 @@ class ControversyExtractor:
             df.to_csv(output_path / "controversial_episodes.csv", index=False)
         
         print(f"Results saved to: {output_path}")
+        print(f"Controversial episodes saved to: {controversial_file}")
     
     def print_summary(self, stats: Dict[str, Any]):
         """Print formatted summary"""
@@ -241,13 +302,13 @@ class ControversyExtractor:
         print(f"Model 1 Total Episodes: {coverage['model1']}")
         print(f"Model 2 Total Episodes: {coverage['model2']}")
     
-    def run_extraction(self, output_dir: str = "controversy_analysis"):
+    def run_extraction(self):
         """Run the complete extraction process"""
         print("Starting controversy extraction...")
         
         controversial, stats = self.extract_controversies()
         
-        self.save_results(controversial, stats, output_dir)
+        self.save_results(controversial, stats)
         self.print_summary(stats)
         
         return controversial, stats
@@ -255,18 +316,16 @@ class ControversyExtractor:
 
 def main():
     parser = argparse.ArgumentParser(description="Extract Controversial Episodes")
-    parser.add_argument("--model1_dir", required=True, help="Path to Model 1 output directory")
-    parser.add_argument("--model2_dir", required=True, help="Path to Model 2 output directory")
-    parser.add_argument("--output_dir", default="controversy_analysis", help="Output directory")
+    parser.add_argument("--config_path", default="discriminator_config.json", 
+                       help="Path to configuration file")
     
     args = parser.parse_args()
     
-    extractor = ControversyExtractor(
-        model1_dir=args.model1_dir,
-        model2_dir=args.model2_dir
-    )
+    # Load configuration
+    config = load_config(args.config_path)
     
-    extractor.run_extraction(args.output_dir)
+    extractor = ControversyExtractor(config)
+    extractor.run_extraction()
 
 
 if __name__ == "__main__":

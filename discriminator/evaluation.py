@@ -253,8 +253,40 @@ class FinalEvaluator:
                     # Check if they actually agree
                     if m1_sr == m2_sr:
                         final_sr = m1_sr
-                        final_spl = min(m1_spl, m2_spl) if m1_sr else 0.0  # Take worse SPL if successful
-                        source = "both_models_agree"
+                        
+                        if m1_sr and m2_sr:  # Both successful (SR=True)
+                            # Try to get discrimination result to choose which model's SPL to use
+                            discrimination_result = self.load_discrimination_result(scene_id, episode_id)
+                            
+                            if discrimination_result and discrimination_result.get('decision'):
+                                decision = discrimination_result.get('decision')
+                                discriminated_count += 1
+                                
+                                # Check if discrimination is correct (both are successful, so compare SPL)
+                                if (m1_spl > m2_spl and decision == "Model 1") or (m2_spl > m1_spl and decision == "Model 2"):
+                                    discrimination_correct_count += 1
+                                elif m1_spl == m2_spl:
+                                    # Equal SPL - any decision is reasonable
+                                    discrimination_correct_count += 1
+                                
+                                if decision == "Model 1":
+                                    final_spl = m1_spl
+                                    source = "both_successful_discriminated_model1"
+                                elif decision == "Model 2":
+                                    final_spl = m2_spl
+                                    source = "both_successful_discriminated_model2"
+                                else:
+                                    # Unclear decision, default to model2
+                                    final_spl = m2_spl
+                                    source = "both_successful_unclear_decision_default_model2"
+                            else:
+                                # No discrimination result, default to model2
+                                final_spl = m2_spl
+                                source = "both_successful_no_discrimination_default_model2"
+                        else:
+                            # Both failed (SR=False), SPL should be 0.0
+                            final_spl = 0.0
+                            source = "both_models_failed"
                     else:
                         # They disagree but not in controversial list - this shouldn't happen
                         # Default to model2
@@ -447,9 +479,51 @@ class FinalEvaluator:
         print("📋 EPISODE SOURCE BREAKDOWN")
         print("-"*80)
         
-        for source, count in summary["episode_sources"].items():
-            percentage = count / final_eval['total_episodes'] * 100
-            print(f"   {source}: {count} ({percentage:.1f}%)")
+        # Group related sources for better readability
+        source_groups = {
+            "Controversial Episodes": [
+                "discriminated_model1", "discriminated_model2", 
+                "controversial_no_clear_decision_default_model2",
+                "controversial_no_discrimination_default_model2"
+            ],
+            "Both Models Successful": [
+                "both_successful_discriminated_model1", "both_successful_discriminated_model2",
+                "both_successful_unclear_decision_default_model2", 
+                "both_successful_no_discrimination_default_model2"
+            ],
+            "Agreement Cases": [
+                "both_models_agree", "both_models_failed"
+            ],
+            "Single Model Results": [
+                "model1_only", "model2_only"
+            ],
+            "Edge Cases": [
+                "both_models_disagree_not_in_controversial_default_model2", "no_results"
+            ]
+        }
+        
+        for group_name, source_list in source_groups.items():
+            group_total = sum(summary["episode_sources"].get(source, 0) for source in source_list)
+            if group_total > 0:
+                print(f"\n{group_name}: {group_total}")
+                for source in source_list:
+                    count = summary["episode_sources"].get(source, 0)
+                    if count > 0:
+                        percentage = count / final_eval['total_episodes'] * 100
+                        print(f"   {source}: {count} ({percentage:.1f}%)")
+        
+        # Show any other sources not in groups
+        grouped_sources = set()
+        for source_list in source_groups.values():
+            grouped_sources.update(source_list)
+        
+        other_sources = set(summary["episode_sources"].keys()) - grouped_sources
+        if other_sources:
+            print(f"\nOther Sources:")
+            for source in other_sources:
+                count = summary["episode_sources"][source]
+                percentage = count / final_eval['total_episodes'] * 100
+                print(f"   {source}: {count} ({percentage:.1f}%)")
         
         print("\n" + "="*80)
     
