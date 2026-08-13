@@ -1,0 +1,107 @@
+{
+    "episode": {
+        "episode_json_path": "${HABITAT_DATA_ROOT}/datasets/objectnav/hm3d/v1/val/content_preprocessed/6s7QHgap2fW.json",
+        "episode_id": "397"
+    },
+    "scene": {
+        "scene_file": "${HABITAT_DATA_ROOT}/versioned_data/hm3d-0.2/hm3d/val/00890-6s7QHgap2fW/6s7QHgap2fW.basis.glb",
+        "robot_urdf": "${HABITAT_DATA_ROOT}/robots/hab_fetch/robots/hab_fetch.urdf"
+    },
+    "preprocess": {
+        "resolution": 2048,
+        "scene_config": {
+            "target_floor": null,
+            "target_coordinate": null,
+            "goal_object": null,
+            "rotation": null,
+            "custom_ortho_scale": null,
+            "target_coverage": 0.9,
+            "draw_coordinates": false
+        },
+        "room_segmentation": {
+            "morph_closing_width_meters": 0.01,
+            "seed_min_distance_from_wall_meters": null,
+            "min_room_area_pixels": 15000
+        },
+        "graph_generation": {
+            "pds_radius": 0.5,
+            "max_attempts": 30,
+            "seed": 0,
+            "node_radius_pixels": 8
+        },
+        "llm_config": {
+            "api_key_env": "ARK_API_KEY",
+            "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+            "model": "seed-1-6-250615",
+            "max_tokens": 35000,
+            "max_retries": 3,
+            "fallback_on_failure": false
+        }
+    },
+    "video_generation": {
+        "video": {
+            "fps": 8,
+            "resolution": {
+                "width": 2048,
+                "height": 1024
+            },
+            "fpv_width": 1024,
+            "map_width": 1024
+        },
+        "agent": {
+            "linear_speed": 2.0,
+            "angular_speed": 240.0,
+            "sensor_height": 1.31,
+            "time_steps_num": 10,
+            "min_displacement": 1.0,
+            "max_time_steps": 50
+        },
+        "simulation": {
+            "enable_physics": true
+        },
+        "gpu": {
+            "enabled": true,
+            "device": "cuda:1",
+            "mixed_precision": false,
+            "memory_efficient": true,
+            "max_chunk_size": 50000
+        },
+        "OCCUPANCY_MAP": {
+            "MIN_DEPTH": 0.2,
+            "MAX_DEPTH": 8.0,
+            "CAMERA_HEIGHT": 1.31,
+            "MIN_H": -1.2,
+            "MAX_H": 0.2,
+            "HFOV": 90
+        },
+        "vfh": {
+            "mu1": 5.0,
+            "mu2": 2.0,
+            "mu3": 2.0,
+            "mu1_prime": 5.0,
+            "mu2_prime": 1.0,
+            "mu3_prime": 1.0,
+            "lambda": 0.8,
+            "robot_radius": 0.14,
+            "sensor_range": 0.6,
+            "search_depth": 5
+        },
+        "navigation": {
+            "waypoint_distance": 1.5,
+            "destination_distance": 0.8
+        },
+        "object_detection": {
+            "enabled": true,
+            "detector_type": "yolov7",
+            "yolov7_port": 12185,
+            "mobile_sam_port": 12184,
+            "detection_threshold": 0.4,
+            "max_detection_distance": 10.0,
+            "grounding_dino_port": null
+        }
+    },
+    "evaluation": {
+        "success_distance_threshold": 0.25
+    },
+    "output_dir": "output/example"
+}
